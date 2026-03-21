@@ -813,7 +813,7 @@ DO NOT 先发命令再补状态。
 
 命令口径默认双写：
 
-- 标准写法：`codex exec --full-auto`
+- 标准写法：`codex exec --yolo`
 - 本机兼容写法：`codex --yolo exec`
 
 如果要生成长期复用的模板、README、operator 脚本，优先写标准写法；

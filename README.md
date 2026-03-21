@@ -28,11 +28,11 @@
 
 本仓库主要包含三类内容：
 
-- `SKILL.md`
+- `skills/harness-architect/SKILL.md`
   主说明书，定义模式、gate、角色、默认执行链与产物约束
-- `references/`
+- `skills/harness-architect/references/`
   协议、路由、worktree、prompt、query、schema 等参考文档
-- `examples/`
+- `skills/harness-architect/examples/`
   可直接复用的模板、脚本、JSON、Markdown 与 prompt 示例
 
 ### 解决的问题
@@ -47,18 +47,111 @@
 
 ### 快速开始
 
+先安装 skill 到 Codex：
+
+```bash
+./install.sh
+```
+
+安装后会额外写入一个 helper：
+
+```bash
+~/.codex/bin/harness-kick
+```
+
+安装脚本会默认尝试把对应的 `bin` 目录写入当前 shell 的 rc 文件。
+如果你传了 `--no-shell-rc`，或者想手动处理 `PATH`，再执行：
+
+```bash
+echo 'export PATH="$HOME/.codex/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+最常用的完整启动方式：
+
+```bash
+git clone <this-repo>
+cd harness-architect
+chmod +x install.sh
+./install.sh
+
+mkdir pomodoro-app
+cd pomodoro-app
+harness-kick "我要创建一个番茄时钟项目" "React + Vite"
+```
+
+或者在你已经进入的项目目录中直接运行：
+
+```bash
+harness-kick "我要创建一个番茄时钟项目" "React + Vite"
+```
+
+它会：
+
+- 在当前目录安装完整 `.harness` operator/tooling 面
+- 生成 `.harness/bootstrap-request.md`
+- 如果检测到 `codex` CLI，默认直接执行一次 `codex exec` bootstrap
+- bootstrap 成功后自动执行 `refresh-state` 与 `session-init`
+- 打印后续查看总览、watch、query、dashboard 的命令
+- 在 macOS 上自动复制 bootstrap prompt 到剪贴板
+
+如果你只想安装 `.harness` 和生成提示词，不要自动 bootstrap：
+
+```bash
+harness-kick --manual "我要创建一个番茄时钟项目" "React + Vite"
+```
+
+如果你希望 bootstrap 先读一个附加上下文文件，`--prd` 也只是 `--context` 的别名：
+
+```bash
+harness-kick --context docs/prd.md "帮我简单分析一下我的代码，给一个markdown 分析报告"
+```
+
+等价写法：
+
+```bash
+harness-kick --prd docs/prd.md "帮我简单分析一下我的代码，给一个markdown 分析报告"
+```
+
+这里的 `docs/prd.md` 只是一个普通上下文文件，不代表特殊 PRD 模式；它和传入其他 `docs/*.md`、`notes/*.md`、设计说明文件的处理方式相同。
+
+如果你想把并发偏好写进 bootstrap prompt：
+
+```bash
+harness-kick --concurrency 4 "我要创建一个番茄时钟项目" "React + Vite"
+```
+
 推荐试用流程：
 
-1. 阅读 [SKILL.md](./SKILL.md)
-2. 选择一个测试项目目录
-3. 使用安装脚本将最小 CLI 与脚本写入该项目的 `.harness/`
-4. 运行 `query` 与 `dashboard`
-5. 根据项目需要接入 routing、worktree、audit
+1. 运行 `./install.sh`
+2. 阅读 [SKILL.md](./skills/harness-architect/SKILL.md)
+3. 选择一个测试项目目录
+4. 使用安装脚本将最小 CLI 与脚本写入该项目的 `.harness/`
+5. 运行 `query` 与 `dashboard`
+6. 根据项目需要接入 routing、worktree、audit
 
 安装最小工具集：
 
 ```bash
-./examples/harness-install-tools.example.sh <PROJECT_ROOT>
+./skills/harness-architect/examples/harness-install-tools.example.sh <PROJECT_ROOT>
+```
+
+进入新项目并打印推荐的 Codex bootstrap 指令：
+
+```bash
+./skills/harness-architect/examples/harness-kickoff.example.sh <PROJECT_ROOT> "建立一个简单的番茄闹钟 app" "React + Vite"
+```
+
+安装完整 operator/tooling 面：
+
+```bash
+./skills/harness-architect/examples/harness-install-full.example.sh <PROJECT_ROOT>
+```
+
+进入新项目并打印完整 bootstrap 指令：
+
+```bash
+./skills/harness-architect/examples/harness-full-kickoff.example.sh <PROJECT_ROOT> "建立一个简单的番茄闹钟 app" "React + Vite"
 ```
 
 刷新热状态：
@@ -212,28 +305,28 @@ session-init
 
 优先阅读：
 
-- [SKILL.md](./SKILL.md)
-- [TRY-IT.md](./TRY-IT.md)
-- [FEEDBACK.md](./FEEDBACK.md)
-- [references/schema-contracts.md](./references/schema-contracts.md)
-- [references/openclaw-dispatch.md](./references/openclaw-dispatch.md)
-- [references/model-routing.md](./references/model-routing.md)
+- [SKILL.md](./skills/harness-architect/SKILL.md)
+- [TRY-IT.md](./skills/harness-architect/TRY-IT.md)
+- [FEEDBACK.md](./skills/harness-architect/FEEDBACK.md)
+- [references/schema-contracts.md](./skills/harness-architect/references/schema-contracts.md)
+- [references/openclaw-dispatch.md](./skills/harness-architect/references/openclaw-dispatch.md)
+- [references/model-routing.md](./skills/harness-architect/references/model-routing.md)
 
 阅读顺序建议：
 
-1. `SKILL.md`
-2. `references/schema-contracts.md`
-3. `references/openclaw-dispatch.md`
-4. `references/model-routing.md`
-5. `references/git-worktree-playbook.md`
-6. `examples/`
+1. `skills/harness-architect/SKILL.md`
+2. `skills/harness-architect/references/schema-contracts.md`
+3. `skills/harness-architect/references/openclaw-dispatch.md`
+4. `skills/harness-architect/references/model-routing.md`
+5. `skills/harness-architect/references/git-worktree-playbook.md`
+6. `skills/harness-architect/examples/`
 
 ### 试用与反馈
 
 建议在试用前先阅读：
 
-- [TRY-IT.md](./TRY-IT.md)
-- [FEEDBACK.md](./FEEDBACK.md)
+- [TRY-IT.md](./skills/harness-architect/TRY-IT.md)
+- [FEEDBACK.md](./skills/harness-architect/FEEDBACK.md)
 
 建议重点反馈：
 
@@ -282,11 +375,11 @@ Typical use cases:
 
 This repository is organized around three main parts:
 
-- `SKILL.md`
+- `skills/harness-architect/SKILL.md`
   the main specification for modes, gates, roles, execution flow, and output contracts
-- `references/`
+- `skills/harness-architect/references/`
   protocol, routing, worktree, prompt, query, and schema references
-- `examples/`
+- `skills/harness-architect/examples/`
   reusable templates, scripts, JSON files, Markdown files, and prompt examples
 
 ### Problems It Addresses
@@ -301,18 +394,87 @@ The repository focuses on these areas:
 
 ### Quick Start
 
+Install skills into Codex first:
+
+```bash
+./install.sh
+```
+
+The install also writes a helper command:
+
+```bash
+~/.codex/bin/harness-kick
+```
+
+The installer will try to add the matching `bin` directory to your current shell rc file by default.
+If you pass `--no-shell-rc`, or prefer to manage `PATH` yourself, add it manually:
+
+```bash
+echo 'export PATH="$HOME/.codex/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+Most common end-to-end flow:
+
+```bash
+git clone <this-repo>
+cd harness-architect
+chmod +x install.sh
+./install.sh
+
+mkdir pomodoro-app
+cd pomodoro-app
+harness-kick "Build a pomodoro timer app" "React + Vite"
+```
+
+`harness-kick` will:
+
+- install the full `.harness` operator/tooling surface into the current project
+- create `.harness/bootstrap-request.md`
+- automatically run a `codex exec` bootstrap when the `codex` CLI is available
+- run `refresh-state` and `session-init` after a successful bootstrap
+- print the follow-up `status`, `watch`, `query`, and `dashboard` commands
+- copy the prompt to the clipboard on macOS
+
+To keep the old install-only behavior:
+
+```bash
+harness-kick --manual "Build a pomodoro timer app" "React + Vite"
+```
+
+To make bootstrap read an extra context file first, where `--prd` is just an alias of `--context`:
+
+```bash
+harness-kick --context docs/prd.md "Give me a markdown analysis report for this codebase"
+```
+
+Equivalent form:
+
+```bash
+harness-kick --prd docs/prd.md "Give me a markdown analysis report for this codebase"
+```
+
+Here `docs/prd.md` is treated as a normal context file, not a special PRD mode; it is handled the same way as any other `docs/*.md`, `notes/*.md`, or design/reference file passed in as extra context.
+
+To push a worker parallelism preference into the bootstrap prompt:
+
+```bash
+harness-kick --concurrency 4 "Build a pomodoro timer app" "React + Vite"
+```
+
 Recommended trial flow:
 
-1. read [SKILL.md](./SKILL.md)
-2. choose a test project directory
-3. install the minimal CLI and scripts into that project's `.harness/`
-4. run `query` and `dashboard`
-5. add routing, worktree, and audit components as needed
+1. run `./install.sh`
+2. read [SKILL.md](./skills/harness-architect/SKILL.md)
+3. choose a test project directory
+4. install the minimal CLI and scripts into that project's `.harness/`
+5. run `query` and `dashboard`
+6. add routing, worktree, and audit components as needed
 
 Install the minimal toolset:
 
 ```bash
-./examples/harness-install-tools.example.sh <PROJECT_ROOT>
+./skills/harness-architect/examples/harness-install-tools.example.sh <PROJECT_ROOT>
 ```
 
 Refresh hot state:
@@ -466,28 +628,28 @@ session-init
 
 Suggested starting points:
 
-- [SKILL.md](./SKILL.md)
-- [TRY-IT.md](./TRY-IT.md)
-- [FEEDBACK.md](./FEEDBACK.md)
-- [references/schema-contracts.md](./references/schema-contracts.md)
-- [references/openclaw-dispatch.md](./references/openclaw-dispatch.md)
-- [references/model-routing.md](./references/model-routing.md)
+- [SKILL.md](./skills/harness-architect/SKILL.md)
+- [TRY-IT.md](./skills/harness-architect/TRY-IT.md)
+- [FEEDBACK.md](./skills/harness-architect/FEEDBACK.md)
+- [references/schema-contracts.md](./skills/harness-architect/references/schema-contracts.md)
+- [references/openclaw-dispatch.md](./skills/harness-architect/references/openclaw-dispatch.md)
+- [references/model-routing.md](./skills/harness-architect/references/model-routing.md)
 
 Suggested reading order:
 
-1. `SKILL.md`
-2. `references/schema-contracts.md`
-3. `references/openclaw-dispatch.md`
-4. `references/model-routing.md`
-5. `references/git-worktree-playbook.md`
-6. `examples/`
+1. `skills/harness-architect/SKILL.md`
+2. `skills/harness-architect/references/schema-contracts.md`
+3. `skills/harness-architect/references/openclaw-dispatch.md`
+4. `skills/harness-architect/references/model-routing.md`
+5. `skills/harness-architect/references/git-worktree-playbook.md`
+6. `skills/harness-architect/examples/`
 
 ### Trial and Feedback
 
 Before running a trial, review:
 
-- [TRY-IT.md](./TRY-IT.md)
-- [FEEDBACK.md](./FEEDBACK.md)
+- [TRY-IT.md](./skills/harness-architect/TRY-IT.md)
+- [FEEDBACK.md](./skills/harness-architect/FEEDBACK.md)
 
 Useful feedback areas include:
 

@@ -55,7 +55,7 @@
         "baseRef": "refs/heads/orch/spec-S-003",
         "diffBase": "refs/heads/orch/spec-S-003",
         "commandProfile": {
-          "standard": "codex exec --full-auto -m gpt-5.4",
+          "standard": "codex exec --yolo -m gpt-5.4",
           "localCompat": "codex --yolo exec -m gpt-5.4"
         },
         "logPath": ".harness/runtime/orch-1.log",
@@ -134,7 +134,7 @@
         "baseRef": "refs/heads/orch/spec-S-003",
         "diffBase": "refs/heads/orch/spec-S-003",
         "commandProfile": {
-          "standard": "codex exec resume <SESSION_ID> --full-auto -m gpt-5.3-codex",
+          "standard": "codex exec resume <SESSION_ID> --yolo -m gpt-5.3-codex",
           "localCompat": "codex exec resume <SESSION_ID> --yolo -m gpt-5.3-codex"
         },
         "logPath": ".harness/runtime/worker-%n.log",
@@ -210,7 +210,7 @@
         "baseRef": "refs/heads/orch/spec-S-003",
         "diffBase": "refs/heads/orch/spec-S-003",
         "commandProfile": {
-          "standard": "codex exec --full-auto -m gpt-5.3-codex",
+          "standard": "codex exec --yolo -m gpt-5.3-codex",
           "localCompat": "codex --yolo exec -m gpt-5.3-codex"
         },
         "logPath": ".harness/runtime/worker-%n.log",
@@ -290,7 +290,7 @@
         "baseRef": "refs/heads/orch/spec-S-003",
         "diffBase": "refs/heads/orch/spec-S-003",
         "commandProfile": {
-          "standard": "codex exec --full-auto -m gpt-5.3-codex",
+          "standard": "codex exec --yolo -m gpt-5.3-codex",
           "localCompat": "codex --yolo exec -m gpt-5.3-codex"
         },
         "logPath": ".harness/runtime/worker-%n.log",

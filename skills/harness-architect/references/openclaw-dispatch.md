@@ -52,7 +52,7 @@
 - `routingModel = "gpt-5.4"`
 - `executionModel = "gpt-5.3-codex"`
 - `orchestrationSessionId = "<gpt-5.4-session-id>"`
-- `commandProfile.standard = "codex exec --full-auto"`
+- `commandProfile.standard = "codex exec --yolo"`
 - `commandProfile.localCompat = "codex --yolo exec"`
 - `worktreePath = "<repo>/.worktrees/<task-or-branch>"`
 - `diffBase = "<stable-base-ref>"`
@@ -78,10 +78,8 @@
 
 注意：
 
-- `--full-auto` 是当前 help 里公开的正式写法
-- `--yolo` 在部分本机环境里可用，但更像兼容/隐藏写法
-- 长期复用模板优先写 `--full-auto`
-- 本机派发脚本可以额外备注 `--yolo`
+- `--yolo` 作为默认写法
+- 长期复用模板统一写 `--yolo`
 
 ## 典型节奏
 
@@ -336,10 +334,10 @@ DO NOT 在以下动作之前投递命令：
 编排主线 session: <ORCHESTRATION_SESSION_ID>
 pre-worker routing: 先 `codex exec resume <ORCHESTRATION_SESSION_ID> -m gpt-5.4 ...`
 如果 `resumeStrategy=fresh`:
-  标准启动方式: codex exec --full-auto -m gpt-5.3-codex "<WORKER_PROMPT>"
+  标准启动方式: codex exec --yolo -m gpt-5.3-codex "<WORKER_PROMPT>"
   本机兼容写法: codex --yolo exec -m gpt-5.3-codex "<WORKER_PROMPT>"
 如果 `resumeStrategy=resume`:
-  标准启动方式: codex exec resume <SESSION_ID> --full-auto -m gpt-5.3-codex "<WORKER_PROMPT>"
+  标准启动方式: codex exec resume <SESSION_ID> --yolo -m gpt-5.3-codex "<WORKER_PROMPT>"
   本机兼容写法: codex exec resume <SESSION_ID> --yolo -m gpt-5.3-codex "<WORKER_PROMPT>"
 要求：先写 claim / dispatch / lineage，再投递命令。
 ```

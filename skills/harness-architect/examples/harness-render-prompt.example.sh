@@ -12,8 +12,18 @@ ROOT="$2"
 ROLE="$3"
 STAGE="$4"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PYTHON_RENDER=""
 
-python3 "$SCRIPT_DIR/render-prompt.example.py" \
+if [ -f "$SCRIPT_DIR/../scripts/render-prompt.py" ]; then
+  PYTHON_RENDER="$SCRIPT_DIR/../scripts/render-prompt.py"
+elif [ -f "$SCRIPT_DIR/render-prompt.example.py" ]; then
+  PYTHON_RENDER="$SCRIPT_DIR/render-prompt.example.py"
+else
+  echo "render-prompt script not found" >&2
+  exit 1
+fi
+
+python3 "$PYTHON_RENDER" \
   --root "$ROOT" \
   --task-id "$TASK_ID" \
   --role "$ROLE" \

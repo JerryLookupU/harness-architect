@@ -11,7 +11,16 @@ TASK_ID="${2:-}"
 WATCH_FLAG="${3:-}"
 INTERVAL="${4:-2}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-QUERY_SH="$SCRIPT_DIR/harness-query.example.sh"
+QUERY_SH=""
+
+if [ -x "$SCRIPT_DIR/harness-query" ]; then
+  QUERY_SH="$SCRIPT_DIR/harness-query"
+elif [ -x "$SCRIPT_DIR/harness-query.example.sh" ]; then
+  QUERY_SH="$SCRIPT_DIR/harness-query.example.sh"
+else
+  echo "harness-query wrapper not found" >&2
+  exit 1
+fi
 
 if [ "$TASK_ID" = "--watch" ]; then
   TASK_ID=""
