@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "1.0",
+  "generator": "harness-architect",
+  "generatedAt": "2026-03-21T21:10:00+08:00",
+  "orchestrationSessionId": "019d0b19-aaaa-bbbb-cccc-111111111111",
+  "activeTaskCount": 1,
+  "activeWorkerCount": 0,
+  "activeAuditWorkerCount": 0,
+  "activeOrchestratorCount": 1,
+  "activeTasks": [
+    {
+      "taskId": "T-001",
+      "kind": "replan",
+      "roleHint": "orchestrator",
+      "title": "Replan deep archive work after sync.ts conflict",
+      "summary": "局部重排 deep-archive 子树，回收冲突 claim，释放新的安全 leaf tasks。",
+      "nodeId": "tmux:orch-1",
+      "boundSessionId": "019d0b19-aaaa-bbbb-cccc-111111111111",
+      "branchName": "task/T-001-replan-deep-archive",
+      "worktreePath": ".worktrees/T-001-replan-deep-archive"
+    }
+  ]
+}

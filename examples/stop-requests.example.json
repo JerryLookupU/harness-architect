@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "1.0",
+  "generator": "harness-architect",
+  "generatedAt": "2026-03-21T20:30:00+08:00",
+  "requests": [
+    {
+      "requestId": "SR-001",
+      "kind": "stop",
+      "targetTaskId": "T-002",
+      "scope": "self",
+      "reason": "subtree replan requested by worker",
+      "stopMode": "graceful",
+      "requestedBy": "orchestrator:tmux:orch-1",
+      "requestedAt": "2026-03-21T20:29:00+08:00",
+      "deadlineSeconds": 120,
+      "originRequestId": "RR-001",
+      "status": "pending"
+    }
+  ]
+}

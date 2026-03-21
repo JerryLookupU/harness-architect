@@ -1,0 +1,269 @@
+{
+  "schemaVersion": "1.0",
+  "generator": "harness-architect",
+  "generatedAt": "2026-03-19T23:30:00+08:00",
+  "specRevision": "S-003",
+  "items": [
+    {
+      "id": "WI-001",
+      "kind": "orchestration",
+      "title": "Replan deep archive work after sync.ts conflict",
+      "summary": "处理 sync.ts 路径冲突，局部重排 deep-archive 子树。",
+      "description": "该 work item 负责把冲突中的子树重新切分成安全 task，并把旧 claim / dispatch / handoff 收敛到新的蓝图，不直接改业务源码。",
+      "status": "active",
+      "priority": "P0",
+      "roleHint": "orchestrator",
+      "featureIds": ["F-003"],
+      "dependsOn": [],
+      "planningStage": "refinement",
+      "parentWorkItemId": null,
+      "childWorkItemIds": ["WI-002"],
+      "lineagePath": ["F-003", "WI-001"],
+      "replanScope": "subtree",
+      "ownedPaths": [".harness/spec.json", ".harness/work-items.json", ".harness/task-pool.json"],
+      "branchName": "task/T-001-replan-deep-archive",
+      "worktreePath": ".worktrees/T-001-replan-deep-archive",
+      "diffBase": "refs/heads/orch/spec-S-003",
+      "diffSummary": "control-plane only: spec/task-pool/work-items changes",
+      "acceptance": [
+        "New spec revision created",
+        "Conflicting worker routes superseded",
+        "New claimable tasks emitted for safe paths"
+      ],
+      "blockedBy": [],
+      "routingModel": "gpt-5.4",
+      "executionModel": "gpt-5.3-codex",
+      "claim": {
+        "agentId": "claude-code-session-3",
+        "role": "orchestrator",
+        "nodeId": "tmux:orch-1",
+        "leasedAt": "2026-03-19T23:30:00+08:00",
+        "leaseExpiresAt": "2026-03-20T01:30:00+08:00"
+      },
+      "dispatch": {
+        "runner": "codex exec",
+        "targetKind": "worker-node",
+        "targetSelector": "tmux:orch-1",
+        "entryRole": "orchestrator",
+        "taskContextId": "CTX-WI-001",
+        "workspaceRoot": "/repo",
+        "worktreePath": ".worktrees/T-001-replan-deep-archive",
+        "branchName": "task/T-001-replan-deep-archive",
+        "baseRef": "refs/heads/orch/spec-S-003",
+        "diffBase": "refs/heads/orch/spec-S-003",
+        "commandProfile": {
+          "standard": "codex exec --full-auto -m gpt-5.4",
+          "localCompat": "codex --yolo exec -m gpt-5.4"
+        },
+        "logPath": ".harness/runtime/orch-1.log",
+        "heartbeatPath": ".harness/runtime/orch-1.heartbeat",
+        "maxParallelism": 1,
+        "cooldownSeconds": 30
+      },
+      "handoff": {
+        "nextSuggestedWorkItemIds": ["WI-002"],
+        "nextSuggestedTaskIds": ["T-002"],
+        "replanOnFail": true,
+        "mergeRequired": false,
+        "returnToRole": "orchestrator"
+      },
+      "notes": "Blueprint is currently the highest-priority work."
+    },
+    {
+      "id": "WI-002",
+      "kind": "bugfix",
+      "title": "Fix incremental sync delta detection",
+      "summary": "修复增量同步误判，确保只处理变化数据。",
+      "description": "此项是 deep-archive 子树下的具体执行 work item，只有局部 replan 完成后才能释放给 worker。",
+      "status": "queued",
+      "priority": "P0",
+      "roleHint": "worker",
+      "featureIds": ["F-003"],
+      "dependsOn": ["WI-001"],
+      "planningStage": "execution-ready",
+      "parentWorkItemId": "WI-001",
+      "childWorkItemIds": [],
+      "lineagePath": ["F-003", "WI-001", "WI-002"],
+      "replanScope": "self",
+      "ownedPaths": ["src/deep-archive/sync.ts", "src/deep-archive/delta.ts"],
+      "branchName": "task/T-002-fix-delta-detection",
+      "worktreePath": ".worktrees/T-002-fix-delta-detection",
+      "diffBase": "refs/heads/orch/spec-S-003",
+      "diffSummary": null,
+      "acceptance": [
+        "Incremental sync only processes changed content",
+        "VR-004 passes"
+      ],
+      "blockedBy": ["WI-001"],
+      "routingModel": "gpt-5.4",
+      "executionModel": "gpt-5.3-codex",
+      "claim": {
+        "agentId": null,
+        "role": null,
+        "nodeId": null,
+        "leasedAt": null,
+        "leaseExpiresAt": null
+      },
+      "dispatch": {
+        "runner": "codex exec",
+        "targetKind": "worker-node",
+        "targetSelector": "tmux:worker-*",
+        "entryRole": "worker",
+        "taskContextId": "CTX-WI-002",
+        "workspaceRoot": "/repo",
+        "worktreePath": ".worktrees/T-002-fix-delta-detection",
+        "branchName": "task/T-002-fix-delta-detection",
+        "baseRef": "refs/heads/orch/spec-S-003",
+        "diffBase": "refs/heads/orch/spec-S-003",
+        "commandProfile": {
+          "standard": "codex exec resume <SESSION_ID> --full-auto -m gpt-5.3-codex",
+          "localCompat": "codex exec resume <SESSION_ID> --yolo -m gpt-5.3-codex"
+        },
+        "logPath": ".harness/runtime/worker-%n.log",
+        "heartbeatPath": ".harness/runtime/worker-%n.heartbeat",
+        "maxParallelism": 1,
+        "cooldownSeconds": 10
+      },
+      "handoff": {
+        "nextSuggestedWorkItemIds": [],
+        "nextSuggestedTaskIds": [],
+        "replanOnFail": true,
+        "mergeRequired": true,
+        "returnToRole": "orchestrator"
+      },
+      "notes": "Cannot start until replan resolves path ownership."
+    },
+    {
+      "id": "WI-003",
+      "kind": "feature",
+      "title": "Implement cache warming on session init",
+      "summary": "在 session 初始化时增加缓存预热路径。",
+      "description": "这是与 deep-archive 无关的平行 work item，目的是展示多 worker 并行时如何避免被局部重排影响。",
+      "status": "queued",
+      "priority": "P1",
+      "roleHint": "worker",
+      "featureIds": ["F-002"],
+      "dependsOn": [],
+      "planningStage": "execution-ready",
+      "parentWorkItemId": null,
+      "childWorkItemIds": [],
+      "lineagePath": ["F-002", "WI-003"],
+      "replanScope": "self",
+      "ownedPaths": ["src/cache/warm.ts", "src/cache/recall-cache.ts"],
+      "branchName": "task/T-003-cache-warming",
+      "worktreePath": ".worktrees/T-003-cache-warming",
+      "diffBase": "refs/heads/orch/spec-S-003",
+      "diffSummary": null,
+      "acceptance": [
+        "Warm-up completes within 2 seconds on typical workspace",
+        "VR-003 passes"
+      ],
+      "blockedBy": [],
+      "routingModel": "gpt-5.4",
+      "executionModel": "gpt-5.3-codex",
+      "claim": {
+        "agentId": null,
+        "role": null,
+        "nodeId": null,
+        "leasedAt": null,
+        "leaseExpiresAt": null
+      },
+      "dispatch": {
+        "runner": "codex exec",
+        "targetKind": "worker-node",
+        "targetSelector": "tmux:worker-*",
+        "entryRole": "worker",
+        "taskContextId": "CTX-WI-003",
+        "workspaceRoot": "/repo",
+        "worktreePath": ".worktrees/T-003-cache-warming",
+        "branchName": "task/T-003-cache-warming",
+        "baseRef": "refs/heads/orch/spec-S-003",
+        "diffBase": "refs/heads/orch/spec-S-003",
+        "commandProfile": {
+          "standard": "codex exec --full-auto -m gpt-5.3-codex",
+          "localCompat": "codex --yolo exec -m gpt-5.3-codex"
+        },
+        "logPath": ".harness/runtime/worker-%n.log",
+        "heartbeatPath": ".harness/runtime/worker-%n.heartbeat",
+        "maxParallelism": 2,
+        "cooldownSeconds": 10
+      },
+      "handoff": {
+        "nextSuggestedWorkItemIds": [],
+        "nextSuggestedTaskIds": [],
+        "replanOnFail": false,
+        "mergeRequired": true,
+        "returnToRole": "orchestrator"
+      },
+      "notes": "Independent from deep-archive path."
+    },
+    {
+      "id": "WI-004",
+      "kind": "audit",
+      "title": "Audit deep archive delta fix before merge",
+      "summary": "复核增量同步修复的验证结果、handoff 和风险结论。",
+      "description": "该 work item 不直接改业务源码，而是对 WI-002 对应 task 的结果做结构性审计，并在 merge 前给出 pass / warn / fail。",
+      "status": "queued",
+      "priority": "P0",
+      "roleHint": "worker",
+      "workerMode": "audit",
+      "featureIds": ["F-003"],
+      "dependsOn": ["WI-002"],
+      "planningStage": "execution-ready",
+      "parentWorkItemId": "WI-001",
+      "childWorkItemIds": [],
+      "lineagePath": ["F-003", "WI-001", "WI-004"],
+      "replanScope": "self",
+      "ownedPaths": [".harness/audit-report.md", ".harness/progress.md", ".harness/lineage.jsonl"],
+      "branchName": "task/T-004-audit-delta-fix",
+      "worktreePath": ".worktrees/T-004-audit-delta-fix",
+      "diffBase": "refs/heads/orch/spec-S-003",
+      "diffSummary": null,
+      "acceptance": [
+        "Audit report records evidence and verdict",
+        "Audit verdict is written before merge"
+      ],
+      "blockedBy": ["WI-002"],
+      "routingModel": "gpt-5.4",
+      "executionModel": "gpt-5.3-codex",
+      "reviewOfTaskIds": ["T-002"],
+      "auditScope": "task-result",
+      "auditVerdict": "pending",
+      "claim": {
+        "agentId": null,
+        "role": null,
+        "nodeId": null,
+        "leasedAt": null,
+        "leaseExpiresAt": null
+      },
+      "dispatch": {
+        "runner": "codex exec",
+        "targetKind": "worker-node",
+        "targetSelector": "tmux:worker-*",
+        "entryRole": "worker",
+        "taskContextId": "CTX-WI-004",
+        "workspaceRoot": "/repo",
+        "worktreePath": ".worktrees/T-004-audit-delta-fix",
+        "branchName": "task/T-004-audit-delta-fix",
+        "baseRef": "refs/heads/orch/spec-S-003",
+        "diffBase": "refs/heads/orch/spec-S-003",
+        "commandProfile": {
+          "standard": "codex exec --full-auto -m gpt-5.3-codex",
+          "localCompat": "codex --yolo exec -m gpt-5.3-codex"
+        },
+        "logPath": ".harness/runtime/worker-%n.log",
+        "heartbeatPath": ".harness/runtime/worker-%n.heartbeat",
+        "maxParallelism": 1,
+        "cooldownSeconds": 15
+      },
+      "handoff": {
+        "nextSuggestedWorkItemIds": [],
+        "nextSuggestedTaskIds": [],
+        "replanOnFail": true,
+        "mergeRequired": false,
+        "returnToRole": "orchestrator"
+      },
+      "notes": "Run this after the worker result is ready and before merge."
+    }
+  ]
+}

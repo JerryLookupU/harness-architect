@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "1.0",
+  "generator": "harness-architect",
+  "generatedAt": "2026-03-21T21:25:00+08:00",
+  "installed": [
+    {
+      "name": "harness-query",
+      "target": ".harness/bin/harness-query",
+      "source": "examples/harness-query.example.sh",
+      "updatedAt": "2026-03-21T21:25:00+08:00"
+    },
+    {
+      "name": "harness-dashboard",
+      "target": ".harness/bin/harness-dashboard",
+      "source": "examples/harness-dashboard.example.sh",
+      "updatedAt": "2026-03-21T21:25:00+08:00"
+    },
+    {
+      "name": "query.py",
+      "target": ".harness/scripts/query.py",
+      "source": "examples/query-harness.example.py",
+      "updatedAt": "2026-03-21T21:25:00+08:00"
+    },
+    {
+      "name": "refresh-state.py",
+      "target": ".harness/scripts/refresh-state.py",
+      "source": "examples/refresh-state.example.py",
+      "updatedAt": "2026-03-21T21:25:00+08:00"
+    }
+  ]
+}

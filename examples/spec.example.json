@@ -1,0 +1,63 @@
+{
+  "schemaVersion": "1.0",
+  "generator": "harness-architect",
+  "generatedAt": "2026-03-19T14:30:00+08:00",
+  "specRevision": "S-001",
+  "planningStage": "execution-ready",
+  "parentSpecRevision": null,
+  "status": "active",
+  "objective": "Complete openclaw-brain-plugin v0.2: deep archive sync, recall optimization, workspace binding",
+  "rollbackPoint": { "branch": "main", "commit": "a1b2c3d" },
+  "blocks": [
+    {
+      "id": "TB-001",
+      "title": "Deep archive incremental sync",
+      "goal": "Fix and stabilize incremental vector sync, ensure partial failure recovery",
+      "featureIds": ["F-003"],
+      "dependsOn": [],
+      "acceptance": [
+        "VR-004 passes (incremental vector tests)",
+        "VR-005 passes (error recovery paths exist)",
+        "Manual test: re-run sync on unchanged data produces zero new embeddings"
+      ],
+      "ownedPaths": ["src/deep-archive/**", "tests/unit/deep-archive-*.test.mjs"],
+      "avoidPaths": ["src/providers/**", "package-lock.json"],
+      "verificationRuleIds": ["VR-004", "VR-005"],
+      "contextTags": ["deep-archive", "vector-sync", "error-recovery"],
+      "status": "active"
+    },
+    {
+      "id": "TB-002",
+      "title": "Recall cache optimization",
+      "goal": "Reduce cache miss rate, add cache warming on session init",
+      "featureIds": ["F-002"],
+      "dependsOn": [],
+      "acceptance": [
+        "VR-003 passes (recall cache tests)",
+        "Cache warm-up completes within 2s on typical workspace"
+      ],
+      "ownedPaths": ["src/cache/**", "tests/unit/recall-cache.test.mjs"],
+      "avoidPaths": ["src/deep-archive/**", "package-lock.json"],
+      "verificationRuleIds": ["VR-003"],
+      "contextTags": ["cache", "recall", "performance"],
+      "status": "planned"
+    },
+    {
+      "id": "TB-003",
+      "title": "Workspace binding improvements",
+      "goal": "Support multi-workspace binding, auto-detect workspace root",
+      "featureIds": ["F-001"],
+      "dependsOn": ["TB-001"],
+      "acceptance": [
+        "VR-001 passes (QMD retrieval tests)",
+        "VR-002 passes (fallback integration test)",
+        "Manual test: bind two workspaces, recall returns results from both"
+      ],
+      "ownedPaths": ["src/workspace-binding/**", "tests/unit/workspace-binding.test.mjs"],
+      "avoidPaths": ["src/cache/**", "src/deep-archive/**"],
+      "verificationRuleIds": ["VR-001", "VR-002"],
+      "contextTags": ["workspace", "binding", "multi-root"],
+      "status": "planned"
+    }
+  ]
+}

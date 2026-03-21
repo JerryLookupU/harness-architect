@@ -1,0 +1,23 @@
+== Harness Status ==
+mode: maintenance
+focus: WI-042
+role: worker
+
+current task: T-042
+title: Fix incremental sync delta detection
+summary: 修复增量同步误判，确保只处理变化数据。
+
+active workers: 2
+active audit workers: 1
+active orchestrator tasks: 0
+pending replan requests: 1
+pending stop requests: 0
+
+tracker progress:
+- sample size: 200
+- closure quality: 94.4/100
+- review confidence: 95.3/100 (A)
+
+next actions:
+- 等待 T-041 局部 replan 完成后认领 T-042
+- 若 sync.ts 路径冲突回升，触发 subtree replan

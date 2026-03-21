@@ -1,0 +1,98 @@
+{
+  "schemaVersion": "1.0",
+  "generator": "harness-architect",
+  "generatedAt": "2026-03-19T14:30:00+08:00",
+  "rules": [
+    {
+      "id": "VR-001",
+      "title": "QMD retrieval unit tests pass",
+      "featureIds": ["F-001"],
+      "stdIds": ["STD-001"],
+      "type": "command",
+      "exec": "npx vitest run tests/unit/qmd-local-retrieval.test.mjs",
+      "timeout": 30000,
+      "costTier": "fast",
+      "readOnlySafe": true,
+      "appliesWhen": null,
+      "lint": { "lastReview": "2026-03-19", "nextReview": "2026-04-18", "cycleDays": 30 }
+    },
+    {
+      "id": "VR-002",
+      "title": "QMD fallback integration test",
+      "featureIds": ["F-001"],
+      "stdIds": ["STD-004"],
+      "type": "command",
+      "exec": "npx vitest run tests/integration/local-use-bootstrap.test.mjs",
+      "timeout": 60000,
+      "costTier": "medium",
+      "readOnlySafe": true,
+      "appliesWhen": null,
+      "lint": { "lastReview": "2026-03-19", "nextReview": "2026-04-18", "cycleDays": 30 }
+    },
+    {
+      "id": "VR-003",
+      "title": "Recall cache unit tests pass",
+      "featureIds": ["F-002"],
+      "stdIds": ["STD-001"],
+      "type": "command",
+      "exec": "npx vitest run tests/unit/recall-cache.test.mjs",
+      "timeout": 30000,
+      "costTier": "fast",
+      "readOnlySafe": true,
+      "appliesWhen": null,
+      "lint": { "lastReview": "2026-03-19", "nextReview": "2026-05-18", "cycleDays": 60 }
+    },
+    {
+      "id": "VR-004",
+      "title": "Deep archive incremental vector tests pass",
+      "featureIds": ["F-003"],
+      "stdIds": ["STD-001", "STD-003"],
+      "type": "command",
+      "exec": "npx vitest run tests/unit/deep-archive-incremental-vector.test.mjs",
+      "timeout": 30000,
+      "costTier": "fast",
+      "readOnlySafe": true,
+      "appliesWhen": null,
+      "lint": { "lastReview": "2026-03-19", "nextReview": "2026-03-24", "cycleDays": 5 }
+    },
+    {
+      "id": "VR-005",
+      "title": "Deep archive error recovery path exists",
+      "featureIds": ["F-003"],
+      "stdIds": ["STD-002"],
+      "type": "static",
+      "exec": "grep -r 'catch\\|finally' src/deep-archive/ | grep -v node_modules",
+      "timeout": 5000,
+      "costTier": "fast",
+      "readOnlySafe": true,
+      "appliesWhen": null,
+      "lint": { "lastReview": "2026-03-19", "nextReview": "2026-03-24", "cycleDays": 5 }
+    },
+    {
+      "id": "VR-006",
+      "title": "CLI registration test passes",
+      "featureIds": ["F-004"],
+      "stdIds": ["STD-001"],
+      "type": "command",
+      "exec": "npx vitest run tests/integration/plugin-registration.test.mjs",
+      "timeout": 30000,
+      "costTier": "fast",
+      "readOnlySafe": true,
+      "appliesWhen": null,
+      "lint": { "lastReview": "2026-03-19", "nextReview": "2026-09-15", "cycleDays": 180 }
+    },
+    {
+      "id": "VR-007",
+      "title": "TypeScript strict compilation",
+      "featureIds": [],
+      "stdIds": ["STD-005"],
+      "type": "command",
+      "exec": "npx tsc --noEmit",
+      "timeout": 60000,
+      "costTier": "medium",
+      "readOnlySafe": true,
+      "appliesWhen": null,
+      "lint": { "lastReview": "2026-03-19", "nextReview": "2026-07-17", "cycleDays": 120 }
+    }
+  ]
+}

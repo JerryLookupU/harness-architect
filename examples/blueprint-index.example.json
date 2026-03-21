@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "1.0",
+  "generator": "harness-architect",
+  "generatedAt": "2026-03-21T21:10:00+08:00",
+  "specRevision": "S-001",
+  "planningStage": "execution-ready",
+  "objective": "Complete openclaw-brain-plugin v0.2: deep archive sync, recall optimization, workspace binding",
+  "integrationBranch": "orch/spec-S-003",
+  "blocks": {
+    "TB-001": {
+      "title": "Deep archive incremental sync",
+      "status": "active",
+      "featureIds": ["F-003"],
+      "workItemIds": ["WI-001", "WI-002", "WI-004"],
+      "taskIds": ["T-001", "T-002", "T-004"]
+    },
+    "TB-002": {
+      "title": "Recall cache optimization",
+      "status": "planned",
+      "featureIds": ["F-002"],
+      "workItemIds": ["WI-003"],
+      "taskIds": ["T-003"]
+    }
+  }
+}

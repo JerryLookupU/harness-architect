@@ -1,0 +1,118 @@
+{
+  "schemaVersion": "1.0",
+  "generator": "harness-architect",
+  "generatedAt": "2026-03-21T20:30:00+08:00",
+  "orchestrationSessionId": "019d0b19-aaaa-bbbb-cccc-111111111111",
+  "orchestrationSessions": [
+    {
+      "sessionId": "019d0b19-aaaa-bbbb-cccc-111111111111",
+      "model": "gpt-5.4",
+      "role": "orchestrator",
+      "status": "active",
+      "purpose": "draft/refinement orchestration, pre-worker session routing, replan",
+      "lastUsedAt": "2026-03-21T20:28:00+08:00"
+    }
+  ],
+  "families": [
+    {
+      "sessionFamilyId": "SF-F003-WI001",
+      "featureId": "F-003",
+      "anchorWorkItemId": "WI-001",
+      "cacheAffinityKey": "feature:F-003|parent:WI-001|role:worker"
+    }
+  ],
+  "sessions": [
+    {
+      "sessionId": "019d0b19-e0c1-7613-a18e-33380b167c90",
+      "rootSessionId": "019d0b19-e0c1-7613-a18e-33380b167c90",
+      "parentSessionId": null,
+      "branchRootSessionId": "019d0b19-e0c1-7613-a18e-33380b167c90",
+      "branchOfSessionId": null,
+      "sessionFamilyId": "SF-F003-WI001",
+      "sourceTaskId": "T-001",
+      "model": "gpt-5.3-codex",
+      "status": "active",
+      "lastUsedAt": "2026-03-21T20:25:00+08:00"
+    },
+    {
+      "sessionId": "019d0b19-9999-8888-7777-666666666666",
+      "rootSessionId": "019d0b19-9999-8888-7777-666666666666",
+      "parentSessionId": null,
+      "branchRootSessionId": "019d0b19-e0c1-7613-a18e-33380b167c90",
+      "branchOfSessionId": "019d0b19-e0c1-7613-a18e-33380b167c90",
+      "sessionFamilyId": "SF-F003-WI001",
+      "sourceTaskId": "T-004",
+      "model": "gpt-5.3-codex",
+      "status": "queued",
+      "lastUsedAt": null
+    }
+  ],
+  "routingDecisions": [
+    {
+      "taskId": "T-002",
+      "orchestrationSessionId": "019d0b19-aaaa-bbbb-cccc-111111111111",
+      "routingModel": "gpt-5.4",
+      "executionModel": "gpt-5.3-codex",
+      "resumeStrategy": "resume",
+      "preferredResumeSessionId": "019d0b19-e0c1-7613-a18e-33380b167c90",
+      "candidateResumeSessionIds": [
+        "019d0b19-e0c1-7613-a18e-33380b167c90",
+        "019d0b19-ffff-eeee-dddd-222222222222"
+      ],
+      "sessionFamilyId": "SF-F003-WI001",
+      "cacheAffinityKey": "feature:F-003|parent:WI-001|role:worker",
+      "routingReason": "先经 5.4 编排主线 session 复查任务依赖与冲突域，再决定线性续用已有 worker session。",
+      "routedAt": "2026-03-21T20:20:00+08:00"
+    },
+    {
+      "taskId": "T-004",
+      "orchestrationSessionId": "019d0b19-aaaa-bbbb-cccc-111111111111",
+      "routingModel": "gpt-5.4",
+      "executionModel": "gpt-5.3-codex",
+      "resumeStrategy": "fresh",
+      "preferredResumeSessionId": null,
+      "candidateResumeSessionIds": [
+        "019d0b19-e0c1-7613-a18e-33380b167c90"
+      ],
+      "sessionFamilyId": "SF-F003-WI001",
+      "cacheAffinityKey": "feature:F-003|parent:WI-001|role:worker|mode:audit",
+      "routingReason": "audit worker 参考 T-002 的上下文，但不直接续写同一个 active session；改为记录逻辑 branch 关系并新开 session。",
+      "branchOfSessionId": "019d0b19-e0c1-7613-a18e-33380b167c90",
+      "routedAt": "2026-03-21T20:29:00+08:00"
+    }
+  ],
+  "reuseHistory": [
+    {
+      "taskId": "T-001",
+      "sessionId": "019d0b19-e0c1-7613-a18e-33380b167c90",
+      "strategy": "fresh",
+      "completedAt": "2026-03-21T20:10:00+08:00"
+    },
+    {
+      "taskId": "T-002",
+      "sessionId": "019d0b19-e0c1-7613-a18e-33380b167c90",
+      "strategy": "resume",
+      "completedAt": null
+    }
+  ],
+  "activeBindings": [
+    {
+      "taskId": "T-002",
+      "sessionId": "019d0b19-e0c1-7613-a18e-33380b167c90",
+      "nodeId": "tmux:worker-2",
+      "boundFromTaskId": "T-001"
+    }
+  ],
+  "recoverableBindings": [
+    {
+      "taskId": "T-002",
+      "sessionId": "019d0b19-e0c1-7613-a18e-33380b167c90",
+      "lastKnownSessionId": "019d0b19-e0c1-7613-a18e-33380b167c90",
+      "error": "delta verification failed after upstream schema drift",
+      "recordedAt": "2026-03-21T20:27:00+08:00"
+    }
+  ],
+  "lastCompletedByTask": {
+    "T-001": "019d0b19-e0c1-7613-a18e-33380b167c90"
+  }
+}

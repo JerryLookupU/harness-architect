@@ -1,0 +1,116 @@
+{
+  "schemaVersion": "1.0",
+  "generator": "harness-architect",
+  "project": "openclaw-brain-plugin",
+  "generatedAt": "2026-03-19T14:30:00+08:00",
+  "scope": "full repo: openclaw-brain-plugin/",
+  "reviewCyclePresets": [1, 5, 10, 30, 60, 120, 180],
+  "currentFeatureId": "F-003",
+  "features": [
+    {
+      "id": "F-001",
+      "title": "QMD local retrieval",
+      "lifecycle": "active",
+      "verificationStatus": "pass",
+      "priority": "P1",
+      "reviewCycleDays": 30,
+      "source": {
+        "primary": "code",
+        "refs": ["src/providers/qmd.ts:15", "tests/unit/qmd-local-retrieval.test.mjs:1"]
+      },
+      "acceptance": [
+        "QMD search returns relevant results within configured timeout",
+        "Fallback to file provider when QMD unavailable"
+      ],
+      "stdIds": ["STD-001", "STD-004"],
+      "verificationRuleIds": ["VR-001", "VR-002"],
+      "blockedBy": [],
+      "lint": {
+        "lastReview": "2026-03-19T14:30:00+08:00",
+        "nextReview": "2026-04-18T14:30:00+08:00",
+        "cycleDays": 30,
+        "driftFlag": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "F-002",
+      "title": "Recall cache with TTL",
+      "lifecycle": "active",
+      "verificationStatus": "pass",
+      "priority": "P2",
+      "reviewCycleDays": 60,
+      "source": {
+        "primary": "code",
+        "refs": ["src/cache/recall-cache.ts:1", "tests/unit/recall-cache.test.mjs:1"]
+      },
+      "acceptance": [
+        "Cache entries expire after configured TTL",
+        "Cache hit returns without re-querying provider"
+      ],
+      "stdIds": ["STD-001"],
+      "verificationRuleIds": ["VR-003"],
+      "blockedBy": [],
+      "lint": {
+        "lastReview": "2026-03-19T14:30:00+08:00",
+        "nextReview": "2026-05-18T14:30:00+08:00",
+        "cycleDays": 60,
+        "driftFlag": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "F-003",
+      "title": "Deep archive incremental vector sync",
+      "lifecycle": "active",
+      "verificationStatus": "fail",
+      "priority": "P0",
+      "reviewCycleDays": 5,
+      "source": {
+        "primary": "test",
+        "refs": ["tests/unit/deep-archive-incremental-vector.test.mjs:1", "src/deep-archive/index.ts:22"]
+      },
+      "acceptance": [
+        "Incremental sync only processes new/changed documents",
+        "Vector embeddings match source content after sync",
+        "Sync recovers gracefully from partial failure"
+      ],
+      "stdIds": ["STD-001", "STD-002", "STD-003"],
+      "verificationRuleIds": ["VR-004", "VR-005"],
+      "blockedBy": [],
+      "lint": {
+        "lastReview": "2026-03-19T14:30:00+08:00",
+        "nextReview": "2026-03-24T14:30:00+08:00",
+        "cycleDays": 5,
+        "driftFlag": false
+      },
+      "notes": "P0: sync correctness is critical path"
+    },
+    {
+      "id": "F-004",
+      "title": "Plugin CLI registration",
+      "lifecycle": "active",
+      "verificationStatus": "pass",
+      "priority": "P3",
+      "reviewCycleDays": 180,
+      "source": {
+        "primary": "code",
+        "refs": ["src/cli/register.ts:1", "tests/integration/plugin-registration.test.mjs:1"]
+      },
+      "acceptance": [
+        "All CLI commands register without error",
+        "Help text renders correctly for each command"
+      ],
+      "stdIds": ["STD-001"],
+      "verificationRuleIds": ["VR-006"],
+      "blockedBy": [],
+      "lint": {
+        "lastReview": "2026-03-19T14:30:00+08:00",
+        "nextReview": "2026-09-15T14:30:00+08:00",
+        "cycleDays": 180,
+        "driftFlag": false
+      },
+      "notes": "Mature, rarely changes"
+    }
+  ]
+}

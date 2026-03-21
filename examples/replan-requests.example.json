@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "1.0",
+  "generator": "harness-architect",
+  "generatedAt": "2026-03-21T20:30:00+08:00",
+  "requests": [
+    {
+      "requestId": "RR-001",
+      "kind": "replan",
+      "anchorTaskId": "T-002",
+      "scope": "subtree",
+      "reason": "sync.ts path ownership changed after T-001 merge",
+      "suggestedStopTaskIds": ["T-002"],
+      "stopMode": "graceful",
+      "requestedBy": "worker:tmux:worker-2",
+      "requestedAt": "2026-03-21T20:28:00+08:00",
+      "status": "pending"
+    }
+  ]
+}
