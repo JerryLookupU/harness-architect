@@ -1,52 +1,59 @@
 # harness-architect
 
-`harness-architect` 是一套给项目建立和维护 `.harness/` 协作系统的 skill 与模板仓库。
+## 中文
 
-它当前主要面向 `Codex` 工作流设计，默认优先考虑：
+`harness-architect` 是一套用于建立和维护 `.harness/` 协作系统的 skill 与模板仓库。
+
+当前版本主要面向 `Codex` 工作流，默认采用以下模型与命令约定：
 
 - `codex exec`
 - `codex exec resume`
-- `gpt-5.4` 编排
-- `gpt-5.3-codex` 执行
+- `gpt-5.4` 用于 orchestration、pre-worker routing、prompt refinement、replan
+- `gpt-5.3-codex` 用于 worker execution
 
-同时它也保留了对 Claude / 其他 agent 工作流的兼容思路，但仓库里的命令、session 路由、prompt 模板和 operator CLI，默认都是按 `Codex-first` 来组织的。
+仓库同时保留了对 Claude 与其他 agent 工作流的兼容思路，但命令组织、session 路由、prompt 模板与 operator CLI 以 `Codex-first` 为默认设计中心。
 
-它面向这类场景：
+### 项目概述
 
-- 你手里有一份 PRD，想把它稳定落成项目
-- 你要让多个 Codex/Claude agent 接力或并行干活
-- 你不想每次换模型、换会话、换人后都重新猜上下文
-- 你希望别人能直接试用这套方法，并给你真实反馈
+本仓库用于将 PRD、代码仓库与 agent 执行流程组织为一套可持续推进、可并发、可恢复、可审计的 `.harness` 执行链。
 
-它的目标不是把文件铺满，而是让后续进入项目的 agent 能稳定回答这几个问题：
+适用场景：
 
-- 现在项目在做什么
-- 当前该先编排还是先执行
-- 哪个 task 可以认领
-- 哪个 session 应该续用
-- 哪个 worktree 应该执行
-- 出错后该怎么停、怎么回退、怎么交接
+- 需要将一份 PRD 稳定落成项目
+- 需要多个 agent 接力或并行推进
+- 需要降低换模型、换会话、换执行者后的上下文恢复成本
+- 需要让试用者快速上手并提供结构化反馈
 
-## 这是什么仓库
+### 仓库内容
 
-这个仓库现在是一个公开试用包，包含三类东西：
+本仓库主要包含三类内容：
 
 - `SKILL.md`
-  skill 主说明书
+  主说明书，定义模式、gate、角色、默认执行链与产物约束
 - `references/`
-  协议、路由、worktree、prompt、query 等参考文档
+  协议、路由、worktree、prompt、query、schema 等参考文档
 - `examples/`
-  可以直接抄到项目里的模板、脚本、JSON 和 prompt
+  可直接复用的模板、脚本、JSON、Markdown 与 prompt 示例
 
-如果你要让别人试用，直接把这个目录发到 Git 即可。
+### 解决的问题
 
-## 快速开始
+本仓库主要处理以下问题：
 
-1. 先通读 [SKILL.md](./SKILL.md)
-2. 选一个测试项目目录
-3. 用安装脚本把最小 CLI 和脚本落到该项目的 `.harness/`
-4. 先跑 `query` / `dashboard`
-5. 再按你的项目需要接入 routing、worktree、audit
+1. 长时间运行任务的状态恢复
+2. 多 worker 并发时的路径冲突与编排漂移
+3. `gpt-5.4` 与 `gpt-5.3-codex` 的模型分工
+4. `session / worktree / diff / audit` 的闭环
+5. 面向人类与工具的 operator / query 界面
+
+### 快速开始
+
+推荐试用流程：
+
+1. 阅读 [SKILL.md](./SKILL.md)
+2. 选择一个测试项目目录
+3. 使用安装脚本将最小 CLI 与脚本写入该项目的 `.harness/`
+4. 运行 `query` 与 `dashboard`
+5. 根据项目需要接入 routing、worktree、audit
 
 安装最小工具集：
 
@@ -60,50 +67,43 @@
 python3 .harness/scripts/refresh-state.py .
 ```
 
-看总览：
+查看总览：
 
 ```bash
 .harness/bin/harness-dashboard .
 ```
 
-看结构化查询：
+查看结构化查询：
 
 ```bash
 .harness/bin/harness-query overview .
 ```
 
-## 它解决什么问题
-
-这套 skill 重点解决 5 类问题：
-
-1. 长时间运行任务的状态恢复
-2. 多 worker 并发时的路径冲突和编排漂移
-3. `gpt-5.4` 和 `gpt-5.3-codex` 的模型分工
-4. `session / worktree / diff / audit` 的闭环
-5. 给人和工具都能读的 operator / query 面
-
-## 核心模型
+### 核心模型
 
 - `gpt-5.4`
-  - 负责 orchestration、pre-worker routing、prompt 精化、replan
+  负责 orchestration、pre-worker routing、prompt refinement、replan
 - `gpt-5.3-codex`
-  - 负责 worker 执行
+  负责 worker execution
 - `orchestrationSessionId`
-  - 单写主线 session
+  单写主线 session
 - `worktree`
-  - 代码隔离层
+  代码隔离层
 - `diff`
-  - 审计和 merge 的证据层
+  审计与 merge 的证据层
 - `state/*.json`
-  - 机器热路径
+  面向机器热路径的状态层
 
-一句话：
+可以将这套结构理解为：
 
-`session` 管上下文，`worktree` 管代码，`diff` 管证据，`.harness` 管状态。
+- `session` 管理上下文
+- `worktree` 管理代码隔离
+- `diff` 管理证据
+- `.harness` 管理状态
 
-## 最小安装面
+### 最小安装集
 
-封版后的最小推荐安装集是：
+推荐的最小安装集如下：
 
 - `.harness/bin/harness-query`
 - `.harness/bin/harness-dashboard`
@@ -111,34 +111,28 @@ python3 .harness/scripts/refresh-state.py .
 - `.harness/scripts/refresh-state.py`
 - `.harness/tooling-manifest.json`
 
-安装模板：
+### 最小热路径
 
-```bash
-./examples/harness-install-tools.example.sh <PROJECT_ROOT>
-```
-
-## 最小热路径
-
-推荐让机器优先读这些：
+建议工具优先读取：
 
 - `.harness/state/current.json`
 - `.harness/state/runtime.json`
 - `.harness/state/blueprint-index.json`
 
-推荐让人优先读这些：
+建议人工优先阅读：
 
 - `.harness/progress.md`
 - `.harness/work-items.json`
 - `.harness/task-pool.json`
 - `.harness/spec.json`
 
-每轮 orchestration / daemon / session 结束前，刷新热状态：
+每轮 orchestration / daemon / session 结束后，建议刷新热状态：
 
 ```bash
 python3 .harness/scripts/refresh-state.py .
 ```
 
-## 常用 CLI
+### 常用 CLI
 
 机器可读查询：
 
@@ -150,7 +144,7 @@ python3 .harness/scripts/refresh-state.py .
 .harness/bin/harness-query task . T-004
 ```
 
-人类操作面板：
+人类可读面板：
 
 ```bash
 .harness/bin/harness-dashboard .
@@ -158,7 +152,7 @@ python3 .harness/scripts/refresh-state.py .
 .harness/bin/harness-dashboard . T-004 --watch 2
 ```
 
-## 典型执行链
+### 典型执行链
 
 ```text
 session-init
@@ -170,66 +164,256 @@ session-init
 -> refresh-state
 ```
 
-## 目录说明
+### 推荐阅读
 
-`SKILL.md`
-- 主说明书，定义模式、gate、角色和默认执行链
+优先阅读：
 
-`references/`
-- 细分参考：
-  - `schema-contracts.md`
-  - `openclaw-dispatch.md`
-  - `model-routing.md`
-  - `role-matrix.md`
-  - `bash-python-toolkit.md`
-  - `git-worktree-playbook.md`
-  - `progressive-prompt-exposure.md`
+- [SKILL.md](./SKILL.md)
+- [TRY-IT.md](./TRY-IT.md)
+- [FEEDBACK.md](./FEEDBACK.md)
+- [references/schema-contracts.md](./references/schema-contracts.md)
+- [references/openclaw-dispatch.md](./references/openclaw-dispatch.md)
+- [references/model-routing.md](./references/model-routing.md)
 
-`examples/`
-- 可直接抄用的模板
-- 包括：
-  - `.harness` 结构文件
-  - prompt 模板
-  - query / dashboard / route / worktree / diff / install / refresh-state CLI
+阅读顺序建议：
 
-## 推荐使用顺序
+1. `SKILL.md`
+2. `references/schema-contracts.md`
+3. `references/openclaw-dispatch.md`
+4. `references/model-routing.md`
+5. `references/git-worktree-playbook.md`
+6. `examples/`
 
-1. 先看 `SKILL.md`
-2. 需要字段契约时看 `references/schema-contracts.md`
-3. 需要调度链时看 `references/openclaw-dispatch.md`
-4. 需要模型/session 规则时看 `references/model-routing.md`
-5. 需要 worktree/diff 时看 `references/git-worktree-playbook.md`
-6. 需要 CLI 时直接抄 `examples/`
+### 试用与反馈
 
-## 试用和反馈
-
-如果你准备让别人试用，建议先看：
+建议在试用前先阅读：
 
 - [TRY-IT.md](./TRY-IT.md)
 - [FEEDBACK.md](./FEEDBACK.md)
 
-推荐收集这几类反馈：
+建议重点反馈：
 
 - 哪个环节最难理解
-- 哪些文档太长
+- 哪些文档过长
 - 哪些字段命名不够直观
-- 哪个脚本最先坏
-- 弱模型最容易在哪一步跑偏
-- 并发、session、worktree 的心智成本高不高
+- 哪个脚本最先失效
+- 弱模型最容易在哪一步偏离
+- 并发、session、worktree 的心智成本是否偏高
 
-## 当前定位
+### 仓库定位
 
-这份 skill 已经不是“生成几份 `.harness` 文件”的脚手架。
+本仓库提供的是一套可安装的 `.harness` 协作骨架，以及 Codex-first 的任务编排、执行、审计、状态管理与查询工具组合。
 
-它更接近一个小型 agent coordination runtime：
+### 许可证
 
-- 可安装
-- 可查询
-- 可并发
-- 可审计
-- 可恢复
-- 可封版
+本仓库采用 [MIT License](./LICENSE)。
 
-## License
+---
 
-This repository is licensed under the MIT License. See [LICENSE](./LICENSE).
+## English
+
+`harness-architect` is a skill and template repository for building and maintaining a `.harness/` coordination system.
+
+The current version is primarily designed for `Codex` workflows, with the following default model and command assumptions:
+
+- `codex exec`
+- `codex exec resume`
+- `gpt-5.4` for orchestration, pre-worker routing, prompt refinement, and replanning
+- `gpt-5.3-codex` for worker execution
+
+The repository also keeps a compatibility path for Claude and other agent workflows, but its command layout, session routing, prompt templates, and operator CLI are organized around a `Codex-first` model.
+
+### Overview
+
+This repository packages PRD-driven planning, repository state, and agent execution into a `.harness` workflow that supports long-running execution, concurrency, recovery, and auditability.
+
+Typical use cases:
+
+- turning a PRD into a real project plan and execution flow
+- coordinating multiple agents in sequence or in parallel
+- reducing context recovery cost across model, session, or operator changes
+- enabling external testers to try the system and submit structured feedback
+
+### Repository Contents
+
+This repository is organized around three main parts:
+
+- `SKILL.md`
+  the main specification for modes, gates, roles, execution flow, and output contracts
+- `references/`
+  protocol, routing, worktree, prompt, query, and schema references
+- `examples/`
+  reusable templates, scripts, JSON files, Markdown files, and prompt examples
+
+### Problems It Addresses
+
+The repository focuses on these areas:
+
+1. state recovery for long-running tasks
+2. path conflicts and orchestration drift under multi-worker concurrency
+3. model division between `gpt-5.4` and `gpt-5.3-codex`
+4. end-to-end closure across `session / worktree / diff / audit`
+5. operator and query surfaces for both humans and tools
+
+### Quick Start
+
+Recommended trial flow:
+
+1. read [SKILL.md](./SKILL.md)
+2. choose a test project directory
+3. install the minimal CLI and scripts into that project's `.harness/`
+4. run `query` and `dashboard`
+5. add routing, worktree, and audit components as needed
+
+Install the minimal toolset:
+
+```bash
+./examples/harness-install-tools.example.sh <PROJECT_ROOT>
+```
+
+Refresh hot state:
+
+```bash
+python3 .harness/scripts/refresh-state.py .
+```
+
+Open the dashboard:
+
+```bash
+.harness/bin/harness-dashboard .
+```
+
+Run a structured query:
+
+```bash
+.harness/bin/harness-query overview .
+```
+
+### Core Model
+
+- `gpt-5.4`
+  handles orchestration, pre-worker routing, prompt refinement, and replanning
+- `gpt-5.3-codex`
+  handles worker execution
+- `orchestrationSessionId`
+  the single-writer orchestration session
+- `worktree`
+  the code isolation layer
+- `diff`
+  the evidence layer for audit and merge
+- `state/*.json`
+  the machine-oriented hot-path state layer
+
+This structure can be read as:
+
+- `session` manages context
+- `worktree` manages code isolation
+- `diff` manages evidence
+- `.harness` manages state
+
+### Minimal Install Set
+
+The recommended minimal install set includes:
+
+- `.harness/bin/harness-query`
+- `.harness/bin/harness-dashboard`
+- `.harness/scripts/query.py`
+- `.harness/scripts/refresh-state.py`
+- `.harness/tooling-manifest.json`
+
+### Minimal Hot Path
+
+Tools should prefer:
+
+- `.harness/state/current.json`
+- `.harness/state/runtime.json`
+- `.harness/state/blueprint-index.json`
+
+Humans should usually start with:
+
+- `.harness/progress.md`
+- `.harness/work-items.json`
+- `.harness/task-pool.json`
+- `.harness/spec.json`
+
+After each orchestration / daemon / session round, refresh hot state:
+
+```bash
+python3 .harness/scripts/refresh-state.py .
+```
+
+### Common CLI
+
+Machine-readable queries:
+
+```bash
+.harness/bin/harness-query overview .
+.harness/bin/harness-query progress .
+.harness/bin/harness-query current .
+.harness/bin/harness-query blueprint .
+.harness/bin/harness-query task . T-004
+```
+
+Human-readable dashboard:
+
+```bash
+.harness/bin/harness-dashboard .
+.harness/bin/harness-dashboard . T-004
+.harness/bin/harness-dashboard . T-004 --watch 2
+```
+
+### Typical Execution Chain
+
+```text
+session-init
+-> gpt-5.4 orchestration
+-> pre-worker routing
+-> gpt-5.3-codex worker
+-> audit worker
+-> merge / replan / stop
+-> refresh-state
+```
+
+### Recommended Reading
+
+Suggested starting points:
+
+- [SKILL.md](./SKILL.md)
+- [TRY-IT.md](./TRY-IT.md)
+- [FEEDBACK.md](./FEEDBACK.md)
+- [references/schema-contracts.md](./references/schema-contracts.md)
+- [references/openclaw-dispatch.md](./references/openclaw-dispatch.md)
+- [references/model-routing.md](./references/model-routing.md)
+
+Suggested reading order:
+
+1. `SKILL.md`
+2. `references/schema-contracts.md`
+3. `references/openclaw-dispatch.md`
+4. `references/model-routing.md`
+5. `references/git-worktree-playbook.md`
+6. `examples/`
+
+### Trial and Feedback
+
+Before running a trial, review:
+
+- [TRY-IT.md](./TRY-IT.md)
+- [FEEDBACK.md](./FEEDBACK.md)
+
+Useful feedback areas include:
+
+- which step is hardest to understand
+- which documents are too long
+- which field names are unclear
+- which script fails first
+- where weaker models drift most often
+- whether concurrency, session, and worktree management feel too heavy
+
+### Repository Positioning
+
+This repository provides an installable `.harness` coordination skeleton, together with a Codex-first set of patterns for planning, execution, audit, state management, and operator-facing tooling.
+
+### License
+
+This repository is licensed under the [MIT License](./LICENSE).
