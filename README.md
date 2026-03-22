@@ -4,15 +4,15 @@ A repo-local closed-loop `.harness` runtime for Codex-first agent work.
 
 Klein-Harness turns a repository into a re-entrant control surface:
 
-- requests are append-only and machine-readable
+- requests stay append-only and machine-readable
 - runtime binds requests to tasks explicitly
 - session / worktree / verification lineage stays repo-local
 - reports, failures, audits, and replans can re-enter as the next request
 
 This repo ships two Codex skills:
 
-- `klein-harness` for repo-local closed-loop runtime and operator control
-- `blueprint-architect` for blueprint decomposition, research, draft/review/final design
+- `klein-harness` for runtime, routing, dispatch, verification, and operator control
+- `blueprint-architect` for decomposition, research, draft blueprinting, conflict review, and final blueprint handoff
 
 ## What It Is
 
@@ -51,16 +51,18 @@ That is how it avoids self-intersection, unsafe resume, and lost context.
 
 ## Quick Start
 
-Install the skills and helper commands:
+Install the skills and global helper commands:
 
 ```bash
 ./install.sh
 ```
 
-This installs:
+Installed skills:
 
 - `klein-harness`
 - `blueprint-architect`
+
+Installed helpers:
 
 - `harness-init`
 - `harness-bootstrap`
@@ -80,7 +82,7 @@ Bootstrap the first orchestration round:
 harness-bootstrap /path/to/project "根据 PRD 生成代码" "React + Vite" --context docs/prd.md
 ```
 
-By default, `harness-bootstrap` auto-starts the runner daemon after bootstrap completes. Use `--no-daemon` to opt out.
+By default, `harness-bootstrap` auto-starts the runner daemon after bootstrap completes. Use `--no-daemon` to keep the session fully manual.
 
 Submit incremental work:
 
@@ -141,7 +143,7 @@ Primary mutable ledgers:
 - `.harness/state/request-task-map.json`
 - `.harness/session-registry.json`
 
-## Commands
+## Command Surface
 
 Global entry points:
 
@@ -181,15 +183,16 @@ Notes:
 - `--dispatch-mode tmux` is the default real dispatch mode
 - `--dispatch-mode print` writes route and dispatch evidence without starting `tmux`
 - `harness-runner daemon` keeps ticking and refreshing hot state on a fixed interval
-- `harness-bootstrap` / `harness-kick` start the runner daemon by default after bootstrap success
+- `harness-bootstrap` and `harness-kick` start the runner daemon by default after bootstrap success
 - use `--no-daemon` when you want a manual or fully operator-driven session
 
-## One-Command Demo
+## Demo Flow
 
-Minimal demo path:
+Minimal end-to-end demo:
 
 ```bash
 harness-init /path/to/project
+harness-bootstrap /path/to/project "根据当前仓库建立第一轮闭环"
 harness-submit /path/to/project --kind implementation --goal "实现一个最小 smoke 任务"
 /path/to/project/.harness/bin/harness-runner tick /path/to/project --dispatch-mode print
 python3 /path/to/project/.harness/scripts/refresh-state.py /path/to/project
