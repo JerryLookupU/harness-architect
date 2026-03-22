@@ -2,6 +2,8 @@
 
 A repo-local closed-loop `.harness` runtime for Codex-first agent work.
 
+![Klein surface visualization](docs/klein-surface-hero.png)
+
 Klein-Harness turns a repository into a re-entrant control surface:
 
 - requests stay append-only and machine-readable
