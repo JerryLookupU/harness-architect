@@ -4,6 +4,7 @@ import argparse
 import json
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -45,6 +46,21 @@ def tmux_list_sessions() -> list[str]:
         return [line.strip() for line in result.stdout.splitlines() if line.strip()]
     except (subprocess.CalledProcessError, FileNotFoundError):
         return []
+
+
+def tmux_session_running(session_name: str) -> bool:
+    if not tmux_session_alive(session_name):
+        return False
+    try:
+        result = subprocess.run(
+            ["tmux", "list-panes", "-t", session_name, "-F", "#{pane_dead}"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return any(line.strip() == "0" for line in result.stdout.splitlines())
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
 
 
 def task_sort_key(task: dict):
@@ -254,6 +270,76 @@ def write_heartbeat(state_dir: Path, task_id: str, tmux_session: str, phase: str
     }
     hb["generatedAt"] = now_iso()
     write_json(hb_path, hb)
+
+
+def daemon_paths(state_dir: Path) -> dict:
+    return {
+        "state": state_dir / "runner-daemon.json",
+        "log": state_dir / "runner-daemon.log",
+        "session": state_dir / "runner-daemon-tmux-session.txt",
+        "script": state_dir / "runner-daemon.sh",
+    }
+
+
+def load_daemon_state(state_dir: Path) -> dict:
+    return load_optional_json(
+        daemon_paths(state_dir)["state"],
+        {
+            "schemaVersion": "1.0",
+            "generator": "harness-runner",
+            "generatedAt": now_iso(),
+            "status": "stopped",
+            "sessionName": None,
+            "intervalSeconds": None,
+            "dispatchMode": None,
+            "lastTickAt": None,
+            "lastRefreshAt": None,
+            "lastTickResult": None,
+            "lastError": None,
+            "logPath": None,
+        },
+    )
+
+
+def write_daemon_state(
+    state_dir: Path,
+    *,
+    status: str,
+    session_name: str | None,
+    interval: int | None,
+    dispatch_mode: str | None,
+    log_path: Path | None,
+    last_tick_at: str | None = None,
+    last_refresh_at: str | None = None,
+    last_tick_result: dict | None = None,
+    last_error: str | None = None,
+):
+    current = load_daemon_state(state_dir)
+    current.update(
+        {
+            "schemaVersion": "1.0",
+            "generator": "harness-runner",
+            "generatedAt": now_iso(),
+            "status": status,
+            "sessionName": session_name,
+            "intervalSeconds": interval,
+            "dispatchMode": dispatch_mode,
+            "logPath": str(log_path) if log_path else None,
+            "lastTickAt": last_tick_at if last_tick_at is not None else current.get("lastTickAt"),
+            "lastRefreshAt": last_refresh_at if last_refresh_at is not None else current.get("lastRefreshAt"),
+            "lastTickResult": last_tick_result if last_tick_result is not None else current.get("lastTickResult"),
+            "lastError": last_error,
+        }
+    )
+    write_json(daemon_paths(state_dir)["state"], current)
+
+
+def resolve_daemon_session(state_dir: Path) -> str | None:
+    session_path = daemon_paths(state_dir)["session"]
+    if not session_path.exists():
+        return None
+    session_name = session_path.read_text().strip()
+    return session_name or None
 
 
 def claim_dispatched_task(root: Path, task_id: str, run: dict, *, lifecycle_status: str):
@@ -624,11 +710,200 @@ def cmd_heartbeat(root: Path, task_id: str, tmux_session: str, phase: str = "run
     return 0
 
 
+def refresh_hot_state(root: Path) -> tuple[bool, str | None]:
+    refresh_state_py = root / ".harness" / "scripts" / "refresh-state.py"
+    if not refresh_state_py.exists():
+        return True, None
+    result = subprocess.run(
+        ["python3", str(refresh_state_py), str(root)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        return True, None
+    error = result.stderr.strip() or result.stdout.strip() or "refresh-state failed"
+    return False, error
+
+
+def cmd_daemon_foreground(root: Path, interval: int, dispatch_mode: str, session_name: str | None):
+    files = ensure_runtime_scaffold(root, generator="harness-runner")
+    state_dir = files["state_dir"]
+    paths = daemon_paths(state_dir)
+    write_daemon_state(
+        state_dir,
+        status="running",
+        session_name=session_name,
+        interval=interval,
+        dispatch_mode=dispatch_mode,
+        log_path=paths["log"],
+        last_error=None,
+    )
+    print(f"[runner-daemon] started interval={interval}s dispatch_mode={dispatch_mode}", flush=True)
+
+    while True:
+        tick_ts = now_iso()
+        result_payload: dict | None = None
+        last_error = None
+        tick = subprocess.run(
+            [
+                "python3",
+                str(Path(__file__).resolve()),
+                "tick",
+                str(root),
+                "--trigger",
+                "daemon",
+                "--dispatch-mode",
+                dispatch_mode,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        stdout = (tick.stdout or "").strip()
+        if stdout:
+            print(stdout, flush=True)
+            try:
+                result_payload = json.loads(stdout)
+            except json.JSONDecodeError:
+                result_payload = {"raw": stdout}
+        if tick.returncode != 0:
+            last_error = (tick.stderr or "").strip() or "runner tick failed"
+            if tick.stderr.strip():
+                print(tick.stderr.strip(), file=sys.stderr, flush=True)
+
+        refresh_ok, refresh_error = refresh_hot_state(root)
+        refresh_ts = now_iso()
+        if not refresh_ok:
+            last_error = refresh_error
+            if refresh_error:
+                print(refresh_error, file=sys.stderr, flush=True)
+
+        write_daemon_state(
+            state_dir,
+            status="running",
+            session_name=session_name,
+            interval=interval,
+            dispatch_mode=dispatch_mode,
+            log_path=paths["log"],
+            last_tick_at=tick_ts,
+            last_refresh_at=refresh_ts,
+            last_tick_result=result_payload,
+            last_error=last_error,
+        )
+        time.sleep(interval)
+
+
+def cmd_daemon(root: Path, interval: int = 60, dispatch_mode: str = "tmux", foreground: bool = False, replace: bool = False, session_name: str | None = None):
+    files = ensure_runtime_scaffold(root, generator="harness-runner")
+    state_dir = files["state_dir"]
+    paths = daemon_paths(state_dir)
+
+    if foreground:
+        try:
+            return cmd_daemon_foreground(root, interval, dispatch_mode, session_name)
+        except KeyboardInterrupt:
+            write_daemon_state(
+                state_dir,
+                status="stopped",
+                session_name=session_name,
+                interval=interval,
+                dispatch_mode=dispatch_mode,
+                log_path=paths["log"],
+                last_error="interrupted",
+            )
+            return 0
+
+    existing = resolve_daemon_session(state_dir)
+    if existing and tmux_session_running(existing):
+        if not replace:
+            write_daemon_state(
+                state_dir,
+                status="running",
+                session_name=existing,
+                interval=interval,
+                dispatch_mode=dispatch_mode,
+                log_path=paths["log"],
+                last_error=None,
+            )
+            print(json.dumps({"ok": True, "status": "already-running", "sessionName": existing, "logPath": str(paths["log"])}, ensure_ascii=False, indent=2))
+            return 0
+        subprocess.run(["tmux", "kill-session", "-t", existing], capture_output=True)
+
+    session = session_name or make_tmux_session_name("daemon", root.name)
+    paths["log"].parent.mkdir(parents=True, exist_ok=True)
+    paths["log"].touch(exist_ok=True)
+    script_body = (
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        f'cd "{root}"\n'
+        f'exec > >(tee -a "{paths["log"]}") 2>&1\n'
+        f'python3 "{Path(__file__).resolve()}" daemon "{root}" --foreground --interval {interval} --dispatch-mode {dispatch_mode} --session-name "{session}"\n'
+    )
+    paths["script"].write_text(script_body)
+    paths["script"].chmod(0o755)
+    subprocess.run(["tmux", "new-session", "-d", "-s", session, f"bash {paths['script']}"], check=True)
+    subprocess.run(["tmux", "set-option", "-t", session, "remain-on-exit", "on"], capture_output=True)
+    paths["session"].write_text(session + "\n")
+    write_daemon_state(
+        state_dir,
+        status="running",
+        session_name=session,
+        interval=interval,
+        dispatch_mode=dispatch_mode,
+        log_path=paths["log"],
+        last_error=None,
+    )
+    print(json.dumps({"ok": True, "status": "started", "sessionName": session, "logPath": str(paths["log"])}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_daemon_stop(root: Path):
+    files = ensure_runtime_scaffold(root, generator="harness-runner")
+    state_dir = files["state_dir"]
+    paths = daemon_paths(state_dir)
+    session = resolve_daemon_session(state_dir)
+    stopped = False
+    if session and tmux_session_alive(session):
+        subprocess.run(["tmux", "kill-session", "-t", session], capture_output=True)
+        stopped = True
+    if paths["session"].exists():
+        paths["session"].unlink()
+    if paths["script"].exists():
+        paths["script"].unlink()
+    write_daemon_state(
+        state_dir,
+        status="stopped",
+        session_name=None,
+        interval=None,
+        dispatch_mode=None,
+        log_path=paths["log"],
+        last_error=None,
+    )
+    print(json.dumps({"ok": True, "stopped": stopped, "sessionName": session}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_daemon_status(root: Path):
+    files = ensure_runtime_scaffold(root, generator="harness-runner")
+    state_dir = files["state_dir"]
+    state = load_daemon_state(state_dir)
+    session = resolve_daemon_session(state_dir)
+    session_alive = bool(session and tmux_session_alive(session))
+    result = {
+        "daemon": state,
+        "sessionAlive": session_alive,
+        "sessionRunning": bool(session and tmux_session_running(session)),
+        "sessionName": session,
+    }
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_list(root: Path):
     files = ensure_runtime_scaffold(root, generator="harness-runner")
     result = {
         "runnerState": load_optional_json(files["runner_state_path"], {}),
         "heartbeats": load_heartbeats(files["state_dir"]),
+        "daemon": load_daemon_state(files["state_dir"]),
         "tmuxSessions": tmux_list_sessions(),
     }
     print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -658,6 +933,20 @@ def main():
 
     p_list = sub.add_parser("list", help="list runner state and tmux sessions")
     p_list.add_argument("root", help="project root")
+
+    p_daemon = sub.add_parser("daemon", help="start or run a continuous runner daemon")
+    p_daemon.add_argument("root", help="project root")
+    p_daemon.add_argument("--interval", type=int, default=60)
+    p_daemon.add_argument("--dispatch-mode", choices=["tmux", "print"], default="tmux")
+    p_daemon.add_argument("--foreground", action="store_true")
+    p_daemon.add_argument("--replace", action="store_true")
+    p_daemon.add_argument("--session-name")
+
+    p_daemon_stop = sub.add_parser("daemon-stop", help="stop the runner daemon")
+    p_daemon_stop.add_argument("root", help="project root")
+
+    p_daemon_status = sub.add_parser("daemon-status", help="show runner daemon status")
+    p_daemon_status.add_argument("root", help="project root")
 
     p_finalize = sub.add_parser("finalize", help="finalize a dispatched task after execution")
     p_finalize.add_argument("root", help="project root")
@@ -692,6 +981,12 @@ def main():
         return cmd_finalize(root, args.task_id, args.runner_status, args.tmux_session)
     if args.command == "list":
         return cmd_list(root)
+    if args.command == "daemon":
+        return cmd_daemon(root, args.interval, args.dispatch_mode, args.foreground, args.replace, args.session_name)
+    if args.command == "daemon-stop":
+        return cmd_daemon_stop(root)
+    if args.command == "daemon-status":
+        return cmd_daemon_status(root)
     if args.command == "heartbeat":
         return cmd_heartbeat(root, args.task_id, args.tmux_session, args.phase, args.exit_code)
     return 1

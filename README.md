@@ -166,6 +166,9 @@ Runner and verification surface:
 ```bash
 .harness/bin/harness-runner tick .
 .harness/bin/harness-runner tick . --dispatch-mode print
+.harness/bin/harness-runner daemon . --interval 60
+.harness/bin/harness-runner daemon-status .
+.harness/bin/harness-runner daemon-stop .
 .harness/bin/harness-runner recover <TASK_ID> .
 .harness/bin/harness-verify-task <TASK_ID> . --write-back
 python3 .harness/scripts/refresh-state.py .
@@ -175,6 +178,7 @@ Notes:
 
 - `--dispatch-mode tmux` is the default real dispatch mode
 - `--dispatch-mode print` writes route and dispatch evidence without starting `tmux`
+- `harness-runner daemon` keeps ticking and refreshing hot state on a fixed interval
 
 ## One-Command Demo
 

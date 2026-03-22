@@ -3,7 +3,7 @@ set -euo pipefail
 
 if [ "$#" -lt 2 ]; then
   cat <<'EOF' >&2
-usage: harness-runner <tick|run|recover|attach|list> [args...]
+usage: harness-runner <tick|run|recover|attach|list|daemon|daemon-stop|daemon-status> [args...]
 
 commands:
   tick <ROOT> [--trigger shell] [--dispatch-mode tmux|print]
@@ -11,6 +11,9 @@ commands:
   recover <TASK_ID> <ROOT> [--trigger shell] [--dispatch-mode tmux|print]
   attach <TASK_ID> <ROOT>
   list <ROOT>
+  daemon <ROOT> [--interval N] [--dispatch-mode tmux|print] [--replace]
+  daemon-stop <ROOT>
+  daemon-status <ROOT>
 EOF
   exit 1
 fi
@@ -70,7 +73,7 @@ case "$COMMAND" in
   attach)
     attach_task "$@"
     ;;
-  tick|run|recover|list)
+  tick|run|recover|list|daemon|daemon-stop|daemon-status)
     python3 "$PYTHON_RUNNER" "$COMMAND" "$@"
     ;;
   *)

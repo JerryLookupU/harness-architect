@@ -304,23 +304,14 @@ stop_bootstrap_tmux_session() {
 }
 
 launch_runner_daemon_in_tmux() {
-  local session_name=""
-
-  if session_name="$(resolve_runner_daemon_tmux_session)"; then
-    printf '%s\n' "$session_name" > "$RUNNER_DAEMON_SESSION_PATH"
-    return 0
-  fi
-
-  session_name="$(make_runner_daemon_tmux_session_name)"
   mkdir -p "$PROJECT_ROOT/.harness/state"
   : > "$RUNNER_DAEMON_STDOUT_PATH"
-
-  if ! tmux new-session -d -s "$session_name" "bash -lc 'echo \"[runner-daemon] started at \$(date \"+%Y-%m-%d %H:%M:%S\") interval=${DAEMON_INTERVAL}s\" >> \"$RUNNER_DAEMON_STDOUT_PATH\"; while true; do if [[ -x \"$PROJECT_ROOT/.harness/bin/harness-runner\" && -f \"$PROJECT_ROOT/.harness/task-pool.json\" && -f \"$PROJECT_ROOT/.harness/session-registry.json\" ]]; then \"$PROJECT_ROOT/.harness/bin/harness-runner\" tick \"$PROJECT_ROOT\" --trigger daemon >> \"$RUNNER_DAEMON_STDOUT_PATH\" 2>&1 || true; fi; sleep $DAEMON_INTERVAL; done'"; then
+  if ! "$PROJECT_ROOT/.harness/bin/harness-runner" daemon "$PROJECT_ROOT" --interval "$DAEMON_INTERVAL" --replace >/dev/null; then
     return 1
   fi
-
-  tmux set-option -t "$session_name" remain-on-exit on >/dev/null 2>&1 || true
-  printf '%s\n' "$session_name" > "$RUNNER_DAEMON_SESSION_PATH"
+  if [[ -f "$RUNNER_DAEMON_SESSION_PATH" ]]; then
+    return 0
+  fi
   return 0
 }
 
