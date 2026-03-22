@@ -173,6 +173,44 @@ else
   log_info "Skipping task-pool inspection (no jq or no task-pool.json)"
 fi
 
+# ── Step 4.5: Runner consistency checks ──
+
+RUNNER_STATE="$HARNESS_DIR/state/runner-state.json"
+RUNNER_HEARTBEATS="$HARNESS_DIR/state/runner-heartbeats.json"
+if [[ -f "$TASK_POOL" ]] && [[ -f "$RUNNER_HEARTBEATS" ]] && command -v jq &>/dev/null; then
+  log_info "Checking runner/tmux consistency..."
+
+  # active task without tmux session
+  jq -r --slurpfile hb "$RUNNER_HEARTBEATS" '
+    ($hb[0].entries // {}) as $entries
+    | .tasks[]
+    | select(.status == "active" or .status == "claimed" or .status == "in_progress")
+    | [.taskId, (.claim.tmuxSession // ($entries[.taskId].tmuxSession // ""))]
+    | @tsv
+  ' "$TASK_POOL" | while IFS=$'\t' read -r tid tmux_name; do
+    if [[ -z "$tmux_name" ]]; then
+      log_drift "Active task without tmux session or heartbeat: $tid"
+      emit_drift "runner-missing-tmux" "$tid" "active task has no claim.tmuxSession or runner heartbeat session" "task-pool.json" "claim.tmuxSession"
+    elif ! tmux has-session -t "$tmux_name" 2>/dev/null; then
+      log_drift "Active task with stale tmux session: $tid -> $tmux_name"
+      emit_drift "runner-stale-tmux" "$tid" "tmux session missing for active task" "task-pool.json" "claim.tmuxSession"
+    fi
+  done
+
+  # duplicate session bindings
+  jq -r --slurpfile hb "$RUNNER_HEARTBEATS" '
+    ($hb[0].entries // {}) as $entries
+    | .tasks[]
+    | [ .taskId, (.claim.tmuxSession // ($entries[.taskId].tmuxSession // "")) ]
+    | select(.[1] != "")
+    | @tsv
+  ' "$TASK_POOL" | awk -F'\t' '{count[$2]++; tasks[$2]=tasks[$2] "," $1} END {for (s in count) if (count[s] > 1) print s "\t" tasks[s]}' | while IFS=$'\t' read -r tmux_name task_ids; do
+    [[ -z "$tmux_name" ]] && continue
+    log_drift "Duplicate tmux session binding: $tmux_name -> ${task_ids#,}"
+    emit_drift "runner-duplicate-binding" "$tmux_name" "multiple tasks bound to same tmux session" "task-pool.json" "claim.tmuxSession"
+  done
+fi
+
 # ── Step 5: Run fast read-only-safe verification rules ──
 
 MANIFEST="$HARNESS_DIR/verification-rules/manifest.json"

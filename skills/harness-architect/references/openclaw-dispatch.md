@@ -145,13 +145,23 @@
 
 ### daemon loop
 
+第一版推荐把所有上游入口统一收束到同一个 runner：
+
+- `claude / shell / codex / openclaw-cron`
+- `-> .harness/bin/harness-runner tick`
+- `-> tmux`
+- `-> codex --yolo exec`
+
+runner 的职责：
+
 - 读取 `.harness/task-pool.json`
-- 读取 request / stop / heartbeat 状态
 - 读取 `.harness/session-registry.json`
-- 如果空闲槽位出现，优先决定是补 worker 还是补 orchestrator
-- 如果存在 `audit` task 且其前置依赖已满足，也要决定是否优先补 `audit worker`
-- 如果发现 `pause_requested` / `stop_requested`，按策略等待或停止对应任务
-- orchestrator 处理完后退出，不要求常驻
+- 读取 `.harness/state/runner-state.json` / `runner-heartbeats.json`
+- 检查 tmux session 是否仍活跃
+- 决定当前是继续 attach、resume 还是 fresh exec
+- 把执行结果、活跃 run、recoverable run 写回 hot state
+
+OpenClaw-cron 在第一版里只做触发，不自行管理恢复策略；它调用同一个 `harness-runner tick` 即可。
 
 ## bash-first 推荐组件
 
@@ -161,6 +171,7 @@
 - `harness-watch`
 - `harness-query`
 - `harness-dashboard`
+- `harness-runner`
 - `harness-metrics`
 - `harness-render-prompt`
 - `harness-prepare-worktree`
@@ -184,6 +195,10 @@
 - `harness-dashboard`
   - 聚合 `overview / current / progress / blueprint / task`
   - 给人类 operator 一个直接可用的 CLI 面板
+- `harness-runner`
+  - 统一执行入口：检查 active run、recoverable run、dispatchable task
+  - 把所有上游触发器收束到 `tmux -> codex --yolo exec`
+  - 优先复用已有 session，否则 fresh exec
 - `harness-watch`
   - 自动刷新 status
 - `harness-metrics`

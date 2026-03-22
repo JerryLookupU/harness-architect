@@ -44,7 +44,7 @@ def find_task(tasks, task_id: str):
     raise KeyError(f"task not found: {task_id}")
 
 
-def make_overview(progress, tasks, work_items, features, session_registry):
+def make_overview(progress, tasks, work_items, features, session_registry, runtime_state=None):
     active = active_tasks(tasks)
     return {
         "mode": progress.get("mode"),
@@ -59,8 +59,11 @@ def make_overview(progress, tasks, work_items, features, session_registry):
         "taskStatusCounts": summarize_tasks(tasks),
         "workItemStatusCounts": dict(Counter(item.get("status", "unknown") for item in work_items)),
         "featureStatusCounts": summarize_features(features),
-        "activeTaskCount": len(active),
-        "orchestrationSessionId": session_registry.get("orchestrationSessionId"),
+        "activeTaskCount": (runtime_state or {}).get("activeTaskCount", len(active)),
+        "activeRunnerCount": (runtime_state or {}).get("activeRunnerCount", 0),
+        "recoverableTaskCount": (runtime_state or {}).get("recoverableTaskCount", 0),
+        "staleRunnerCount": (runtime_state or {}).get("staleRunnerCount", 0),
+        "orchestrationSessionId": (runtime_state or {}).get("orchestrationSessionId", session_registry.get("orchestrationSessionId")),
     }
 
 
@@ -151,6 +154,9 @@ def make_task_view(task):
         "diffSummary": task.get("diffSummary"),
         "resumeStrategy": task.get("resumeStrategy"),
         "preferredResumeSessionId": task.get("preferredResumeSessionId"),
+        "verificationStatus": task.get("verificationStatus"),
+        "verificationSummary": task.get("verificationSummary"),
+        "verificationResultPath": task.get("verificationResultPath"),
         "claim": task.get("claim", {}),
         "handoff": task.get("handoff", {}),
     }
@@ -166,6 +172,8 @@ def format_text(view, payload):
             f"current: {payload.get('currentTaskId')} {payload.get('currentTaskTitle')}",
             f"summary: {payload.get('currentTaskSummary')}",
             f"activeTaskCount: {payload.get('activeTaskCount')}",
+            f"activeRunners: {payload.get('activeRunnerCount', 0)}",
+            f"recoverableTasks: {payload.get('recoverableTaskCount', 0)}",
         ]
         return "\n".join(lines)
     if view == "progress":
@@ -216,6 +224,9 @@ def format_text(view, payload):
                 f"worktreePath: {payload.get('worktreePath')}",
                 f"diffBase: {payload.get('diffBase')}",
                 f"diffSummary: {payload.get('diffSummary')}",
+                f"verificationStatus: {payload.get('verificationStatus')}",
+                f"verificationSummary: {payload.get('verificationSummary')}",
+                f"verificationResultPath: {payload.get('verificationResultPath')}",
             ]
         )
     return json.dumps(payload, ensure_ascii=False, indent=2)
@@ -250,11 +261,7 @@ def main():
 
     if args.view == "overview":
         if current_state and runtime_state:
-            payload = {
-                **make_overview(progress, tasks, items, feature_items, session_registry),
-                "activeTaskCount": runtime_state.get("activeTaskCount", 0),
-                "orchestrationSessionId": runtime_state.get("orchestrationSessionId"),
-            }
+            payload = make_overview(progress, tasks, items, feature_items, session_registry, runtime_state)
         else:
             payload = make_overview(progress, tasks, items, feature_items, session_registry)
     elif args.view == "progress":
@@ -267,6 +274,7 @@ def main():
                 "currentTaskSummary": current_state.get("currentTaskSummary"),
                 "currentRole": current_state.get("currentRole"),
                 "activeTasks": runtime_state.get("activeTasks", []),
+                "activeRuns": runtime_state.get("activeRuns", []),
                 "orchestrationSessionId": runtime_state.get("orchestrationSessionId"),
             }
         else:

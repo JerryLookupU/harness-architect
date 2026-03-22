@@ -87,8 +87,15 @@ def main():
     print(f"active workers: {active_workers}")
     print(f"active audit workers: {active_audit_workers}")
     print(f"active orchestrator tasks: {active_orchestrators}")
+    print(f"active runners: {(runtime_state or {}).get('activeRunnerCount', 0)}")
+    print(f"recoverable tasks: {(runtime_state or {}).get('recoverableTaskCount', 0)}")
+    print(f"stale runners: {(runtime_state or {}).get('staleRunnerCount', 0)}")
+    print(f"verified tasks: {(runtime_state or {}).get('verifiedTaskCount', 0)}")
+    print(f"failed verifications: {(runtime_state or {}).get('failingVerificationCount', 0)}")
     print(f"orchestration session: {(runtime_state or {}).get('orchestrationSessionId', session_registry.get('orchestrationSessionId', '-'))}")
     print(f"pending blockers: {len(blockers)}")
+    if (runtime_state or {}).get('lastTickAt'):
+        print(f"last runner tick: {(runtime_state or {}).get('lastTickAt')}")
     print()
     print("next actions:")
     if next_actions:

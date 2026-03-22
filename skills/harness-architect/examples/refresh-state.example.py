@@ -47,6 +47,8 @@ def main():
     spec = load_json(harness / "spec.json")
     session_registry_path = harness / "session-registry.json"
     session_registry = load_json(session_registry_path) if session_registry_path.exists() else {}
+    runner_state_path = state_dir / "runner-state.json"
+    runner_state = load_json(runner_state_path) if runner_state_path.exists() else {}
 
     tasks = task_pool.get("tasks", [])
     items = work_items.get("items", [])
@@ -92,6 +94,16 @@ def main():
             }
             for t in active
         ],
+        "activeRunnerCount": len(runner_state.get("activeRuns", [])),
+        "recoverableTaskCount": len(runner_state.get("recoverableRuns", [])),
+        "staleRunnerCount": len(runner_state.get("staleRuns", [])),
+        "verifiedTaskCount": sum(1 for t in tasks if t.get("verificationStatus") == "pass"),
+        "failingVerificationCount": sum(1 for t in tasks if t.get("verificationStatus") == "fail"),
+        "activeRuns": runner_state.get("activeRuns", []),
+        "recoverableRuns": runner_state.get("recoverableRuns", []),
+        "staleRuns": runner_state.get("staleRuns", []),
+        "lastTickAt": runner_state.get("lastTickAt"),
+        "lastTrigger": runner_state.get("lastTrigger"),
     }
 
     blocks = {}

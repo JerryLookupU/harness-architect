@@ -14,14 +14,13 @@ HELPERS_INSTALLED=0
 shopt -s nullglob
 
 if ! command -v tmux >/dev/null 2>&1; then
-  echo "tmux is not installed. Please install tmux first." >&2
+  echo "tmux is not installed. Install can continue, but bootstrap/daemon features will be limited." >&2
   if [[ "$(uname)" == "Darwin" ]]; then
     echo "macOS: brew install tmux" >&2
   else
     echo "Ubuntu/Debian: sudo apt-get install tmux" >&2
     echo "Fedora/RHEL: sudo dnf install tmux" >&2
   fi
-  exit 1
 fi
 
 resolve_bin_dir_from_dest() {

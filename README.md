@@ -45,7 +45,7 @@
 4. `session / worktree / diff / audit` 的闭环
 5. 面向人类与工具的 operator / query 界面
 
-### 快速开始
+### 快速部署
 
 先安装 skill 到 Codex：
 
@@ -53,9 +53,13 @@
 ./install.sh
 ```
 
-安装后会额外写入一个 helper：
+安装后会写入这些全局 helper：
 
 ```bash
+~/.codex/bin/harness-init
+~/.codex/bin/harness-bootstrap
+~/.codex/bin/harness-submit
+~/.codex/bin/harness-report
 ~/.codex/bin/harness-kick
 ```
 
@@ -67,59 +71,122 @@ echo 'export PATH="$HOME/.codex/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-最常用的完整启动方式：
+如果你只想尽快把项目跑起来，按下面四步走就够了。
+
+#### 1. 安装
 
 ```bash
 git clone <this-repo>
 cd harness-architect
 chmod +x install.sh
 ./install.sh
-
-mkdir pomodoro-app
-cd pomodoro-app
-harness-kick "我要创建一个番茄时钟项目" "React + Vite"
 ```
 
-或者在你已经进入的项目目录中直接运行：
+#### 2. 初始化项目
+
+```bash
+harness-init /path/to/project
+```
+
+这一步只会安装 `.harness/` 骨架，不会调用模型。
+
+#### 3. 做第一次 bootstrap
+
+```bash
+harness-bootstrap /path/to/project "根据 PRD 生成代码" "React + Vite" --context docs/prd.md --daemon
+```
+
+这一步会完成首次 bootstrap，并在你传 `--daemon` 时启动后台续跑。
+
+#### 4. 看当前状态
+
+```bash
+harness-report /path/to/project
+```
+
+如果你只是想快速完成“安装 + bootstrap prompt + 可选自动执行”这一套，也可以继续用兼容入口：
 
 ```bash
 harness-kick "我要创建一个番茄时钟项目" "React + Vite"
 ```
 
-它会：
+`harness-kick` 现在更适合被理解成：
 
-- 在当前目录安装完整 `.harness` operator/tooling 面
-- 生成 `.harness/bootstrap-request.md`
-- 如果检测到 `codex` CLI，默认直接执行一次 `codex exec` bootstrap
-- bootstrap 成功后自动执行 `refresh-state` 与 `session-init`
-- 打印后续查看总览、watch、query、dashboard 的命令
-- 在 macOS 上自动复制 bootstrap prompt 到剪贴板
+- `harness-init` + `bootstrap prompt` 的快捷封装
+- 可选自动执行 `codex exec --yolo`
+- 可选顺手拉起 `runner daemon`
 
-如果你只想安装 `.harness` 和生成提示词，不要自动 bootstrap：
+如果你只想安装 `.harness` 并生成 prompt，不自动 bootstrap：
 
 ```bash
 harness-kick --manual "我要创建一个番茄时钟项目" "React + Vite"
 ```
 
-如果你希望 bootstrap 先读一个附加上下文文件，`--prd` 也只是 `--context` 的别名：
+如果 bootstrap 需要先读附加上下文，`--prd` 只是 `--context` 的别名：
 
 ```bash
-harness-kick --context docs/prd.md "帮我简单分析一下我的代码，给一个markdown 分析报告"
+harness-bootstrap /path/to/project "帮我简单分析一下我的代码，给一个 markdown 分析报告" --context docs/prd.md
 ```
 
-等价写法：
+或者：
 
 ```bash
-harness-kick --prd docs/prd.md "帮我简单分析一下我的代码，给一个markdown 分析报告"
+harness-kick --prd docs/prd.md "帮我简单分析一下我的代码，给一个 markdown 分析报告"
 ```
 
-这里的 `docs/prd.md` 只是一个普通上下文文件，不代表特殊 PRD 模式；它和传入其他 `docs/*.md`、`notes/*.md`、设计说明文件的处理方式相同。
+这里的 `docs/prd.md` 只是普通上下文文件，不代表特殊 PRD 模式；它和其他 `docs/*.md`、`notes/*.md`、设计说明文件的处理方式相同。
 
-如果你想把并发偏好写进 bootstrap prompt：
+### 快速使用指南
+
+当前推荐主路径分成四个入口：
+
+1. `harness-init`
+   只初始化项目内 `.harness/` 骨架，不调用模型
+2. `harness-bootstrap`
+   首次 bootstrap，产出 `spec / work-items / task-pool / verification-rules`
+3. `harness-submit`
+   日常增量需求入口，`OpenClaw / shell / cron` 都走这里
+4. `harness-report`
+   读取 request + runtime 热状态，回报当前情况
+
+最常见的使用方式：
 
 ```bash
-harness-kick --concurrency 4 "我要创建一个番茄时钟项目" "React + Vite"
+harness-submit /path/to/project --kind analysis --goal "分析这个代码库的结构细节"
+harness-submit /path/to/project --kind research --goal "找十篇相关报告"
+harness-submit /path/to/project --kind implementation --goal "根据 PRD 生成代码" --context docs/prd.md
+harness-submit /path/to/project --kind status --goal "查看当前进度并汇报"
+harness-report /path/to/project
 ```
+
+如果你用 `OpenClaw / shell / cron`，统一原则只有一条：
+
+- 上游只提交 request
+- 项目运行时负责编排、派发、恢复、验证、汇报
+
+### 运行时模型
+
+当前推荐的统一心智是：
+
+```text
+OpenClaw / shell / cron / future callers
+  -> harness-submit
+  -> .harness/requests/queue.jsonl
+  -> project runtime / orchestration
+  -> task-pool / runner / tmux / codex
+  -> verification / refresh-state
+  -> harness-report
+```
+
+也就是说：
+
+- 上游调用方只负责提交 request
+- 项目运行时负责编排、派发、恢复、验证、汇报
+- `runner` 是执行器，不是总入口
+
+更细的运行时约束见：
+
+- [docs/runtime-request-spec.md](./docs/runtime-request-spec.md)
 
 推荐试用流程：
 
@@ -227,22 +294,37 @@ python3 .harness/scripts/refresh-state.py .
 
 ### 常用 CLI
 
-机器可读查询：
+推荐优先使用的全局入口：
 
 ```bash
-.harness/bin/harness-query overview .
-.harness/bin/harness-query progress .
-.harness/bin/harness-query current .
-.harness/bin/harness-query blueprint .
-.harness/bin/harness-query task . T-004
+harness-init /path/to/project
+harness-bootstrap /path/to/project "根据 PRD 生成代码" --context docs/prd.md --daemon
+harness-submit /path/to/project --kind implementation --goal "根据 PRD 生成代码" --context docs/prd.md
+harness-submit /path/to/project --kind status --goal "查看当前进度并汇报"
+harness-report /path/to/project
+harness-report /path/to/project --request-id R-0003 --format json
 ```
 
-人类可读面板：
+项目内 operator/query 入口：
 
 ```bash
+.harness/bin/harness-status .
+.harness/bin/harness-report .
+.harness/bin/harness-query overview . --text
+.harness/bin/harness-query current . --text
 .harness/bin/harness-dashboard .
-.harness/bin/harness-dashboard . T-004
-.harness/bin/harness-dashboard . T-004 --watch 2
+.harness/bin/harness-watch . 2
+```
+
+runner / verification 入口：
+
+```bash
+.harness/bin/harness-runner tick .
+.harness/bin/harness-runner list .
+.harness/bin/harness-runner attach T-004 .
+.harness/bin/harness-runner recover T-004 .
+.harness/bin/harness-verify-task T-004 . --write-back
+python3 .harness/scripts/refresh-state.py .
 ```
 
 ### 典型执行链
@@ -392,7 +474,7 @@ The repository focuses on these areas:
 4. end-to-end closure across `session / worktree / diff / audit`
 5. operator and query surfaces for both humans and tools
 
-### Quick Start
+### Quick Deploy
 
 Install skills into Codex first:
 
@@ -400,9 +482,13 @@ Install skills into Codex first:
 ./install.sh
 ```
 
-The install also writes a helper command:
+The installer adds these global helpers:
 
 ```bash
+~/.codex/bin/harness-init
+~/.codex/bin/harness-bootstrap
+~/.codex/bin/harness-submit
+~/.codex/bin/harness-report
 ~/.codex/bin/harness-kick
 ```
 
@@ -414,53 +500,108 @@ echo 'export PATH="$HOME/.codex/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-Most common end-to-end flow:
+If you mainly want the fastest deployment path, use the four steps below.
+
+#### 1. Install
 
 ```bash
 git clone <this-repo>
 cd harness-architect
 chmod +x install.sh
 ./install.sh
+```
 
-mkdir pomodoro-app
-cd pomodoro-app
+#### 2. Initialize a project
+
+```bash
+harness-init /path/to/project
+```
+
+This only creates the `.harness/` skeleton. It does not invoke a model yet.
+
+#### 3. Run the first bootstrap
+
+```bash
+harness-bootstrap /path/to/project "Build from the PRD" "React + Vite" --context docs/prd.md --daemon
+```
+
+#### 4. Check the runtime state
+
+```bash
+harness-report /path/to/project
+```
+
+The compatibility shortcut is still available:
+
+```bash
 harness-kick "Build a pomodoro timer app" "React + Vite"
 ```
 
-`harness-kick` will:
+Use `harness-kick` when you want one command that installs `.harness`, writes the bootstrap prompt, and optionally runs `codex exec --yolo`.
 
-- install the full `.harness` operator/tooling surface into the current project
-- create `.harness/bootstrap-request.md`
-- automatically run a `codex exec` bootstrap when the `codex` CLI is available
-- run `refresh-state` and `session-init` after a successful bootstrap
-- print the follow-up `status`, `watch`, `query`, and `dashboard` commands
-- copy the prompt to the clipboard on macOS
-
-To keep the old install-only behavior:
+To keep install + prompt generation only:
 
 ```bash
 harness-kick --manual "Build a pomodoro timer app" "React + Vite"
 ```
 
-To make bootstrap read an extra context file first, where `--prd` is just an alias of `--context`:
+To feed extra context into bootstrap:
 
 ```bash
-harness-kick --context docs/prd.md "Give me a markdown analysis report for this codebase"
+harness-bootstrap /path/to/project "Give me a markdown analysis report for this codebase" --context docs/prd.md
 ```
 
-Equivalent form:
+or:
 
 ```bash
 harness-kick --prd docs/prd.md "Give me a markdown analysis report for this codebase"
 ```
 
-Here `docs/prd.md` is treated as a normal context file, not a special PRD mode; it is handled the same way as any other `docs/*.md`, `notes/*.md`, or design/reference file passed in as extra context.
+### Quick Usage Guide
 
-To push a worker parallelism preference into the bootstrap prompt:
+Recommended lifecycle:
+
+1. `harness-init`
+   Create the minimal `.harness/` runtime skeleton without invoking a model.
+2. `harness-bootstrap`
+   Run the first model-backed bootstrap and optionally launch daemon mode.
+3. `harness-submit`
+   Send incremental requests from OpenClaw, shell, cron, or other callers.
+4. `harness-report`
+   Read request/runtime state and summarize progress.
+
+Most common usage:
 
 ```bash
-harness-kick --concurrency 4 "Build a pomodoro timer app" "React + Vite"
+harness-submit /path/to/project --kind analysis --goal "Analyze the codebase in detail"
+harness-submit /path/to/project --kind research --goal "Find ten relevant reports"
+harness-submit /path/to/project --kind implementation --goal "Generate code from the PRD" --context docs/prd.md
+harness-submit /path/to/project --kind status --goal "Report current progress"
+harness-report /path/to/project
 ```
+
+If you use OpenClaw, shell, or cron, keep one rule:
+
+- upstream callers submit requests
+- project runtime handles orchestration, dispatch, recovery, verification, and reporting
+
+Recommended runtime model:
+
+```text
+OpenClaw / shell / cron / future callers
+  -> harness-submit
+  -> request queue
+  -> project runtime / orchestration
+  -> task-pool / runner / tmux / codex
+  -> verification / refresh-state
+  -> harness-report
+```
+
+This means upstream callers should submit requests instead of mutating `task-pool` directly.
+
+For the detailed runtime contract, see:
+
+- [docs/runtime-request-spec.md](./docs/runtime-request-spec.md)
 
 Recommended trial flow:
 

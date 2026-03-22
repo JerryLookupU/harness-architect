@@ -13,6 +13,8 @@ options:
   --prd <PATH>              alias of --context
   --model <MODEL>           pass model to `codex exec`
   --concurrency <N>         write a worker parallelism preference into the prompt
+  --daemon                  after bootstrap, launch a runner daemon tmux session
+  --daemon-interval <N>     runner daemon tick interval in seconds (default: 60)
   -h, --help                show this help
 
 examples:
@@ -29,6 +31,8 @@ AUTO_BOOTSTRAP=1
 RUN_SESSION_INIT=1
 MODEL=""
 CONCURRENCY=""
+RUN_DAEMON=0
+DAEMON_INTERVAL=60
 CONTEXT_INPUTS=()
 
 while [[ $# -gt 0 ]]; do
@@ -72,6 +76,19 @@ while [[ $# -gt 0 ]]; do
       CONCURRENCY="$2"
       shift 2
       ;;
+    --daemon)
+      RUN_DAEMON=1
+      shift
+      ;;
+    --daemon-interval)
+      if [[ $# -lt 2 ]]; then
+        echo "missing value for --daemon-interval" >&2
+        usage
+        exit 1
+      fi
+      DAEMON_INTERVAL="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -105,10 +122,21 @@ if [[ -n "$CONCURRENCY" && ! "$CONCURRENCY" =~ ^[1-9][0-9]*$ ]]; then
   exit 1
 fi
 
+if [[ ! "$DAEMON_INTERVAL" =~ ^[1-9][0-9]*$ ]]; then
+  echo "--daemon-interval must be a positive integer" >&2
+  exit 1
+fi
+
 PROJECT_GOAL="${POSITIONAL[0]}"
 STACK_HINT="${POSITIONAL[1]:-}"
 PROJECT_ROOT_INPUT="${POSITIONAL[2]:-$(pwd)}"
-PROJECT_ROOT="$(cd "$PROJECT_ROOT_INPUT" && pwd)"
+if [[ "$PROJECT_ROOT_INPUT" = /* ]]; then
+  PROJECT_ROOT="$PROJECT_ROOT_INPUT"
+else
+  PROJECT_ROOT="$(pwd)/$PROJECT_ROOT_INPUT"
+fi
+mkdir -p "$PROJECT_ROOT"
+PROJECT_ROOT="$(cd "$PROJECT_ROOT" && pwd)"
 CONTEXT_PATHS=()
 CONTEXT_PROMPT_BLOCK=""
 ADD_DIR_ARGS=()
@@ -145,6 +173,17 @@ make_bootstrap_tmux_session_name() {
   printf 'hk-bootstrap-%s-%s\n' "$base_name" "$ts"
 }
 
+make_runner_daemon_tmux_session_name() {
+  local base_name=""
+  local ts=""
+
+  base_name="$(basename "$PROJECT_ROOT" | tr -cs '[:alnum:]' '-' | sed 's/^-*//; s/-*$//')"
+  [[ -n "$base_name" ]] || base_name="project"
+  base_name="${base_name:0:24}"
+  ts="$(date +%m%d-%H%M%S)"
+  printf 'hr-daemon-%s-%s\n' "$base_name" "$ts"
+}
+
 resolve_bootstrap_tmux_session() {
   local session_name=""
 
@@ -166,26 +205,109 @@ resolve_bootstrap_tmux_session() {
   return 1
 }
 
+resolve_runner_daemon_tmux_session() {
+  local session_name=""
+
+  if [[ -f "$RUNNER_DAEMON_SESSION_PATH" ]]; then
+    session_name="$(head -n 1 "$RUNNER_DAEMON_SESSION_PATH" 2>/dev/null || true)"
+  fi
+
+  if [[ -z "$session_name" ]] || ! command -v tmux >/dev/null 2>&1; then
+    return 1
+  fi
+
+  if tmux has-session -t "$session_name" 2>/dev/null; then
+    printf '%s\n' "$session_name"
+    return 0
+  fi
+
+  return 1
+}
+
+update_project_meta() {
+  local lifecycle="$1"
+  local bootstrap_status="$2"
+  local bootstrap_session="${3:-}"
+
+  python3 - "$PROJECT_META_PATH" "$PROJECT_ROOT" "$lifecycle" "$bootstrap_status" "$bootstrap_session" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+meta_path = Path(sys.argv[1])
+project_root = sys.argv[2]
+lifecycle = sys.argv[3]
+bootstrap_status = sys.argv[4]
+bootstrap_session = sys.argv[5]
+timestamp = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
+data = {}
+if meta_path.exists():
+    data = json.loads(meta_path.read_text())
+
+data.setdefault("schemaVersion", "1.0")
+data.setdefault("generator", "harness-architect")
+data.setdefault("requestQueueEnabled", True)
+data["generatedAt"] = timestamp
+data["projectRoot"] = project_root
+data["lifecycle"] = lifecycle
+data["bootstrapStatus"] = bootstrap_status
+data["lastBootstrapAt"] = timestamp
+if bootstrap_session:
+    data["bootstrapSession"] = bootstrap_session
+
+meta_path.parent.mkdir(parents=True, exist_ok=True)
+meta_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+PY
+}
+
+launch_runner_daemon_in_tmux() {
+  local session_name=""
+
+  if session_name="$(resolve_runner_daemon_tmux_session)"; then
+    printf '%s\n' "$session_name" > "$RUNNER_DAEMON_SESSION_PATH"
+    return 0
+  fi
+
+  session_name="$(make_runner_daemon_tmux_session_name)"
+  mkdir -p "$PROJECT_ROOT/.harness/state"
+  : > "$RUNNER_DAEMON_STDOUT_PATH"
+
+  if ! tmux new-session -d -s "$session_name" "bash -lc 'echo \"[runner-daemon] started at \$(date \"+%Y-%m-%d %H:%M:%S\") interval=${DAEMON_INTERVAL}s\" >> \"$RUNNER_DAEMON_STDOUT_PATH\"; while true; do if [[ -x \"$PROJECT_ROOT/.harness/bin/harness-runner\" && -f \"$PROJECT_ROOT/.harness/task-pool.json\" && -f \"$PROJECT_ROOT/.harness/session-registry.json\" ]]; then \"$PROJECT_ROOT/.harness/bin/harness-runner\" tick \"$PROJECT_ROOT\" --trigger daemon >> \"$RUNNER_DAEMON_STDOUT_PATH\" 2>&1 || true; fi; sleep $DAEMON_INTERVAL; done'"; then
+    return 1
+  fi
+
+  tmux set-option -t "$session_name" remain-on-exit on >/dev/null 2>&1 || true
+  printf '%s\n' "$session_name" > "$RUNNER_DAEMON_SESSION_PATH"
+  return 0
+}
+
+
 launch_bootstrap_in_tmux() {
   local session_name=""
   local prompt_literal=""
   local result_literal=""
   local stdout_literal=""
   local project_literal=""
+  local project_meta_literal=""
   local refresh_literal=""
   local session_init_literal=""
   local status_literal=""
   local codex_cmd_literal=""
+  local session_name_literal=""
 
   session_name="$(make_bootstrap_tmux_session_name)"
   prompt_literal="$(printf '%q' "$PROMPT_PATH")"
   result_literal="$(printf '%q' "$BOOTSTRAP_RESULT_PATH")"
   stdout_literal="$(printf '%q' "$BOOTSTRAP_STDOUT_PATH")"
   project_literal="$(printf '%q' "$PROJECT_ROOT")"
+  project_meta_literal="$(printf '%q' "$PROJECT_META_PATH")"
   refresh_literal="$(printf '%q' "$PROJECT_ROOT/.harness/scripts/refresh-state.py")"
   session_init_literal="$(printf '%q' "$PROJECT_ROOT/.harness/session-init.sh")"
   status_literal="$(printf '%q' "$PROJECT_ROOT/.harness/bin/harness-status")"
   codex_cmd_literal="$(printf '%q ' "${CODEX_CMD[@]}")"
+  session_name_literal="$(printf '%q' "$session_name")"
 
   mkdir -p "$PROJECT_ROOT/.harness/state"
   rm -f "$BOOTSTRAP_RESULT_PATH"
@@ -195,26 +317,64 @@ launch_bootstrap_in_tmux() {
 set -euo pipefail
 
 PROJECT_ROOT=$project_literal
+PROJECT_META_PATH=$project_meta_literal
+BOOTSTRAP_SESSION_NAME=$session_name_literal
 PROMPT_PATH=$prompt_literal
 BOOTSTRAP_RESULT_PATH=$result_literal
 BOOTSTRAP_STDOUT_PATH=$stdout_literal
 RUN_SESSION_INIT=$RUN_SESSION_INIT
 CODEX_CMD=($codex_cmd_literal)
 
+update_project_meta() {
+  python3 - "\$PROJECT_META_PATH" "\$PROJECT_ROOT" "\$1" "\$2" "\$BOOTSTRAP_SESSION_NAME" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+meta_path = Path(sys.argv[1])
+project_root = sys.argv[2]
+lifecycle = sys.argv[3]
+bootstrap_status = sys.argv[4]
+bootstrap_session = sys.argv[5]
+timestamp = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
+data = {}
+if meta_path.exists():
+    data = json.loads(meta_path.read_text())
+
+data.setdefault("schemaVersion", "1.0")
+data.setdefault("generator", "harness-architect")
+data.setdefault("requestQueueEnabled", True)
+data["generatedAt"] = timestamp
+data["projectRoot"] = project_root
+data["lifecycle"] = lifecycle
+data["bootstrapStatus"] = bootstrap_status
+data["lastBootstrapAt"] = timestamp
+data["bootstrapSession"] = bootstrap_session
+
+meta_path.parent.mkdir(parents=True, exist_ok=True)
+meta_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+PY
+}
+
 cd "\$PROJECT_ROOT"
 exec > >(tee -a "\$BOOTSTRAP_STDOUT_PATH") 2>&1
 
 echo "[bootstrap] started at \$(date '+%Y-%m-%d %H:%M:%S')"
+update_project_meta "bootstrapping" "running"
 
 if "\${CODEX_CMD[@]}" - < "\$PROMPT_PATH"; then
   if [[ ! -s "\$BOOTSTRAP_RESULT_PATH" ]]; then
     echo "[bootstrap] codex exec exited before writing \$BOOTSTRAP_RESULT_PATH"
+    update_project_meta "initialized" "failed"
     exit 1
   fi
   echo "[bootstrap] bootstrap result saved to \$BOOTSTRAP_RESULT_PATH"
 else
   status=\$?
   echo "[bootstrap] codex exec failed with exit code \$status"
+  update_project_meta "initialized" "failed"
   exit \$status
 fi
 
@@ -233,6 +393,7 @@ if [[ -x $status_literal ]]; then
   $status_literal "\$PROJECT_ROOT" || true
 fi
 
+update_project_meta "active" "ready"
 echo "[bootstrap] finished at \$(date '+%Y-%m-%d %H:%M:%S')"
 EOF
 
@@ -281,6 +442,9 @@ BOOTSTRAP_RESULT_PATH="$PROJECT_ROOT/.harness/bootstrap-result.md"
 BOOTSTRAP_STDOUT_PATH="$PROJECT_ROOT/.harness/state/bootstrap-output.log"
 BOOTSTRAP_RUNNER_PATH="$PROJECT_ROOT/.harness/state/bootstrap-runner.sh"
 BOOTSTRAP_SESSION_PATH="$PROJECT_ROOT/.harness/state/bootstrap-tmux-session.txt"
+RUNNER_DAEMON_SESSION_PATH="$PROJECT_ROOT/.harness/state/runner-daemon-tmux-session.txt"
+RUNNER_DAEMON_STDOUT_PATH="$PROJECT_ROOT/.harness/state/runner-daemon.log"
+PROJECT_META_PATH="$PROJECT_ROOT/.harness/project-meta.json"
 
 if [[ ! -d "$SKILL_DIR" ]]; then
   echo "harness-architect skill is not installed: $SKILL_DIR" >&2
@@ -292,9 +456,9 @@ if [[ ! -x "$INSTALL_FULL_SH" ]]; then
   chmod +x "$INSTALL_FULL_SH"
 fi
 
-mkdir -p "$PROJECT_ROOT"
 bash "$INSTALL_FULL_SH" "$PROJECT_ROOT"
 mkdir -p "$PROJECT_ROOT/.harness"
+update_project_meta "initialized" "not_started"
 
 CONCURRENCY_PROMPT_LINE=""
 CONCURRENCY_HARD_REQUIREMENT=""
@@ -347,6 +511,7 @@ ${CONTEXT_PROMPT_BLOCK}
    - .harness/bin/harness-route-session
    - .harness/bin/harness-prepare-worktree
    - .harness/bin/harness-diff-summary
+   - .harness/bin/harness-verify-task
    - .harness/session-init.sh
 8. 在 task-pool 里显式区分 orchestrator、worker、audit task，补齐 ownedPaths、dependsOn、verificationRuleIds、resumeStrategy、preferredResumeSessionId、worktreePath、branchName、diffBase。
 9. 默认采用完整执行链：
@@ -389,6 +554,13 @@ Operator commands:
   "$PROJECT_ROOT/.harness/bin/harness-query" overview "$PROJECT_ROOT" --text
   "$PROJECT_ROOT/.harness/bin/harness-query" current "$PROJECT_ROOT" --text
   "$PROJECT_ROOT/.harness/bin/harness-dashboard" "$PROJECT_ROOT"
+  "$PROJECT_ROOT/.harness/bin/harness-report" "$PROJECT_ROOT"
+  "$PROJECT_ROOT/.harness/bin/harness-submit" "$PROJECT_ROOT" --kind status --goal "汇报当前进度"
+  "$PROJECT_ROOT/.harness/bin/harness-runner" tick "$PROJECT_ROOT"
+  "$PROJECT_ROOT/.harness/bin/harness-runner" list "$PROJECT_ROOT"
+  "$PROJECT_ROOT/.harness/bin/harness-runner" attach <TASK_ID> "$PROJECT_ROOT"
+  "$PROJECT_ROOT/.harness/bin/harness-runner" recover <TASK_ID> "$PROJECT_ROOT"
+  "$PROJECT_ROOT/.harness/bin/harness-verify-task" <TASK_ID> "$PROJECT_ROOT" --write-back
   python3 "$PROJECT_ROOT/.harness/scripts/refresh-state.py" "$PROJECT_ROOT"
   "$PROJECT_ROOT/.harness/session-init.sh"
   sed -n '1,160p' "$BOOTSTRAP_RESULT_PATH"
@@ -449,10 +621,11 @@ fi
 
 if [[ "$AUTO_BOOTSTRAP" -eq 1 ]]; then
   BOOTSTRAP_ATTEMPTED=1
+  update_project_meta "bootstrapping" "queued"
   echo
   echo "starting automatic bootstrap in a detached tmux session..."
 
-  CODEX_CMD=(codex exec --full-auto --skip-git-repo-check -C "$PROJECT_ROOT" -o "$BOOTSTRAP_RESULT_PATH")
+  CODEX_CMD=(codex exec --yolo --skip-git-repo-check -C "$PROJECT_ROOT" -o "$BOOTSTRAP_RESULT_PATH")
   if [[ -n "$MODEL" ]]; then
     CODEX_CMD+=(-m "$MODEL")
   fi
@@ -464,25 +637,39 @@ if [[ "$AUTO_BOOTSTRAP" -eq 1 ]]; then
 
   if command -v tmux >/dev/null 2>&1 && launch_bootstrap_in_tmux; then
     BOOTSTRAP_DISPATCHED=1
+    update_project_meta "bootstrapping" "running" "$LAUNCHED_BOOTSTRAP_TMUX_SESSION"
     echo
     echo "bootstrap is running in the background."
     echo "tmux session: $LAUNCHED_BOOTSTRAP_TMUX_SESSION"
     echo "bootstrap log: $BOOTSTRAP_STDOUT_PATH"
+    if [[ "$RUN_DAEMON" -eq 1 ]]; then
+      if launch_runner_daemon_in_tmux; then
+        echo "runner daemon session: $(head -n 1 "$RUNNER_DAEMON_SESSION_PATH" 2>/dev/null || true)"
+        echo "runner daemon interval: ${DAEMON_INTERVAL}s"
+        echo "runner daemon log: $RUNNER_DAEMON_STDOUT_PATH"
+      else
+        echo "failed to launch runner daemon session" >&2
+      fi
+    fi
   else
     echo
     echo "background dispatch failed; falling back to foreground bootstrap"
+    update_project_meta "bootstrapping" "running"
     rm -f "$BOOTSTRAP_RESULT_PATH"
     if "${CODEX_CMD[@]}" - < "$PROMPT_PATH"; then
       if [[ -s "$BOOTSTRAP_RESULT_PATH" ]]; then
         BOOTSTRAP_SUCCEEDED=1
+        update_project_meta "active" "ready"
         echo
         echo "bootstrap response saved to $BOOTSTRAP_RESULT_PATH"
       else
+        update_project_meta "initialized" "failed"
         echo
         echo "automatic bootstrap was interrupted or exited before writing $BOOTSTRAP_RESULT_PATH"
         echo "prompt is ready for manual retry"
       fi
     else
+      update_project_meta "initialized" "failed"
       echo
       echo "automatic bootstrap failed; prompt is ready for manual retry"
     fi
@@ -510,6 +697,18 @@ if [[ "$BOOTSTRAP_SUCCEEDED" -eq 1 ]] && bootstrap_ready; then
     echo
     "$PROJECT_ROOT/.harness/bin/harness-status" "$PROJECT_ROOT" || true
   fi
+
+  if [[ "$RUN_DAEMON" -eq 1 ]]; then
+    echo
+    echo "launching runner daemon tmux session..."
+    if launch_runner_daemon_in_tmux; then
+      echo "runner daemon session: $(head -n 1 "$RUNNER_DAEMON_SESSION_PATH" 2>/dev/null || true)"
+      echo "runner daemon interval: ${DAEMON_INTERVAL}s"
+      echo "runner daemon log: $RUNNER_DAEMON_STDOUT_PATH"
+    else
+      echo "failed to launch runner daemon session" >&2
+    fi
+  fi
 elif [[ "$BOOTSTRAP_ATTEMPTED" -eq 1 && "$BOOTSTRAP_SUCCEEDED" -eq 1 ]]; then
   echo
   echo "bootstrap finished but expected harness state files were not generated; skipping refresh-state and session-init"
@@ -518,9 +717,10 @@ fi
 print_commands
 
 if [[ "$AUTO_BOOTSTRAP" -eq 0 || ( "$BOOTSTRAP_SUCCEEDED" -eq 0 && "$BOOTSTRAP_DISPATCHED" -eq 0 ) ]]; then
+  update_project_meta "initialized" "prompt_ready"
   cat <<EOF
 
 Manual bootstrap:
-  codex exec --full-auto --skip-git-repo-check -C "$PROJECT_ROOT"$MODEL_ARG_TEXT$ADD_DIR_ARG_TEXT -o "$BOOTSTRAP_RESULT_PATH" - < "$PROMPT_PATH"
+  codex exec --yolo --skip-git-repo-check -C "$PROJECT_ROOT"$MODEL_ARG_TEXT$ADD_DIR_ARG_TEXT -o "$BOOTSTRAP_RESULT_PATH" - < "$PROMPT_PATH"
 EOF
 fi

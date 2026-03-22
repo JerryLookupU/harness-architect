@@ -18,8 +18,13 @@ REQUESTS=(
 )
 MANIFEST="$HARNESS_DIR/tooling-manifest.json"
 EXAMPLES_DIR="$(cd "$(dirname "$0")" && pwd)"
+REQUEST_QUEUE_PATH="$HARNESS_DIR/requests/queue.jsonl"
+REQUEST_ARCHIVE_DIR="$HARNESS_DIR/requests/archive"
+REQUEST_INDEX_PATH="$STATE_DIR/request-index.json"
+REQUEST_TASK_MAP_PATH="$STATE_DIR/request-task-map.json"
+PROJECT_META_PATH="$HARNESS_DIR/project-meta.json"
 
-mkdir -p "$BIN_DIR" "$SCRIPTS_DIR" "$STATE_DIR" "$TEMPLATES_DIR" "$HARNESS_DIR/drift-log" "$HARNESS_DIR/verification-rules"
+mkdir -p "$BIN_DIR" "$SCRIPTS_DIR" "$STATE_DIR" "$TEMPLATES_DIR" "$HARNESS_DIR/drift-log" "$HARNESS_DIR/verification-rules" "$STATE_DIR/runner-logs" "$REQUEST_ARCHIVE_DIR"
 
 install_file() {
   local src="$1"
@@ -35,6 +40,10 @@ install_file "harness-render-prompt.example.sh" "$BIN_DIR/harness-render-prompt"
 install_file "harness-route-session.example.sh" "$BIN_DIR/harness-route-session"
 install_file "harness-prepare-worktree.example.sh" "$BIN_DIR/harness-prepare-worktree"
 install_file "harness-diff-summary.example.sh" "$BIN_DIR/harness-diff-summary"
+install_file "harness-verify-task.example.sh" "$BIN_DIR/harness-verify-task"
+install_file "harness-runner.example.sh" "$BIN_DIR/harness-runner"
+install_file "harness-submit.example.sh" "$BIN_DIR/harness-submit"
+install_file "harness-report.example.sh" "$BIN_DIR/harness-report"
 
 install_file "query-harness.example.py" "$SCRIPTS_DIR/query.py"
 install_file "refresh-state.example.py" "$SCRIPTS_DIR/refresh-state.py"
@@ -43,6 +52,9 @@ install_file "render-prompt.example.py" "$SCRIPTS_DIR/render-prompt.py"
 install_file "route-session.example.py" "$SCRIPTS_DIR/route-session.py"
 install_file "prepare-worktree.example.py" "$SCRIPTS_DIR/prepare-worktree.py"
 install_file "diff-summary.example.py" "$SCRIPTS_DIR/diff-summary.py"
+install_file "verify-task.example.py" "$SCRIPTS_DIR/verify-task.py"
+install_file "runner.example.py" "$SCRIPTS_DIR/runner.py"
+install_file "request.example.py" "$SCRIPTS_DIR/request.py"
 
 install_file "session-init.example.sh" "$HARNESS_DIR/session-init.sh"
 install_file "AGENTS.example.md" "$TEMPLATES_DIR/AGENTS.template.md"
@@ -56,6 +68,10 @@ chmod +x \
   "$BIN_DIR/harness-route-session" \
   "$BIN_DIR/harness-prepare-worktree" \
   "$BIN_DIR/harness-diff-summary" \
+  "$BIN_DIR/harness-verify-task" \
+  "$BIN_DIR/harness-runner" \
+  "$BIN_DIR/harness-submit" \
+  "$BIN_DIR/harness-report" \
   "$HARNESS_DIR/session-init.sh"
 
 for request_path in "${REQUESTS[@]}"; do
@@ -63,6 +79,51 @@ for request_path in "${REQUESTS[@]}"; do
     printf '{\n  "schemaVersion": "1.0",\n  "generator": "harness-architect",\n  "generatedAt": null,\n  "requests": []\n}\n' > "$request_path"
   fi
 done
+
+if [ ! -f "$REQUEST_QUEUE_PATH" ]; then
+  : > "$REQUEST_QUEUE_PATH"
+fi
+
+python3 - <<'PY' "$REQUEST_INDEX_PATH" "$REQUEST_TASK_MAP_PATH" "$PROJECT_META_PATH" "$ROOT"
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+request_index_path = Path(sys.argv[1])
+request_task_map_path = Path(sys.argv[2])
+project_meta_path = Path(sys.argv[3])
+root = Path(sys.argv[4]).resolve()
+timestamp = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
+if not request_index_path.exists():
+    request_index_path.write_text(json.dumps({
+        "schemaVersion": "1.0",
+        "generator": "harness-architect",
+        "generatedAt": timestamp,
+        "nextSeq": 1,
+        "requests": []
+    }, ensure_ascii=False, indent=2) + "\n")
+
+if not request_task_map_path.exists():
+    request_task_map_path.write_text(json.dumps({
+        "schemaVersion": "1.0",
+        "generator": "harness-architect",
+        "generatedAt": timestamp,
+        "bindings": []
+    }, ensure_ascii=False, indent=2) + "\n")
+
+if not project_meta_path.exists():
+    project_meta_path.write_text(json.dumps({
+        "schemaVersion": "1.0",
+        "generator": "harness-architect",
+        "generatedAt": timestamp,
+        "projectRoot": str(root),
+        "lifecycle": "initialized",
+        "bootstrapStatus": "not_started",
+        "requestQueueEnabled": True
+    }, ensure_ascii=False, indent=2) + "\n")
+PY
 
 cat > "$MANIFEST" <<'JSON'
 {
@@ -111,6 +172,21 @@ cat > "$MANIFEST" <<'JSON'
       "source": "examples/harness-diff-summary.example.sh"
     },
     {
+      "name": "harness-verify-task",
+      "target": ".harness/bin/harness-verify-task",
+      "source": "examples/harness-verify-task.example.sh"
+    },
+    {
+      "name": "harness-submit",
+      "target": ".harness/bin/harness-submit",
+      "source": "examples/harness-submit.example.sh"
+    },
+    {
+      "name": "harness-report",
+      "target": ".harness/bin/harness-report",
+      "source": "examples/harness-report.example.sh"
+    },
+    {
       "name": "query.py",
       "target": ".harness/scripts/query.py",
       "source": "examples/query-harness.example.py"
@@ -146,6 +222,16 @@ cat > "$MANIFEST" <<'JSON'
       "source": "examples/diff-summary.example.py"
     },
     {
+      "name": "verify-task.py",
+      "target": ".harness/scripts/verify-task.py",
+      "source": "examples/verify-task.example.py"
+    },
+    {
+      "name": "request.py",
+      "target": ".harness/scripts/request.py",
+      "source": "examples/request.example.py"
+    },
+    {
       "name": "session-init.sh",
       "target": ".harness/session-init.sh",
       "source": "examples/session-init.example.sh"
@@ -154,6 +240,16 @@ cat > "$MANIFEST" <<'JSON'
       "name": "AGENTS.template.md",
       "target": ".harness/templates/AGENTS.template.md",
       "source": "examples/AGENTS.example.md"
+    },
+    {
+      "name": "harness-runner",
+      "target": ".harness/bin/harness-runner",
+      "source": "examples/harness-runner.example.sh"
+    },
+    {
+      "name": "runner.py",
+      "target": ".harness/scripts/runner.py",
+      "source": "examples/runner.example.py"
     }
   ]
 }
