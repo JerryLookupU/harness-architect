@@ -578,16 +578,18 @@ EOF
   tmux capture-pane -pt <session>
 EOF
   fi
-  cat <<EOF
+cat <<EOF
 
 Useful reruns:
   harness-kick --manual "$PROJECT_GOAL" "${STACK_HINT}" "$PROJECT_ROOT"
 EOF
-  for context_path in "${CONTEXT_PATHS[@]}"; do
-    cat <<EOF
+  if [[ ${#CONTEXT_PATHS[@]} -gt 0 ]]; then
+    for context_path in "${CONTEXT_PATHS[@]}"; do
+      cat <<EOF
   harness-kick --context "$context_path" "$PROJECT_GOAL" "${STACK_HINT}" "$PROJECT_ROOT"
 EOF
-  done
+    done
+  fi
   if [[ -n "$CONCURRENCY" ]]; then
     cat <<EOF
   harness-kick --concurrency $CONCURRENCY "$PROJECT_GOAL" "${STACK_HINT}" "$PROJECT_ROOT"
