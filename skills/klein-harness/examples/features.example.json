@@ -5,6 +5,10 @@
   "generatedAt": "2026-03-19T14:30:00+08:00",
   "scope": "full repo: openclaw-brain-plugin/",
   "reviewCyclePresets": [1, 5, 10, 30, 60, 120, 180],
+  "reviewCadencePresets": {
+    "fibonacciHours": [1, 3, 5, 8, 13, 21, 34, 55, 89, 144],
+    "legacyCycleDays": [1, 5, 10, 30, 60, 120, 180]
+  },
   "currentFeatureId": "F-003",
   "features": [
     {
@@ -14,6 +18,7 @@
       "verificationStatus": "pass",
       "priority": "P1",
       "reviewCycleDays": 30,
+      "reviewCadenceHours": [1, 3, 5, 8, 13, 21, 34, 55, 89, 144],
       "source": {
         "primary": "code",
         "refs": ["src/providers/qmd.ts:15", "tests/unit/qmd-local-retrieval.test.mjs:1"]
@@ -27,7 +32,10 @@
       "blockedBy": [],
       "lint": {
         "lastReview": "2026-03-19T14:30:00+08:00",
-        "nextReview": "2026-04-18T14:30:00+08:00",
+        "nextReview": "2026-03-19T15:30:00+08:00",
+        "cycleHours": 1,
+        "cadenceKind": "fibonacci_hours",
+        "cadenceStep": 0,
         "cycleDays": 30,
         "driftFlag": false
       },
@@ -40,6 +48,7 @@
       "verificationStatus": "pass",
       "priority": "P2",
       "reviewCycleDays": 60,
+      "reviewCadenceHours": [1, 3, 5, 8, 13, 21, 34, 55, 89, 144],
       "source": {
         "primary": "code",
         "refs": ["src/cache/recall-cache.ts:1", "tests/unit/recall-cache.test.mjs:1"]
@@ -53,7 +62,10 @@
       "blockedBy": [],
       "lint": {
         "lastReview": "2026-03-19T14:30:00+08:00",
-        "nextReview": "2026-05-18T14:30:00+08:00",
+        "nextReview": "2026-03-19T19:30:00+08:00",
+        "cycleHours": 5,
+        "cadenceKind": "fibonacci_hours",
+        "cadenceStep": 2,
         "cycleDays": 60,
         "driftFlag": false
       },
@@ -66,6 +78,7 @@
       "verificationStatus": "fail",
       "priority": "P0",
       "reviewCycleDays": 5,
+      "reviewCadenceHours": [1, 3, 5, 8, 13, 21, 34, 55, 89, 144],
       "source": {
         "primary": "test",
         "refs": ["tests/unit/deep-archive-incremental-vector.test.mjs:1", "src/deep-archive/index.ts:22"]
@@ -80,7 +93,10 @@
       "blockedBy": [],
       "lint": {
         "lastReview": "2026-03-19T14:30:00+08:00",
-        "nextReview": "2026-03-24T14:30:00+08:00",
+        "nextReview": "2026-03-19T17:30:00+08:00",
+        "cycleHours": 3,
+        "cadenceKind": "fibonacci_hours",
+        "cadenceStep": 1,
         "cycleDays": 5,
         "driftFlag": false
       },
@@ -93,6 +109,7 @@
       "verificationStatus": "pass",
       "priority": "P3",
       "reviewCycleDays": 180,
+      "reviewCadenceHours": [1, 3, 5, 8, 13, 21, 34, 55, 89, 144],
       "source": {
         "primary": "code",
         "refs": ["src/cli/register.ts:1", "tests/integration/plugin-registration.test.mjs:1"]
@@ -106,7 +123,10 @@
       "blockedBy": [],
       "lint": {
         "lastReview": "2026-03-19T14:30:00+08:00",
-        "nextReview": "2026-09-15T14:30:00+08:00",
+        "nextReview": "2026-03-21T21:30:00+08:00",
+        "cycleHours": 55,
+        "cadenceKind": "fibonacci_hours",
+        "cadenceStep": 7,
         "cycleDays": 180,
         "driftFlag": false
       },

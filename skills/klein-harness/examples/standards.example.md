@@ -14,7 +14,7 @@ project: openclaw-brain-plugin
 
 **验证方式**: 检查每个 `src/` 下的 `.ts` 模块在 `tests/unit/` 下有对应 `.test.mjs` 文件。
 
-<!-- @harness-lint: kind=standard id=STD-001 status=active reviewCycle=30d lastReview=2026-03-19 nextReview=2026-04-18 -->
+<!-- @harness-lint: kind=standard id=STD-001 status=active reviewCadence=fibonacci-hours reviewInterval=1h lastReview=2026-03-19T14:30:00+08:00 nextReview=2026-03-19T15:30:00+08:00 -->
 
 ---
 
@@ -26,7 +26,7 @@ project: openclaw-brain-plugin
 
 **验证方式**: 静态检查 — 所有 `await` 调用外部服务的代码路径必须有 `try/catch` 或 `.catch()` 且包含日志或重抛。
 
-<!-- @harness-lint: kind=standard id=STD-002 status=active reviewCycle=30d lastReview=2026-03-19 nextReview=2026-04-18 -->
+<!-- @harness-lint: kind=standard id=STD-002 status=active reviewCadence=fibonacci-hours reviewInterval=3h lastReview=2026-03-19T14:30:00+08:00 nextReview=2026-03-19T17:30:00+08:00 -->
 
 ---
 
@@ -38,7 +38,7 @@ project: openclaw-brain-plugin
 
 **验证方式**: 对应测试用例验证：给定已处理过的数据集，再次运行只处理新增/变更项。
 
-<!-- @harness-lint: kind=standard id=STD-003 status=active reviewCycle=60d lastReview=2026-03-19 nextReview=2026-05-18 -->
+<!-- @harness-lint: kind=standard id=STD-003 status=active reviewCadence=fibonacci-hours reviewInterval=8h lastReview=2026-03-19T14:30:00+08:00 nextReview=2026-03-19T22:30:00+08:00 -->
 
 ---
 
@@ -50,7 +50,7 @@ project: openclaw-brain-plugin
 
 **验证方式**: 集成测试 — 在不配置可选依赖的情况下启动插件，验证核心功能正常。
 
-<!-- @harness-lint: kind=standard id=STD-004 status=active reviewCycle=60d lastReview=2026-03-19 nextReview=2026-05-18 -->
+<!-- @harness-lint: kind=standard id=STD-004 status=active reviewCadence=fibonacci-hours reviewInterval=13h lastReview=2026-03-19T14:30:00+08:00 nextReview=2026-03-20T03:30:00+08:00 -->
 
 ---
 
@@ -62,4 +62,4 @@ project: openclaw-brain-plugin
 
 **验证方式**: `tsc --noEmit` 零错误。
 
-<!-- @harness-lint: kind=standard id=STD-005 status=active reviewCycle=120d lastReview=2026-03-19 nextReview=2026-07-17 -->
+<!-- @harness-lint: kind=standard id=STD-005 status=active reviewCadence=fibonacci-hours reviewInterval=34h lastReview=2026-03-19T14:30:00+08:00 nextReview=2026-03-21T00:30:00+08:00 -->

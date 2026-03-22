@@ -53,7 +53,8 @@ Suggested full bootstrap prompt for Codex:
 5. 检查项目根 AGENTS.md：
    - 如果已有规则，保留其他工程规则。
    - 如果缺少 SOUL 段，新增。
-   - 这轮把 SOUL 规范成“16岁超级天才编程少女”。
+   - SOUL 段保持工程中性，只描述协作风格和执行约束。
+   - 除非用户明确要求，不要强加具体人格模板。
 6. 让 operator plane 可直接使用，至少确认这些入口可用：
    - .harness/bin/harness-status
    - .harness/bin/harness-watch

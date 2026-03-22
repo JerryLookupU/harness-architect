@@ -11,8 +11,6 @@ set -euo pipefail
 HARNESS_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "$HARNESS_DIR")"
 DRIFT_LOG_DIR="$HARNESS_DIR/drift-log"
-TODAY=$(date +%Y-%m-%d)
-DRIFT_LOG="$DRIFT_LOG_DIR/$TODAY.jsonl"
 DRIFT_COUNT=0
 EXIT_CODE=0
 
@@ -38,6 +36,10 @@ iso_now() {
     date -u +%Y-%m-%dT%H:%M:%SZ
   fi
 }
+
+NOW_TS=$(iso_now)
+TODAY="${NOW_TS:0:10}"
+DRIFT_LOG="$DRIFT_LOG_DIR/$TODAY.jsonl"
 
 # Append drift event to drift-log (the ONLY write this script does)
 emit_drift() {
@@ -73,6 +75,73 @@ days_between() {
     fi
     echo $(( (s2 - s1) / 86400 ))
   fi
+}
+
+seconds_between() {
+  local start_ts="$1" end_ts="$2"
+  if command -v python3 &>/dev/null; then
+    python3 - "$start_ts" "$end_ts" <<'PY'
+from datetime import datetime, timezone
+import sys
+
+
+def parse_iso(value: str) -> datetime:
+    value = value.strip()
+    if len(value) == 10:
+        return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+start = parse_iso(sys.argv[1])
+end = parse_iso(sys.argv[2])
+print(int((end - start).total_seconds()))
+PY
+  else
+    local d1="${start_ts:0:10}"
+    local d2="${end_ts:0:10}"
+    echo $(( $(days_between "$d1" "$d2") * 86400 ))
+  fi
+}
+
+format_duration() {
+  local total_seconds="$1"
+  local days=0
+  local hours=0
+  local minutes=0
+
+  if [[ "$total_seconds" -lt 60 ]]; then
+    printf '%ss' "$total_seconds"
+    return 0
+  fi
+
+  days=$(( total_seconds / 86400 ))
+  hours=$(( (total_seconds % 86400) / 3600 ))
+  minutes=$(( (total_seconds % 3600) / 60 ))
+
+  if [[ "$days" -gt 0 ]]; then
+    if [[ "$hours" -gt 0 ]]; then
+      printf '%sd%sh' "$days" "$hours"
+    else
+      printf '%sd' "$days"
+    fi
+    return 0
+  fi
+
+  if [[ "$hours" -gt 0 ]]; then
+    if [[ "$minutes" -gt 0 ]]; then
+      printf '%sh%sm' "$hours" "$minutes"
+    else
+      printf '%sh' "$hours"
+    fi
+    return 0
+  fi
+
+  printf '%sm' "$minutes"
 }
 
 # ── Step 1: Verify harness exists ──
@@ -236,23 +305,23 @@ log_info "Scanning @harness-lint tags for drift..."
 
 scan_lint_tags() {
   local file="$1"
-  grep -n '@harness-lint:' "$file" 2>/dev/null | while IFS= read -r line; do
+  while IFS= read -r line; do
     local next_review
     next_review=$(echo "$line" | grep -o 'nextReview=[^ ]*' | sed 's/nextReview=//' | sed 's/ *-->.*//')
     [[ -z "$next_review" ]] && continue
 
-    # Extract just the date part (YYYY-MM-DD)
-    local review_date="${next_review:0:10}"
-    local overdue
-    overdue=$(days_between "$review_date" "$TODAY" 2>/dev/null || echo "0")
+    local overdue_seconds
+    overdue_seconds=$(seconds_between "$next_review" "$NOW_TS" 2>/dev/null || echo "0")
 
-    if [[ "$overdue" -gt 0 ]]; then
+    if [[ "$overdue_seconds" -gt 0 ]]; then
+      local overdue_label
+      overdue_label=$(format_duration "$overdue_seconds")
       local entity_id
       entity_id=$(echo "$line" | grep -o 'id=[^ ]*' | sed 's/id=//')
-      log_drift "Overdue by ${overdue}d: ${entity_id:-unknown} in $(basename "$file")"
-      emit_drift "review-overdue" "${entity_id:-null}" "nextReview exceeded by ${overdue}d" "$(basename "$file")" "nextReview"
+      log_drift "Overdue by ${overdue_label}: ${entity_id:-unknown} in $(basename "$file")"
+      emit_drift "review-overdue" "${entity_id:-null}" "nextReview exceeded by ${overdue_label}" "$(basename "$file")" "nextReview"
     fi
-  done
+  done < <(grep -n '@harness-lint:' "$file" 2>/dev/null || true)
 }
 
 for md_file in "$HARNESS_DIR"/*.md; do
@@ -263,11 +332,24 @@ done
 if [[ -f "$HARNESS_DIR/features.json" ]] && command -v jq &>/dev/null; then
   jq -r '.features[] | select(.lint.nextReview != null) | .id + "|" + .lint.nextReview' "$HARNESS_DIR/features.json" 2>/dev/null | while IFS='|' read -r fid next_review; do
     [[ -z "$fid" ]] && continue
-    review_date="${next_review:0:10}"
-    overdue=$(days_between "$review_date" "$TODAY" 2>/dev/null || echo "0")
-    if [[ "$overdue" -gt 0 ]]; then
-      log_drift "Overdue by ${overdue}d: $fid in features.json"
-      emit_drift "review-overdue" "$fid" "nextReview exceeded by ${overdue}d" "features.json" "lint.nextReview"
+    overdue_seconds=$(seconds_between "$next_review" "$NOW_TS" 2>/dev/null || echo "0")
+    if [[ "$overdue_seconds" -gt 0 ]]; then
+      overdue_label=$(format_duration "$overdue_seconds")
+      log_drift "Overdue by ${overdue_label}: $fid in features.json"
+      emit_drift "review-overdue" "$fid" "nextReview exceeded by ${overdue_label}" "features.json" "lint.nextReview"
+    fi
+  done
+fi
+
+# Also scan verification-rules/manifest.json lint fields
+if [[ -f "$MANIFEST" ]] && command -v jq &>/dev/null; then
+  jq -r '.rules[] | select(.lint.nextReview != null) | .id + "|" + .lint.nextReview' "$MANIFEST" 2>/dev/null | while IFS='|' read -r rid next_review; do
+    [[ -z "$rid" ]] && continue
+    overdue_seconds=$(seconds_between "$next_review" "$NOW_TS" 2>/dev/null || echo "0")
+    if [[ "$overdue_seconds" -gt 0 ]]; then
+      overdue_label=$(format_duration "$overdue_seconds")
+      log_drift "Overdue by ${overdue_label}: $rid in manifest.json"
+      emit_drift "review-overdue" "$rid" "nextReview exceeded by ${overdue_label}" "manifest.json" "lint.nextReview"
     fi
   done
 fi

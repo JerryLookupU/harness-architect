@@ -31,7 +31,7 @@ project: openclaw-brain-plugin
 - [STD-003] Referenced by F-003 — no orphan
 - [STD-004] Referenced by F-001 — no orphan
 - [work-items.json] Highest-priority orchestration item exists and is machine-readable
-- [features.json] All `reviewCycleDays` values in preset list, consistent with `lint.cycleDays`
+- [features.json] Review cadence metadata is present and `lint.nextReview` uses timestamp-level scheduling
 
 ### warn
 

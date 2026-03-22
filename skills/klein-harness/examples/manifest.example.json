@@ -14,7 +14,7 @@
       "costTier": "fast",
       "readOnlySafe": true,
       "appliesWhen": null,
-      "lint": { "lastReview": "2026-03-19", "nextReview": "2026-04-18", "cycleDays": 30 }
+      "lint": { "lastReview": "2026-03-19T14:30:00+08:00", "nextReview": "2026-03-19T15:30:00+08:00", "cycleHours": 1, "cadenceKind": "fibonacci_hours", "cadenceStep": 0, "cycleDays": 30 }
     },
     {
       "id": "VR-002",
@@ -27,7 +27,7 @@
       "costTier": "medium",
       "readOnlySafe": true,
       "appliesWhen": null,
-      "lint": { "lastReview": "2026-03-19", "nextReview": "2026-04-18", "cycleDays": 30 }
+      "lint": { "lastReview": "2026-03-19T14:30:00+08:00", "nextReview": "2026-03-19T17:30:00+08:00", "cycleHours": 3, "cadenceKind": "fibonacci_hours", "cadenceStep": 1, "cycleDays": 30 }
     },
     {
       "id": "VR-003",
@@ -40,7 +40,7 @@
       "costTier": "fast",
       "readOnlySafe": true,
       "appliesWhen": null,
-      "lint": { "lastReview": "2026-03-19", "nextReview": "2026-05-18", "cycleDays": 60 }
+      "lint": { "lastReview": "2026-03-19T14:30:00+08:00", "nextReview": "2026-03-19T19:30:00+08:00", "cycleHours": 5, "cadenceKind": "fibonacci_hours", "cadenceStep": 2, "cycleDays": 60 }
     },
     {
       "id": "VR-004",
@@ -53,7 +53,7 @@
       "costTier": "fast",
       "readOnlySafe": true,
       "appliesWhen": null,
-      "lint": { "lastReview": "2026-03-19", "nextReview": "2026-03-24", "cycleDays": 5 }
+      "lint": { "lastReview": "2026-03-19T14:30:00+08:00", "nextReview": "2026-03-19T22:30:00+08:00", "cycleHours": 8, "cadenceKind": "fibonacci_hours", "cadenceStep": 3, "cycleDays": 5 }
     },
     {
       "id": "VR-005",
@@ -66,7 +66,7 @@
       "costTier": "fast",
       "readOnlySafe": true,
       "appliesWhen": null,
-      "lint": { "lastReview": "2026-03-19", "nextReview": "2026-03-24", "cycleDays": 5 }
+      "lint": { "lastReview": "2026-03-19T14:30:00+08:00", "nextReview": "2026-03-20T03:30:00+08:00", "cycleHours": 13, "cadenceKind": "fibonacci_hours", "cadenceStep": 4, "cycleDays": 5 }
     },
     {
       "id": "VR-006",
@@ -79,7 +79,7 @@
       "costTier": "fast",
       "readOnlySafe": true,
       "appliesWhen": null,
-      "lint": { "lastReview": "2026-03-19", "nextReview": "2026-09-15", "cycleDays": 180 }
+      "lint": { "lastReview": "2026-03-19T14:30:00+08:00", "nextReview": "2026-03-20T11:30:00+08:00", "cycleHours": 21, "cadenceKind": "fibonacci_hours", "cadenceStep": 5, "cycleDays": 180 }
     },
     {
       "id": "VR-007",
@@ -92,7 +92,7 @@
       "costTier": "medium",
       "readOnlySafe": true,
       "appliesWhen": null,
-      "lint": { "lastReview": "2026-03-19", "nextReview": "2026-07-17", "cycleDays": 120 }
+      "lint": { "lastReview": "2026-03-19T14:30:00+08:00", "nextReview": "2026-03-21T00:30:00+08:00", "cycleHours": 34, "cadenceKind": "fibonacci_hours", "cadenceStep": 6, "cycleDays": 120 }
     }
   ]
 }

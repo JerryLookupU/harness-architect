@@ -8,6 +8,7 @@ usage: harness-kick [options] <PROJECT_GOAL> [STACK_HINT] [PROJECT_ROOT]
 options:
   --manual, --no-bootstrap  only install .harness and write bootstrap prompt
   --auto-bootstrap          force running `codex exec` bootstrap after install
+  --replace-bootstrap       stop an existing bootstrap tmux session for this project before starting a new one
   --no-session-init         skip automatic session-init after bootstrap
   --context <PATH>          attach an extra context file or directory
   --prd <PATH>              alias of --context
@@ -33,6 +34,7 @@ MODEL=""
 CONCURRENCY=""
 RUN_DAEMON=0
 DAEMON_INTERVAL=60
+REPLACE_BOOTSTRAP=0
 CONTEXT_INPUTS=()
 
 while [[ $# -gt 0 ]]; do
@@ -43,6 +45,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --auto-bootstrap)
       AUTO_BOOTSTRAP=1
+      shift
+      ;;
+    --replace-bootstrap)
+      REPLACE_BOOTSTRAP=1
       shift
       ;;
     --no-session-init)
@@ -205,6 +211,32 @@ resolve_bootstrap_tmux_session() {
   return 1
 }
 
+bootstrap_tmux_session_is_running() {
+  local session_name="$1"
+  local pane_dead=""
+
+  [[ -n "$session_name" ]] || return 1
+  command -v tmux >/dev/null 2>&1 || return 1
+  tmux has-session -t "$session_name" 2>/dev/null || return 1
+
+  pane_dead="$(tmux list-panes -t "$session_name" -F '#{pane_dead}' 2>/dev/null | head -n 1 || true)"
+  [[ "$pane_dead" == "0" ]]
+}
+
+resolve_running_bootstrap_tmux_session() {
+  local session_name=""
+
+  session_name="$(resolve_bootstrap_tmux_session || true)"
+  [[ -n "$session_name" ]] || return 1
+
+  if bootstrap_tmux_session_is_running "$session_name"; then
+    printf '%s\n' "$session_name"
+    return 0
+  fi
+
+  return 1
+}
+
 resolve_runner_daemon_tmux_session() {
   local session_name=""
 
@@ -254,12 +286,21 @@ data["projectRoot"] = project_root
 data["lifecycle"] = lifecycle
 data["bootstrapStatus"] = bootstrap_status
 data["lastBootstrapAt"] = timestamp
-if bootstrap_session:
-    data["bootstrapSession"] = bootstrap_session
+data["bootstrapSession"] = bootstrap_session or None
 
 meta_path.parent.mkdir(parents=True, exist_ok=True)
 meta_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
 PY
+}
+
+stop_bootstrap_tmux_session() {
+  local session_name=""
+  session_name="$(resolve_bootstrap_tmux_session || true)"
+  [[ -n "$session_name" ]] || return 1
+  command -v tmux >/dev/null 2>&1 || return 1
+  tmux kill-session -t "$session_name"
+  rm -f "$BOOTSTRAP_SESSION_PATH"
+  return 0
 }
 
 launch_runner_daemon_in_tmux() {
@@ -291,6 +332,8 @@ launch_bootstrap_in_tmux() {
   local stdout_literal=""
   local project_literal=""
   local project_meta_literal=""
+  local session_path_literal=""
+  local runner_path_literal=""
   local refresh_literal=""
   local session_init_literal=""
   local status_literal=""
@@ -303,6 +346,8 @@ launch_bootstrap_in_tmux() {
   stdout_literal="$(printf '%q' "$BOOTSTRAP_STDOUT_PATH")"
   project_literal="$(printf '%q' "$PROJECT_ROOT")"
   project_meta_literal="$(printf '%q' "$PROJECT_META_PATH")"
+  session_path_literal="$(printf '%q' "$BOOTSTRAP_SESSION_PATH")"
+  runner_path_literal="$(printf '%q' "$BOOTSTRAP_RUNNER_PATH")"
   refresh_literal="$(printf '%q' "$PROJECT_ROOT/.harness/scripts/refresh-state.py")"
   session_init_literal="$(printf '%q' "$PROJECT_ROOT/.harness/session-init.sh")"
   status_literal="$(printf '%q' "$PROJECT_ROOT/.harness/bin/harness-status")"
@@ -319,6 +364,8 @@ set -euo pipefail
 PROJECT_ROOT=$project_literal
 PROJECT_META_PATH=$project_meta_literal
 BOOTSTRAP_SESSION_NAME=$session_name_literal
+BOOTSTRAP_SESSION_PATH=$session_path_literal
+BOOTSTRAP_RUNNER_PATH=$runner_path_literal
 PROMPT_PATH=$prompt_literal
 BOOTSTRAP_RESULT_PATH=$result_literal
 BOOTSTRAP_STDOUT_PATH=$stdout_literal
@@ -326,7 +373,7 @@ RUN_SESSION_INIT=$RUN_SESSION_INIT
 CODEX_CMD=($codex_cmd_literal)
 
 update_project_meta() {
-  python3 - "\$PROJECT_META_PATH" "\$PROJECT_ROOT" "\$1" "\$2" "\$BOOTSTRAP_SESSION_NAME" <<'PY'
+  python3 - "\$PROJECT_META_PATH" "\$PROJECT_ROOT" "\$1" "\$2" "\${3:-}" <<'PY'
 import json
 import sys
 from datetime import datetime, timezone
@@ -351,30 +398,36 @@ data["projectRoot"] = project_root
 data["lifecycle"] = lifecycle
 data["bootstrapStatus"] = bootstrap_status
 data["lastBootstrapAt"] = timestamp
-data["bootstrapSession"] = bootstrap_session
+data["bootstrapSession"] = bootstrap_session or None
 
 meta_path.parent.mkdir(parents=True, exist_ok=True)
 meta_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
 PY
 }
 
+cleanup_bootstrap_artifacts() {
+  rm -f "\$BOOTSTRAP_SESSION_PATH" "\$BOOTSTRAP_RUNNER_PATH"
+}
+
+trap cleanup_bootstrap_artifacts EXIT
+
 cd "\$PROJECT_ROOT"
 exec > >(tee -a "\$BOOTSTRAP_STDOUT_PATH") 2>&1
 
 echo "[bootstrap] started at \$(date '+%Y-%m-%d %H:%M:%S')"
-update_project_meta "bootstrapping" "running"
+update_project_meta "bootstrapping" "running" "\$BOOTSTRAP_SESSION_NAME"
 
 if "\${CODEX_CMD[@]}" - < "\$PROMPT_PATH"; then
   if [[ ! -s "\$BOOTSTRAP_RESULT_PATH" ]]; then
     echo "[bootstrap] codex exec exited before writing \$BOOTSTRAP_RESULT_PATH"
-    update_project_meta "initialized" "failed"
+    update_project_meta "initialized" "failed" ""
     exit 1
   fi
   echo "[bootstrap] bootstrap result saved to \$BOOTSTRAP_RESULT_PATH"
 else
   status=\$?
   echo "[bootstrap] codex exec failed with exit code \$status"
-  update_project_meta "initialized" "failed"
+  update_project_meta "initialized" "failed" ""
   exit \$status
 fi
 
@@ -393,7 +446,7 @@ if [[ -x $status_literal ]]; then
   $status_literal "\$PROJECT_ROOT" || true
 fi
 
-update_project_meta "active" "ready"
+update_project_meta "active" "ready" ""
 echo "[bootstrap] finished at \$(date '+%Y-%m-%d %H:%M:%S')"
 EOF
 
@@ -403,7 +456,6 @@ EOF
     return 1
   fi
 
-  tmux set-option -t "$session_name" remain-on-exit on >/dev/null 2>&1 || true
   printf '%s\n' "$session_name" > "$BOOTSTRAP_SESSION_PATH"
   LAUNCHED_BOOTSTRAP_TMUX_SESSION="$session_name"
   return 0
@@ -501,7 +553,8 @@ ${CONTEXT_PROMPT_BLOCK}
 6. 检查项目根 AGENTS.md：
    - 如果已有规则，保留其他工程规则。
    - 如果缺少 SOUL 段，新增。
-   - 这轮把 SOUL 规范成“16岁超级天才编程少女”。
+   - SOUL 段保持工程中性，只描述协作风格和执行约束。
+   - 除非用户明确要求，不要强加具体人格模板。
 7. 让 operator plane 可直接使用，至少确认这些入口可用：
    - .harness/bin/harness-status
    - .harness/bin/harness-watch
@@ -622,6 +675,27 @@ if [[ "$AUTO_BOOTSTRAP" -eq 1 ]]; then
 fi
 
 if [[ "$AUTO_BOOTSTRAP" -eq 1 ]]; then
+  existing_bootstrap_session="$(resolve_running_bootstrap_tmux_session || true)"
+  if [[ -n "$existing_bootstrap_session" ]]; then
+    if [[ "$REPLACE_BOOTSTRAP" -eq 1 ]]; then
+      echo
+      echo "replacing existing bootstrap session: $existing_bootstrap_session"
+      stop_bootstrap_tmux_session || true
+      update_project_meta "initialized" "replaced"
+    else
+      echo
+      echo "existing bootstrap session is still active for this project: $existing_bootstrap_session" >&2
+      echo "refusing to launch another bootstrap against the same .harness control surface" >&2
+      print_commands
+      cat <<EOF
+
+To replace the active bootstrap session:
+  harness-kick --replace-bootstrap "$PROJECT_GOAL" "${STACK_HINT}" "$PROJECT_ROOT"
+EOF
+      exit 1
+    fi
+  fi
+
   BOOTSTRAP_ATTEMPTED=1
   update_project_meta "bootstrapping" "queued"
   echo

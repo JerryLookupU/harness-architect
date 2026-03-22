@@ -51,6 +51,30 @@
 - query / dashboard / daemon / operator 脚本默认先读 `state/*.json`
 - state 缺失时再回退到 `progress.md` / `task-pool.json` / `spec.json`
 
+## `lint` 复审节奏
+
+`lint.lastReview` / `lint.nextReview` 是 drift 扫描的主字段。
+
+推荐规则：
+
+- `lastReview` 和 `nextReview` 优先使用带时区的 ISO 时间戳，不要只写日期
+- 刚改过、仍在快速变化的面，优先用小时级复审，不要默认 30 天
+- 推荐用 Fibonacci 小时节奏递增：`1h -> 3h -> 5h -> 8h -> 13h -> 21h -> 34h -> 55h -> 89h -> 144h`
+- 稳定后再放宽到天级复审
+- 兼容旧字段：已有 `cycleDays` 可以保留，但新产物优先增加 `cycleHours` / `cadenceKind` / `cadenceStep`
+
+推荐最小结构：
+
+- `lastReview`
+- `nextReview`
+- `cycleHours`
+- `cadenceKind`
+- `cadenceStep`
+
+如果需要兼容旧仓库，可额外保留：
+
+- `cycleDays`
+
 ## ID 约定
 
 - `STD-xxx`：标准
