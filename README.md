@@ -9,7 +9,10 @@ Klein-Harness turns a repository into a re-entrant control surface:
 - session / worktree / verification lineage stays repo-local
 - reports, failures, audits, and replans can re-enter as the next request
 
-This repo ships the skill, references, examples, and installer needed to add that runtime to another project.
+This repo ships two Codex skills:
+
+- `klein-harness` for repo-local closed-loop runtime and operator control
+- `blueprint-architect` for blueprint decomposition, research, draft/review/final design
 
 ## What It Is
 
@@ -48,13 +51,16 @@ That is how it avoids self-intersection, unsafe resume, and lost context.
 
 ## Quick Start
 
-Install the skill and helper commands:
+Install the skills and helper commands:
 
 ```bash
 ./install.sh
 ```
 
 This installs:
+
+- `klein-harness`
+- `blueprint-architect`
 
 - `harness-init`
 - `harness-bootstrap`
@@ -190,9 +196,10 @@ bash ./skills/klein-harness/examples/harness-release-smoke.example.sh
 
 ## Repository Layout
 
-Main skill:
+Skills:
 
 - `skills/klein-harness/SKILL.md`
+- `skills/blueprint-architect/SKILL.md`
 
 References:
 
@@ -201,6 +208,8 @@ References:
 - `skills/klein-harness/references/model-routing.md`
 - `skills/klein-harness/references/git-worktree-playbook.md`
 - `skills/klein-harness/references/bash-python-toolkit.md`
+- `skills/blueprint-architect/references/blueprint-schema.md`
+- `skills/blueprint-architect/references/conflict-checklist.md`
 
 Examples:
 
@@ -216,8 +225,9 @@ Architecture docs:
 Read in this order:
 
 1. `skills/klein-harness/SKILL.md`
-2. `docs/runtime-request-spec.md`
-3. `docs/klein-architecture.md`
+2. `skills/blueprint-architect/SKILL.md`
+3. `docs/runtime-request-spec.md`
+4. `docs/klein-architecture.md`
 4. `skills/klein-harness/references/schema-contracts.md`
 5. `skills/klein-harness/references/openclaw-dispatch.md`
 6. `skills/klein-harness/references/model-routing.md`
