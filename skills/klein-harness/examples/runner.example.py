@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from runtime_common import (
+    REQUEST_TERMINAL_STATUSES,
     TASK_ACTIVE_STATUSES,
     TASK_COMPLETED_STATUSES,
     age_seconds,
@@ -409,10 +410,25 @@ def bound_requests_for_task(project_root: str, task_id: str) -> list[dict]:
         if binding.get("taskId") != task_id:
             continue
         request = requests_by_id.get(binding.get("requestId"))
-        if request:
+        if request and request.get("status") not in REQUEST_TERMINAL_STATUSES:
             related.append(request)
     related.sort(key=lambda item: (item.get("seq", 0), item.get("createdAt") or ""))
     return related
+
+
+def live_request_bindings_for_task(files: dict, task_id: str) -> list[dict]:
+    task_map = load_json(files["request_task_map_path"])
+    request_index = load_json(files["request_index_path"])
+    requests_by_id = {
+        request.get("requestId"): request
+        for request in request_index.get("requests", [])
+        if request.get("requestId")
+    }
+    return [
+        binding
+        for binding in request_bindings_for_task(task_map, task_id)
+        if (requests_by_id.get(binding.get("requestId")) or {}).get("status") not in REQUEST_TERMINAL_STATUSES
+    ]
 
 
 def prompt_lines(task: dict, route_decision: dict, project_root: str, execution_cwd: str):
@@ -794,8 +810,7 @@ def claim_dispatched_task(root: Path, task_id: str, run: dict, *, lifecycle_stat
             },
         )
 
-    task_map = load_json(files["request_task_map_path"])
-    for binding in request_bindings_for_task(task_map, task_id):
+    for binding in live_request_bindings_for_task(files, task_id):
         update_binding_state(
             root,
             binding.get("requestId"),
@@ -1183,8 +1198,7 @@ def cmd_finalize(root: Path, task_id: str, runner_status: int, tmux_session: str
         print(json.dumps({"ok": False, "error": f"task not found: {task_id}"}, ensure_ascii=False, indent=2))
         return 1
 
-    task_map = load_json(files["request_task_map_path"])
-    bindings = request_bindings_for_task(task_map, task_id)
+    bindings = live_request_bindings_for_task(files, task_id)
     session_id = task.get("claim", {}).get("boundSessionId") or task.get("lastKnownSessionId")
     verification_status = task.get("verificationStatus")
     request_summary = load_optional_json(files["request_summary_path"], {})
@@ -1326,8 +1340,7 @@ def cmd_finalize(root: Path, task_id: str, runner_status: int, tmux_session: str
 
     refreshed_task_pool = load_json(task_pool_path)
     refreshed_task = find_task(refreshed_task_pool.get("tasks", []), task_id)
-    refreshed_task_map = load_json(files["request_task_map_path"])
-    refreshed_bindings = request_bindings_for_task(refreshed_task_map, task_id)
+    refreshed_bindings = live_request_bindings_for_task(files, task_id)
     primary_binding = refreshed_bindings[-1] if refreshed_bindings else None
     route_decision = (primary_binding or {}).get("route")
     refreshed_environment = environment_summary_for_task(refreshed_task)
@@ -1370,8 +1383,7 @@ def cmd_heartbeat(root: Path, task_id: str, tmux_session: str, phase: str = "run
     task = next((item for item in task_pool.get("tasks", []) if item.get("taskId") == task_id), None)
     if task is None:
         return 0
-    task_map = load_json(files["request_task_map_path"])
-    bindings = request_bindings_for_task(task_map, task_id)
+    bindings = live_request_bindings_for_task(files, task_id)
     session_id = task.get("claim", {}).get("boundSessionId")
 
     if phase == "running":

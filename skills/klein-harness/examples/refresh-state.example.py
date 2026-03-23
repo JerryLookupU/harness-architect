@@ -148,12 +148,32 @@ def main():
         generator="klein-harness",
         policy_summary=policy_summary,
     )
-    progress = build_progress_summary(progress, request_summary, task_summary, worker_summary, daemon_summary, generator="klein-harness")
+    progress = build_progress_summary(
+        progress,
+        request_summary,
+        task_summary,
+        worker_summary,
+        daemon_summary,
+        todo_summary,
+        generator="klein-harness",
+    )
     progress["todoActionableCount"] = todo_summary.get("actionableTodoCount", 0)
     progress["completionGateStatus"] = completion_gate.get("status")
     progress["guardStatus"] = guard_state.get("status")
     progress["pendingCheckpointCount"] = guard_state.get("pendingCheckpointCount", 0)
     progress["unknownDirtyCount"] = guard_state.get("unknownDirtyCount", 0)
+    progress["blockers"] = guard_state.get("blockers", [])
+    next_task_id = next((task_id for task_id in todo_summary.get("nextTaskIds", []) if task_id), None)
+    next_todo = next((item for item in todo_summary.get("todoItems", []) if item.get("taskId") == next_task_id), None)
+    next_actions = []
+    if guard_state.get("unknownDirtyCount", 0):
+        next_actions.append("keep safeToExecute=false until unknown dirty is classified and resolved")
+    if next_task_id:
+        action = f"run {next_task_id}"
+        if guard_state.get("safeToExecute") is False and (next_todo or {}).get("roleHint") == "orchestrator":
+            action += " as control-plane planning only; do not mutate business code"
+        next_actions.append(action)
+    progress["nextActions"] = next_actions
     active_request = request_summary.get("activeRequest") or {}
     active_binding = next(
         (

@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from runtime_common import (
+    REQUEST_TERMINAL_STATUSES,
     TASK_ACTIVE_STATUSES,
     ensure_runtime_scaffold,
     emit_follow_up_request,
@@ -18,6 +19,7 @@ from runtime_common import (
     load_optional_json,
     now_iso,
     request_bindings_for_task,
+    sync_request_from_bindings,
     update_request_snapshot,
     update_request_status,
     write_json,
@@ -27,9 +29,15 @@ from runtime_common import (
 RESET_FIELDS_BY_STAGE = {
     "queued": {
         "status": "queued",
+        "claim": {},
         "dispatchBackend": None,
         "dispatchSessionLabel": None,
         "lastDispatchedAt": None,
+        "lastDispatchAt": None,
+        "lastKnownSessionId": None,
+        "preferredResumeSessionId": None,
+        "candidateResumeSessionIds": [],
+        "nextPlanEpoch": None,
         "runnerSession": None,
         "runnerStatus": None,
         "runnerExitCode": None,
@@ -50,9 +58,15 @@ RESET_FIELDS_BY_STAGE = {
     },
     "worktree_prepared": {
         "status": "worktree_prepared",
+        "claim": {},
         "dispatchBackend": None,
         "dispatchSessionLabel": None,
         "lastDispatchedAt": None,
+        "lastDispatchAt": None,
+        "lastKnownSessionId": None,
+        "preferredResumeSessionId": None,
+        "candidateResumeSessionIds": [],
+        "nextPlanEpoch": None,
         "runnerSession": None,
         "runnerStatus": None,
         "runnerExitCode": None,
@@ -197,6 +211,75 @@ def classify_stale_heartbeats(tasks: list[dict], heartbeats: dict) -> list[str]:
     return stale
 
 
+def clear_task_runtime_residue(root: Path, files: dict, task: dict, *, reason: str) -> None:
+    state_dir = files["state_dir"]
+    task_id = task.get("taskId")
+    heartbeat_path = state_dir / "runner-heartbeats.json"
+    heartbeat_payload = load_optional_json(heartbeat_path, {"schemaVersion": "1.0", "entries": {}})
+    heartbeat_entries = heartbeat_payload.get("entries", {}) if isinstance(heartbeat_payload, dict) else {}
+    heartbeat = heartbeat_entries.get(task_id, {}) if task_id else {}
+    claim = task.get("claim", {}) if isinstance(task.get("claim"), dict) else {}
+    tmux_sessions = {
+        session
+        for session in [claim.get("tmuxSession"), heartbeat.get("tmuxSession")]
+        if session and not str(session).startswith("print:")
+    }
+    for session in tmux_sessions:
+        subprocess.run(["tmux", "kill-session", "-t", session], capture_output=True)
+    if task_id in heartbeat_entries:
+        del heartbeat_entries[task_id]
+        heartbeat_payload["schemaVersion"] = "1.0"
+        heartbeat_payload["generator"] = "harness-control"
+        heartbeat_payload["generatedAt"] = now_iso()
+        heartbeat_payload["entries"] = heartbeat_entries
+        write_json(heartbeat_path, heartbeat_payload)
+
+    task_map = load_json(files["request_task_map_path"])
+    index = load_json(files["request_index_path"])
+    requests_by_id = {
+        item.get("requestId"): item
+        for item in index.get("requests", [])
+        if item.get("requestId")
+    }
+    touched_requests = set()
+    timestamp = now_iso()
+    for binding in task_map.get("bindings", []):
+        if binding.get("taskId") != task_id:
+            continue
+        request = requests_by_id.get(binding.get("requestId"))
+        if request and request.get("status") in REQUEST_TERMINAL_STATUSES:
+            continue
+        binding["status"] = "bound"
+        binding["statusReason"] = reason
+        binding["updatedAt"] = timestamp
+        binding.setdefault("history", []).append(
+            {
+                "status": "bound",
+                "reason": reason,
+                "timestamp": timestamp,
+                "generator": "harness-control",
+            }
+        )
+        if request:
+            update_request_status(index, request.get("requestId"), "bound", reason=reason)
+            touched_requests.add(request.get("requestId"))
+    for request_id in touched_requests:
+        request = requests_by_id.get(request_id)
+        if not request:
+            continue
+        sync_request_from_bindings(
+            request,
+            [item for item in task_map.get("bindings", []) if item.get("requestId") == request_id],
+        )
+    if touched_requests:
+        index["generatedAt"] = timestamp
+        index["generator"] = "harness-control"
+        task_map["generatedAt"] = timestamp
+        task_map["generator"] = "harness-control"
+        write_json(files["request_index_path"], index)
+        write_json(files["request_task_map_path"], task_map)
+
+
 def cmd_project_tidy_worktrees(root: Path, files: dict, *, fmt: str, dry_run: bool) -> int:
     candidates = list_runtime_cleanup_candidates(root)
     state_dir = files["state_dir"]
@@ -327,9 +410,12 @@ def cmd_task(args) -> int:
         stage = args.from_stage or "queued"
         if stage not in RESET_FIELDS_BY_STAGE:
             raise ValueError(f"unsupported restart stage: {stage}")
+        restart_reason = args.reason or f"operator restart from {stage}"
+        clear_task_runtime_residue(root, files, task, reason=restart_reason)
         task.update({key: value for key, value in RESET_FIELDS_BY_STAGE[stage].items()})
         task["restartRequestedAt"] = now_iso()
-        task["restartReason"] = args.reason or f"operator restart from {stage}"
+        task["restartReason"] = restart_reason
+        task["latestPlanEpoch"] = task.get("planEpoch")
         write_json(files["harness"] / "task-pool.json", task_pool)
         lineage_event(root, "task.restart_staged", "harness-control", task_id=args.task_id, detail=task["restartReason"], context={"fromStage": stage})
         refresh_runtime_state(root)
@@ -346,10 +432,33 @@ def cmd_request(args) -> int:
     request = find_request(index.get("requests", []), args.request_id)
 
     if args.action == "cancel":
+        task_map = load_json(files["request_task_map_path"])
+        timestamp = now_iso()
+        cancel_reason = args.reason or "cancelled by harness-control"
+        related_bindings = []
+        for binding in task_map.get("bindings", []):
+            if binding.get("requestId") != args.request_id:
+                continue
+            binding["status"] = "cancelled"
+            binding["statusReason"] = cancel_reason
+            binding["updatedAt"] = timestamp
+            binding.setdefault("history", []).append(
+                {
+                    "status": "cancelled",
+                    "reason": cancel_reason,
+                    "timestamp": timestamp,
+                    "generator": "harness-control",
+                }
+            )
+            related_bindings.append(binding)
         update_request_status(index, args.request_id, "cancelled", reason=args.reason or "cancelled by harness-control")
+        sync_request_from_bindings(request, related_bindings)
         index["generatedAt"] = now_iso()
         index["generator"] = "harness-control"
         write_json(files["request_index_path"], index)
+        task_map["generatedAt"] = timestamp
+        task_map["generator"] = "harness-control"
+        write_json(files["request_task_map_path"], task_map)
         update_request_snapshot(files, request, generator="harness-control")
         refresh_runtime_state(root)
         lineage_event(root, "request.cancelled", "harness-control", request_id=args.request_id, detail=args.reason or "cancelled by operator")

@@ -1757,11 +1757,28 @@ def build_progress_summary(
     task_summary: dict,
     worker_summary: dict,
     daemon_summary: dict,
+    todo_summary: dict,
     *,
     generator: str,
 ) -> dict:
     snapshot = default_progress_state()
     snapshot.update(progress or {})
+    active_request = request_summary.get("activeRequest") or {}
+    active_binding = next(
+        (
+            binding for binding in request_summary.get("bindings", [])
+            if binding.get("requestId") == active_request.get("requestId")
+        ),
+        None,
+    )
+    next_task_id = (
+        (active_binding or {}).get("taskId")
+        or next((task_id for task_id in todo_summary.get("nextTaskIds", []) if task_id), None)
+    )
+    next_todo = next(
+        (item for item in todo_summary.get("todoItems", []) if item.get("taskId") == next_task_id),
+        None,
+    )
     snapshot.update(
         {
             "schemaVersion": SCHEMA_VERSION,
@@ -1774,6 +1791,12 @@ def build_progress_summary(
             "activeWorkerCount": worker_summary.get("workerCount", 0),
             "runtimeHealth": daemon_summary.get("runtimeHealth"),
             "dispatchBackendDefault": daemon_summary.get("dispatchBackendDefault"),
+            "currentFocus": next_task_id or active_request.get("requestId") or snapshot.get("currentFocus"),
+            "currentRole": (next_todo or {}).get("roleHint") or snapshot.get("currentRole"),
+            "currentTaskId": next_task_id,
+            "currentTaskTitle": (next_todo or {}).get("title") or (active_binding or {}).get("taskTitle"),
+            "currentTaskSummary": snapshot.get("currentTaskSummary") if snapshot.get("currentTaskId") != next_task_id else snapshot.get("currentTaskSummary"),
+            "planningStage": "execution-ready" if next_task_id else snapshot.get("planningStage"),
         }
     )
     return snapshot
@@ -3042,6 +3065,51 @@ def request_effect_terminal(request: dict) -> bool:
     return request.get("fusionDecision") in {"duplicate_of_existing", "merged_as_context", "noop"} and request.get("effectStatus") == "closed"
 
 
+def request_effective_plan_epoch(
+    request: dict,
+    requests_by_id: dict[str, dict] | None = None,
+    task_epochs_by_id: dict[str, int] | None = None,
+    *,
+    _seen: set[str] | None = None,
+) -> int:
+    task_epochs_by_id = task_epochs_by_id or {}
+    request_id = request.get("requestId")
+    seen = set(_seen or set())
+    if request_id:
+        if request_id in seen:
+            return int(request.get("targetPlanEpoch") or request.get("planEpoch") or DEFAULT_POLICY_SUMMARY["threading"]["defaultInitialPlanEpoch"])
+        seen.add(request_id)
+    bound_task_ids = bounded_unique(
+        [request.get("activeTaskId"), *((request.get("boundTaskIds") or []))],
+        DEFAULT_POLICY_SUMMARY["threading"]["maxRecentThreadEvents"],
+    )
+    bound_epochs = [task_epochs_by_id[task_id] for task_id in bound_task_ids if task_id in task_epochs_by_id]
+    if bound_epochs:
+        return max(int(epoch) for epoch in bound_epochs)
+    if requests_by_id:
+        for follow_up_key in ("replanRequestId", "inspectionRequestId"):
+            follow_up_id = request.get(follow_up_key)
+            follow_up = requests_by_id.get(follow_up_id) if follow_up_id else None
+            if follow_up:
+                return request_effective_plan_epoch(
+                    follow_up,
+                    requests_by_id,
+                    task_epochs_by_id,
+                    _seen=seen,
+                )
+    return int(request.get("targetPlanEpoch") or request.get("planEpoch") or DEFAULT_POLICY_SUMMARY["threading"]["defaultInitialPlanEpoch"])
+
+
+def request_contributes_thread_epoch(request: dict) -> bool:
+    normalized_intent = request.get("normalizedIntentClass")
+    request_kind = (request.get("effectiveKind") or request.get("kind") or "").lower()
+    if request_effect_terminal(request) and request_kind in {"stop", "status"}:
+        return False
+    if request_effect_terminal(request) and normalized_intent in {"compound_split", "append_change"}:
+        return False
+    return True
+
+
 def detect_compound_segments(goal: str) -> list[str]:
     text = (goal or "").strip()
     if not text:
@@ -4010,8 +4078,11 @@ def record_request_thread_state(
     thread["lastIntentClass"] = request.get("normalizedIntentClass")
     if impact_classification:
         thread["lastImpactClassification"] = impact_classification
-    if request.get("targetPlanEpoch"):
-        thread["currentPlanEpoch"] = max(int(thread.get("currentPlanEpoch") or 1), int(request.get("targetPlanEpoch") or 1))
+    if request.get("targetPlanEpoch") and request_contributes_thread_epoch(request):
+        thread["currentPlanEpoch"] = max(
+            int(thread.get("currentPlanEpoch") or 1),
+            request_effective_plan_epoch(request),
+        )
     recent_request_ids = [request_id, *(thread.get("recentRequestIds") or [])]
     thread["recentRequestIds"] = bounded_unique(recent_request_ids, recent_limit)
     if request_effect_terminal(request):
@@ -4340,11 +4411,21 @@ def evaluate_task_drift_checklist(task: dict, *, latest_plan_epoch: int | None, 
         failures.append("compact handoff missing")
     thread_key = task.get("threadKey")
     if request_summary and thread_key:
+        recent_requests = request_summary.get("recentRequests", [])
+        requests_by_id = {
+            request.get("requestId"): request
+            for request in recent_requests
+            if request.get("requestId")
+        }
         newer_appends = [
-            request for request in request_summary.get("recentRequests", [])
+            request for request in recent_requests
             if thread_key_from_request(request) == thread_key
             and request.get("normalizedIntentClass") == "append_change"
-            and (request.get("targetPlanEpoch") or 0) > (task.get("planEpoch") or 0)
+            and request_effective_plan_epoch(
+                request,
+                requests_by_id,
+                {task.get("taskId"): int(task.get("planEpoch") or 0)} if task.get("taskId") and task.get("planEpoch") is not None else {},
+            ) > (task.get("planEpoch") or 0)
         ]
         if newer_appends:
             failures.append("newer appended requirement exists on thread")
@@ -4683,7 +4764,8 @@ def sync_request_from_bindings(request: dict, bindings: list[dict]):
     if bindings:
         latest = bindings[-1]
         request["threadKey"] = latest.get("lineage", {}).get("threadKey") or request.get("threadKey")
-        request["targetPlanEpoch"] = latest.get("lineage", {}).get("planEpoch") or request.get("targetPlanEpoch")
+        if request.get("targetPlanEpoch") is None:
+            request["targetPlanEpoch"] = latest.get("lineage", {}).get("planEpoch") or request.get("targetPlanEpoch")
         request["worktreePath"] = latest.get("lineage", {}).get("worktreePath")
         request["diffSummary"] = latest.get("lineage", {}).get("diffSummary")
         request["verificationStatus"] = latest.get("lineage", {}).get("verificationStatus")
@@ -6080,26 +6162,65 @@ def build_request_summary(index: dict, task_map: dict, task_pool: dict | None = 
         for task in (task_pool or {}).get("tasks", [])
         if task.get("taskId")
     }
+    task_epochs_by_id = {
+        task_id: int(task.get("planEpoch") or DEFAULT_POLICY_SUMMARY["threading"]["defaultInitialPlanEpoch"])
+        for task_id, task in tasks_by_id.items()
+        if task.get("planEpoch") is not None
+    }
     requests = index.get("requests", [])
+    requests_by_id = {
+        request.get("requestId"): request
+        for request in requests
+        if request.get("requestId")
+    }
     counts = dict(Counter(request.get("status", "unknown") for request in requests))
     active = [request for request in requests if request.get("status") not in REQUEST_TERMINAL_STATUSES]
+    bindings = task_map.get("bindings", [])
+    bindings_by_request: dict[str, list[dict]] = defaultdict(list)
+    for binding in bindings:
+        request_id = binding.get("requestId")
+        if request_id:
+            bindings_by_request[request_id].append(binding)
+
+    def task_status_rank_for_request(request: dict) -> int:
+        bound_task_ids = bounded_unique(
+            [request.get("activeTaskId"), *(request.get("boundTaskIds") or []), *[item.get("taskId") for item in bindings_by_request.get(request.get("requestId"), [])]],
+            DEFAULT_POLICY_SUMMARY["threading"]["maxRecentThreadEvents"],
+        )
+        if not bound_task_ids:
+            return 9
+        ranking = {
+            "running": 0,
+            "resumed": 1,
+            "dispatched": 2,
+            "recoverable": 3,
+            "worktree_prepared": 4,
+            "queued": 5,
+            "verified": 6,
+            "merge_queued": 7,
+            "merge_checked": 8,
+        }
+        ranks = [ranking.get((tasks_by_id.get(task_id) or {}).get("status"), 9) for task_id in bound_task_ids]
+        return min(ranks) if ranks else 9
+
     active.sort(
         key=lambda request: (
             {
                 "running": 0,
                 "resumed": 1,
-                "recoverable": 2,
-                "dispatched": 3,
+                "dispatched": 2,
+                "recoverable": 3,
                 "bound": 4,
                 "queued": 5,
                 "blocked": 6,
                 "verified": 7,
             }.get(request.get("status"), 9),
-            request.get("seq", 0),
+            task_status_rank_for_request(request),
+            -request_effective_plan_epoch(request, requests_by_id, task_epochs_by_id),
+            -(request.get("seq", 0) or 0),
         )
     )
     active_request = active[0] if active else None
-    bindings = task_map.get("bindings", [])
     binding_summary = []
     for binding in bindings[-20:]:
         task = tasks_by_id.get(binding.get("taskId"), {})
@@ -6207,6 +6328,11 @@ def build_intake_summary(index: dict, thread_state: dict | None = None, *, gener
 def build_thread_state(index: dict, task_pool: dict | None, request_summary: dict, *, generator: str, policy_summary: dict) -> dict:
     tasks = (task_pool or {}).get("tasks", [])
     thread_ledger = index.get("threads", {}) if isinstance(index.get("threads"), dict) else {}
+    task_epochs_by_id = {
+        task.get("taskId"): int(task.get("planEpoch") or DEFAULT_POLICY_SUMMARY["threading"]["defaultInitialPlanEpoch"])
+        for task in tasks
+        if task.get("taskId") and task.get("planEpoch") is not None
+    }
     threads = {}
     thread_requests = defaultdict(list)
     for request in index.get("requests", []):
@@ -6215,16 +6341,24 @@ def build_thread_state(index: dict, task_pool: dict | None, request_summary: dic
             thread_requests[key].append(request)
     for thread_key, requests in thread_requests.items():
         requests = sorted(requests, key=lambda item: (item.get("seq", 0), item.get("createdAt") or ""))
-        effective_epoch_requests = [
-            item for item in requests
-            if not (
-                item.get("normalizedIntentClass") == "compound_split"
-                and request_effect_terminal(item)
-            )
-        ] or requests
-        current_epoch = max(int(item.get("targetPlanEpoch") or 1) for item in effective_epoch_requests)
+        requests_by_id = {
+            item.get("requestId"): item
+            for item in requests
+            if item.get("requestId")
+        }
+        effective_epoch_requests = [item for item in requests if request_contributes_thread_epoch(item)] or requests
         active_requests = [item for item in requests if not request_effect_terminal(item)]
         related_tasks = [task for task in tasks if task.get("threadKey") == thread_key]
+        epoch_candidates = [
+            request_effective_plan_epoch(item, requests_by_id, task_epochs_by_id)
+            for item in effective_epoch_requests
+        ]
+        epoch_candidates.extend(
+            int(task.get("planEpoch") or DEFAULT_POLICY_SUMMARY["threading"]["defaultInitialPlanEpoch"])
+            for task in related_tasks
+            if task.get("planEpoch") is not None
+        )
+        current_epoch = max(epoch_candidates or [DEFAULT_POLICY_SUMMARY["threading"]["defaultInitialPlanEpoch"]])
         context_rot_warnings = []
         if sum(1 for item in requests if item.get("normalizedIntentClass") == "append_change") >= 2:
             context_rot_warnings.append("multiple appended changes")
