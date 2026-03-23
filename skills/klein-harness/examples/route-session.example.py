@@ -114,10 +114,6 @@ def route_task(task, tasks, session_registry, feedback_summary, request_summary,
         if failure.get("feedbackType") in SEVERE_ROUTE_FAILURES
     ]
 
-    if not orchestration_session_id:
-        needs_orchestrator = True
-        reasons.append("missing orchestrationSessionId in session-registry.json")
-
     status = task.get("status")
     role_hint = task.get("roleHint")
     planning_stage = task.get("planningStage")
@@ -135,6 +131,13 @@ def route_task(task, tasks, session_registry, feedback_summary, request_summary,
         compact_log=compact_log,
     )
     rot = context_rot_score(task, request_summary, heartbeats, thread_state, compact_log, policy_summary)
+
+    if not orchestration_session_id:
+        if role_hint == "orchestrator" or task.get("kind") in CONTROL_PLANE_KINDS or task.get("kind") == "audit":
+            reasons.append("missing orchestrationSessionId; allow fresh control-plane session bootstrap")
+        else:
+            needs_orchestrator = True
+            reasons.append("missing orchestrationSessionId in session-registry.json")
 
     if role_hint == "worker" and status == "queued" and planning_stage != "execution-ready":
         claimable = False

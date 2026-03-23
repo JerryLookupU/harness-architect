@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
+import fcntl
 import hashlib
 import json
 import os
@@ -9,6 +10,7 @@ import tempfile
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+from contextlib import contextmanager
 
 
 SCHEMA_VERSION = "1.0"
@@ -181,6 +183,17 @@ DEFAULT_POLICY_SUMMARY = {
         "maxRecentGuardBlockers": 10,
     },
 }
+
+
+@contextmanager
+def advisory_file_lock(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def now_iso():
@@ -3049,6 +3062,17 @@ def detect_compound_segments(goal: str) -> list[str]:
     return [text]
 
 
+def expand_internal_intents(clause_kinds: list[str], *, target_request_present: bool) -> list[str]:
+    expanded = []
+    for kind in clause_kinds:
+        if kind == "compound_split":
+            expanded.append("inspection")
+            expanded.append("append_change" if target_request_present else "fresh_work")
+            continue
+        expanded.append(kind)
+    return list(dict.fromkeys(item for item in expanded if item))
+
+
 def classify_goal_clause(goal: str, *, has_context: bool) -> str:
     text = canonicalize_goal_text(goal)
     inspection_keywords = {
@@ -3305,6 +3329,7 @@ def classify_submission(request: dict, *, index: dict, task_map: dict, thread_st
         if correlation_reason:
             reason_parts.append(correlation_reason)
         classification_reason = "; ".join(reason_parts)
+    internal_intents = expand_internal_intents(clause_kinds, target_request_present=bool(target_request))
     front_door_class = classify_front_door_semantics(request, normalized_intent)
     if front_door_class not in FRONT_DOOR_CLASSES:
         front_door_class = "work_order"
@@ -3322,7 +3347,7 @@ def classify_submission(request: dict, *, index: dict, task_map: dict, thread_st
         "compoundGroupId": compound_group_id,
         "targetPlanEpoch": target_plan_epoch,
         "classificationReason": classification_reason,
-        "internalIntents": list(dict.fromkeys(clause_kinds)),
+        "internalIntents": internal_intents,
         "effectStatus": effect_status,
         "effectiveKind": (
             "audit" if normalized_intent == "inspection"
@@ -4137,6 +4162,50 @@ def ensure_task_thread_metadata(task: dict, request: dict):
     return task
 
 
+def realign_unstarted_control_plane_task_epochs(root: Path, *, generator: str) -> list[str]:
+    files = ensure_runtime_scaffold(root, generator=generator)
+    task_pool = read_task_pool(files["harness"])
+    if not task_pool:
+        return []
+    index = load_json(files["request_index_path"])
+    task_map = load_json(files["request_task_map_path"])
+    requests_by_id = {
+        request.get("requestId"): request
+        for request in index.get("requests", [])
+        if request.get("requestId")
+    }
+    updated = []
+    for task in task_pool.get("tasks", []):
+        if task.get("roleHint") != "orchestrator":
+            continue
+        claim = task.get("claim", {})
+        tmux_session = claim.get("tmuxSession")
+        if task.get("lastKnownSessionId") or claim.get("boundSessionId"):
+            continue
+        if tmux_session and not str(tmux_session).startswith("print:"):
+            continue
+        bound_epochs = []
+        for binding in task_map.get("bindings", []):
+            if binding.get("taskId") != task.get("taskId"):
+                continue
+            request = requests_by_id.get(binding.get("requestId"))
+            if request and request.get("targetPlanEpoch") is not None:
+                bound_epochs.append(int(request.get("targetPlanEpoch") or DEFAULT_POLICY_SUMMARY["threading"]["defaultInitialPlanEpoch"]))
+        if not bound_epochs:
+            continue
+        target_epoch = max(bound_epochs)
+        current_epoch = int(task.get("planEpoch") or 0)
+        if current_epoch >= target_epoch:
+            continue
+        task["planEpoch"] = target_epoch
+        task["latestPlanEpoch"] = target_epoch
+        task["updatedAt"] = now_iso()
+        updated.append(task.get("taskId"))
+    if updated:
+        write_json(files["harness"] / "task-pool.json", task_pool)
+    return updated
+
+
 def supersede_queued_thread_tasks(root: Path, request: dict, *, generator: str) -> list[str]:
     files = ensure_runtime_scaffold(root, generator=generator)
     task_pool = read_task_pool(files["harness"])
@@ -4347,6 +4416,166 @@ def task_priority_score(task: dict):
     return max(0, 20 - int(match.group(1)) * 3)
 
 
+def next_structured_id(prefix: str, existing_ids: list[str]) -> str:
+    highest = 0
+    pattern = re.compile(rf"^{re.escape(prefix)}-(\d+)$")
+    for value in existing_ids:
+        match = pattern.match(value or "")
+        if not match:
+            continue
+        highest = max(highest, int(match.group(1)))
+    return f"{prefix}-{highest + 1:03d}"
+
+
+def ensure_bootstrap_task_for_request(root: Path, request: dict, *, generator: str) -> list[dict]:
+    files = ensure_runtime_scaffold(root, generator=generator)
+    task_pool = read_task_pool(files["harness"])
+    if not task_pool:
+        return []
+    request_kind = (request.get("effectiveKind") or request.get("kind") or "").lower()
+    if request_kind in {"status", "stop"}:
+        return []
+
+    tasks = task_pool.setdefault("tasks", [])
+    thread_key = request.get("targetThreadKey") or request.get("threadKey")
+    task_id = next_structured_id("T", [task.get("taskId") for task in tasks])
+    work_item_id = next_structured_id("WI", [task.get("workItemId") for task in tasks if task.get("workItemId")])
+    block_id = next_structured_id("TB", [task.get("blockId") for task in tasks if task.get("blockId")])
+    task_kind = "audit" if request_kind == "audit" else "bootstrap"
+    priority = request.get("priority") or "P1"
+    thread_key = thread_key or f"thread:{stable_short_hash(task_id, request.get('requestId') or '')[:12]}"
+    target_epoch = int(request.get("targetPlanEpoch") or DEFAULT_POLICY_SUMMARY["threading"]["defaultInitialPlanEpoch"])
+    title = (
+        f"Audit intake request {request.get('requestId')}"
+        if task_kind == "audit"
+        else f"Bootstrap plan for request {request.get('requestId')}"
+    )
+    summary = (
+        "Inspect the request, gather evidence, and write the first safe control-plane assessment."
+        if task_kind == "audit"
+        else "Create the first runnable harness plan and decompose request scope before code execution."
+    )
+    description = (
+        f"Auto-seeded from {request.get('requestId')} because the project has no compatible tasks yet. "
+        "This task is control-plane only and must update .harness state before any code worker is dispatched."
+    )
+    task = {
+        "taskId": task_id,
+        "workItemId": work_item_id,
+        "blockId": block_id,
+        "kind": task_kind,
+        "roleHint": "orchestrator",
+        "workerMode": "audit" if task_kind == "audit" else "orchestrator",
+        "title": title,
+        "summary": summary,
+        "description": description,
+        "status": "queued",
+        "priority": priority,
+        "dependsOn": [],
+        "planningStage": "execution-ready",
+        "threadKey": thread_key,
+        "planEpoch": target_epoch,
+        "parentTaskId": None,
+        "childTaskIds": [],
+        "lineagePath": [request.get("requestId"), task_id],
+        "ownedPaths": [
+            ".harness/spec.json",
+            ".harness/work-items.json",
+            ".harness/task-pool.json",
+            ".harness/state/progress.json",
+            ".harness/state/current.json",
+            ".harness/state/runtime.json",
+            ".harness/session-registry.json",
+            ".harness/lineage.jsonl",
+        ],
+        "forbiddenPaths": [],
+        "verificationRuleIds": [],
+        "routingModel": "gpt-5.4",
+        "executionModel": "gpt-5.3-codex",
+        "resumeStrategy": "fresh",
+        "preferredResumeSessionId": None,
+        "candidateResumeSessionIds": [],
+        "lastKnownSessionId": None,
+        "sessionFamilyId": f"SF-{thread_key.replace(':', '-')}",
+        "cacheAffinityKey": f"thread:{thread_key}|role:orchestrator",
+        "routingReason": "Auto-seeded first control-plane task because request intake has no existing compatible tasks.",
+        "dispatch": {
+            "runner": "codex exec",
+            "targetKind": "worker-node",
+            "targetSelector": "tmux:orch-*",
+            "entryRole": "orchestrator",
+            "taskContextId": f"CTX-{task_id}",
+            "workspaceRoot": str(root),
+            "worktreePath": None,
+            "branchName": None,
+            "baseRef": None,
+            "diffBase": None,
+            "commandProfile": {
+                "standard": "codex exec --yolo -m gpt-5.4",
+                "localCompat": "codex exec --yolo -m gpt-5.3-codex",
+            },
+            "logPath": f".harness/runtime/{task_id.lower()}.log",
+            "heartbeatPath": f".harness/runtime/{task_id.lower()}.heartbeat",
+            "maxParallelism": 1,
+            "cooldownSeconds": 5,
+        },
+        "handoff": {
+            "nextSuggestedWorkItemIds": [],
+            "nextSuggestedTaskIds": [],
+            "replanOnFail": True,
+            "mergeRequired": False,
+            "returnToRole": "orchestrator",
+        },
+        "claim": {
+            "agentId": None,
+            "role": None,
+            "nodeId": None,
+            "boundSessionId": None,
+            "boundResumeStrategy": None,
+            "boundFromTaskId": None,
+            "boundAt": None,
+            "leasedAt": None,
+            "leaseExpiresAt": None,
+        },
+    }
+    tasks.append(task)
+    write_json(files["harness"] / "task-pool.json", task_pool)
+
+    work_items = load_optional_json(files["harness"] / "work-items.json", {}) or {}
+    items = work_items.setdefault("items", [])
+    if not any(item.get("id") == work_item_id for item in items):
+        items.append(
+            {
+                "id": work_item_id,
+                "kind": "audit" if task_kind == "audit" else "task-bootstrap",
+                "title": title,
+                "summary": summary,
+                "status": "queued",
+                "priority": priority,
+                "roleHint": "orchestrator",
+                "dependsOn": [],
+            }
+        )
+        write_json(files["harness"] / "work-items.json", work_items)
+
+    project_meta = load_optional_json(files["project_meta_path"], {}) or {}
+    project_meta["bootstrapStatus"] = "queued"
+    project_meta["generatedAt"] = now_iso()
+    project_meta["generator"] = generator
+    write_json(files["project_meta_path"], project_meta)
+    lineage_event(
+        root,
+        "task.auto_seeded",
+        generator,
+        request_id=request.get("requestId"),
+        task_id=task_id,
+        detail=task_kind,
+        reason="no compatible task available; seeded first control-plane task",
+        context={"threadKey": thread_key, "planEpoch": target_epoch},
+    )
+    return [task]
+
+
 def candidate_tasks_for_request(request: dict, tasks: list[dict]):
     request_kind = (request.get("effectiveKind") or request.get("kind") or "").lower()
     strict_kind_match = request_kind in {"stop", "audit", "replan", "bootstrap", "status", "analysis", "research"}
@@ -4356,7 +4585,11 @@ def candidate_tasks_for_request(request: dict, tasks: list[dict]):
         score = task_status_score(task)
         if score < 0:
             continue
-        if strict_kind_match and not task_kind_matches_request(request_kind, task):
+        matches_kind = task_kind_matches_request(request_kind, task)
+        if strict_kind_match and not matches_kind:
+            continue
+        matches_intent = task_matches_intent(request, task)
+        if not matches_kind and not matches_intent:
             continue
         planning_stage = task.get("planningStage")
         if planning_stage and planning_stage != "execution-ready" and (task.get("kind") or "").lower() not in {
@@ -4368,7 +4601,7 @@ def candidate_tasks_for_request(request: dict, tasks: list[dict]):
             "lease-recovery",
         }:
             continue
-        if task_matches_intent(request, task):
+        if matches_intent:
             score += 50
         if request.get("targetThreadKey") and task.get("threadKey") == request.get("targetThreadKey"):
             score += 40
@@ -4831,55 +5064,57 @@ def emit_follow_up_request(
     idempotency_key: str | None = None,
 ):
     files = ensure_runtime_scaffold(root, generator=generator)
-    index = load_json(files["request_index_path"])
-    ensure_request_index_shape(index)
-    task_map = load_json(files["request_task_map_path"])
-    thread_state = load_optional_json(files["thread_state_path"], index) or index
-    existing = next(
-        (
-            request for request in index.get("requests", [])
-            if request.get("dedupeKey") == dedupe_key and request.get("status") not in REQUEST_TERMINAL_STATUSES
-        ),
-        None,
-    )
-    if existing is not None:
-        return existing
+    lock_path = files["state_dir"] / "request-index.lock"
+    with advisory_file_lock(lock_path):
+        index = load_json(files["request_index_path"])
+        ensure_request_index_shape(index)
+        task_map = load_json(files["request_task_map_path"])
+        thread_state = load_optional_json(files["thread_state_path"], index) or index
+        existing = next(
+            (
+                request for request in index.get("requests", [])
+                if request.get("dedupeKey") == dedupe_key and request.get("status") not in REQUEST_TERMINAL_STATUSES
+            ),
+            None,
+        )
+        if existing is not None:
+            return existing
 
-    seq = int(index.get("nextSeq", 1))
-    request_id = build_request_id(seq)
-    request = {
-        "requestId": request_id,
-        "seq": seq,
-        "source": source,
-        "kind": kind,
-        "goal": goal,
-        "projectRoot": str(root.resolve()),
-        "contextPaths": [],
-        "threadKey": thread_key,
-        "priority": "P0" if kind in {"replan", "stop"} else "P1",
-        "scope": "project",
-        "mergePolicy": "append",
-        "replyPolicy": "summary",
-        "status": "queued",
-        "createdAt": now_iso(),
-        "parentRequestId": parent_request_id,
-        "originTaskId": origin_task_id,
-        "originSessionId": origin_session_id,
-        "statusReason": reason,
-        "dedupeKey": dedupe_key,
-        "targetPlanEpoch": target_plan_epoch,
-        "idempotencyKey": idempotency_key,
-        "submittedKindHint": kind,
-    }
-    request = normalize_request_record(request, index=index, task_map=task_map, thread_state=thread_state, generator=generator)
-    append_jsonl(files["queue_path"], request)
-    index["nextSeq"] = seq + 1
-    index["generatedAt"] = now_iso()
-    index["generator"] = generator
-    index.setdefault("requests", []).append(request)
-    record_request_thread_state(index, request, generator=generator)
-    write_json(files["request_index_path"], index)
-    update_request_snapshot(files, request, generator=generator)
+        seq = int(index.get("nextSeq", 1))
+        request_id = build_request_id(seq)
+        request = {
+            "requestId": request_id,
+            "seq": seq,
+            "source": source,
+            "kind": kind,
+            "goal": goal,
+            "projectRoot": str(root.resolve()),
+            "contextPaths": [],
+            "threadKey": thread_key,
+            "priority": "P0" if kind in {"replan", "stop"} else "P1",
+            "scope": "project",
+            "mergePolicy": "append",
+            "replyPolicy": "summary",
+            "status": "queued",
+            "createdAt": now_iso(),
+            "parentRequestId": parent_request_id,
+            "originTaskId": origin_task_id,
+            "originSessionId": origin_session_id,
+            "statusReason": reason,
+            "dedupeKey": dedupe_key,
+            "targetPlanEpoch": target_plan_epoch,
+            "idempotencyKey": idempotency_key,
+            "submittedKindHint": kind,
+        }
+        request = normalize_request_record(request, index=index, task_map=task_map, thread_state=thread_state, generator=generator)
+        append_jsonl(files["queue_path"], request)
+        index["nextSeq"] = seq + 1
+        index["generatedAt"] = now_iso()
+        index["generator"] = generator
+        index.setdefault("requests", []).append(request)
+        record_request_thread_state(index, request, generator=generator)
+        write_json(files["request_index_path"], index)
+        update_request_snapshot(files, request, generator=generator)
 
     lineage_event(
         root,
@@ -5646,6 +5881,7 @@ def reconcile_requests(root: Path, *, generator: str = "harness-reconcile"):
             continue
         if request.get("normalizedIntentClass") == "compound_split":
             follow_up_ids = []
+            internal_intents = request.get("internalIntents") or []
             if "inspection" in (request.get("internalIntents") or []):
                 follow_up = emit_follow_up_request(
                     root,
@@ -5660,7 +5896,7 @@ def reconcile_requests(root: Path, *, generator: str = "harness-reconcile"):
                     target_plan_epoch=request.get("targetPlanEpoch"),
                 )
                 follow_up_ids.append(follow_up.get("requestId"))
-            if "append_change" in (request.get("internalIntents") or []) and request.get("mergedIntoRequestId"):
+            if "append_change" in internal_intents and request.get("mergedIntoRequestId"):
                 follow_up = emit_follow_up_request(
                     root,
                     kind="replan",
@@ -5674,7 +5910,7 @@ def reconcile_requests(root: Path, *, generator: str = "harness-reconcile"):
                     target_plan_epoch=request.get("targetPlanEpoch"),
                 )
                 follow_up_ids.append(follow_up.get("requestId"))
-            elif any(intent in {"append_change", "fresh_work"} for intent in (request.get("internalIntents") or [])):
+            elif any(intent in {"append_change", "fresh_work"} for intent in internal_intents):
                 follow_up = emit_follow_up_request(
                     root,
                     kind=request.get("kind") or "implementation",
@@ -5684,6 +5920,20 @@ def reconcile_requests(root: Path, *, generator: str = "harness-reconcile"):
                     parent_request_id=request.get("requestId"),
                     reason="compound submission execution split",
                     dedupe_key=f"compound-exec:{request.get('canonicalGoalHash')}:{request.get('requestId')}",
+                    thread_key=request.get("targetThreadKey") or request.get("threadKey"),
+                    target_plan_epoch=request.get("targetPlanEpoch"),
+                )
+                follow_up_ids.append(follow_up.get("requestId"))
+            if not follow_up_ids:
+                follow_up = emit_follow_up_request(
+                    root,
+                    kind=request.get("kind") or "implementation",
+                    goal=f"Execution slice fallback for compound request {request.get('requestId')}: {request.get('goal')}",
+                    source="runtime:intake",
+                    generator=generator,
+                    parent_request_id=request.get("requestId"),
+                    reason="compound submission fallback split",
+                    dedupe_key=f"compound-fallback:{request.get('canonicalGoalHash')}:{request.get('requestId')}",
                     thread_key=request.get("targetThreadKey") or request.get("threadKey"),
                     target_plan_epoch=request.get("targetPlanEpoch"),
                 )
@@ -5702,6 +5952,12 @@ def reconcile_requests(root: Path, *, generator: str = "harness-reconcile"):
             internalized.append({"requestId": closed.get("requestId"), "mode": "compound_split_created", "followUpRequestIds": follow_up_ids})
             continue
         candidates = candidate_tasks_for_request(request, tasks)
+        if not candidates:
+            seeded = ensure_bootstrap_task_for_request(root, request, generator=generator)
+            if seeded:
+                task_pool = read_task_pool(files["harness"])
+                tasks = task_pool.get("tasks", []) if task_pool else []
+                candidates = candidate_tasks_for_request(request, tasks)
         if not candidates:
             update_request_status(
                 index,
@@ -5733,6 +5989,7 @@ def reconcile_requests(root: Path, *, generator: str = "harness-reconcile"):
                 "taskId": task.get("taskId"),
             })
 
+    realign_unstarted_control_plane_task_epochs(root, generator=generator)
     index = load_json(files["request_index_path"])
     index["generatedAt"] = now_iso()
     index["generator"] = generator
@@ -5958,7 +6215,14 @@ def build_thread_state(index: dict, task_pool: dict | None, request_summary: dic
             thread_requests[key].append(request)
     for thread_key, requests in thread_requests.items():
         requests = sorted(requests, key=lambda item: (item.get("seq", 0), item.get("createdAt") or ""))
-        current_epoch = max(int(item.get("targetPlanEpoch") or 1) for item in requests)
+        effective_epoch_requests = [
+            item for item in requests
+            if not (
+                item.get("normalizedIntentClass") == "compound_split"
+                and request_effect_terminal(item)
+            )
+        ] or requests
+        current_epoch = max(int(item.get("targetPlanEpoch") or 1) for item in effective_epoch_requests)
         active_requests = [item for item in requests if not request_effect_terminal(item)]
         related_tasks = [task for task in tasks if task.get("threadKey") == thread_key]
         context_rot_warnings = []

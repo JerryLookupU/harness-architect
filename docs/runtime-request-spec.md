@@ -70,6 +70,7 @@ The guard stays hard:
 - todo is derived from facts, not hand-maintained
 - completion gate is separate from todo and separate from blueprint source docs
 - unknown dirty worktrees block non-interactive execution
+- explicit `harness-runner run/recover` may override that automation-only dirty blocker, but not task-state or completion-gate blockers
 - only managed dirty worktrees can become checkpoint-eligible state
 
 ## Single-Entry Intake

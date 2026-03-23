@@ -9,6 +9,7 @@ CODEX_HOME_DIR="$TMP_ROOT/codex"
 PROJECT_ROOT="$TMP_ROOT/release-smoke-project"
 AUTO_INIT_ROOT="$TMP_ROOT/auto-init-project"
 EMPTY_INIT_ROOT="$TMP_ROOT/empty-init-project"
+INTAKE_ROOT="$TMP_ROOT/intake-project"
 UNBORN_ROOT="$TMP_ROOT/unborn-worktree-project"
 
 cleanup() {
@@ -43,6 +44,38 @@ done
 "$EMPTY_INIT_ROOT/.harness/bin/harness-runner" tick "$EMPTY_INIT_ROOT" --dispatch-mode print >/dev/null
 "$EMPTY_INIT_ROOT/.harness/bin/harness-runner" daemon "$EMPTY_INIT_ROOT" --interval 1 --dispatch-mode print --replace >/dev/null
 "$EMPTY_INIT_ROOT/.harness/bin/harness-runner" daemon-stop "$EMPTY_INIT_ROOT" >/dev/null
+mkdir -p "$INTAKE_ROOT"
+git -C "$INTAKE_ROOT" init -b main >/dev/null
+git -C "$INTAKE_ROOT" config user.name "Klein Smoke"
+git -C "$INTAKE_ROOT" config user.email "smoke@example.com"
+harness-init "$INTAKE_ROOT" >/dev/null
+harness-submit "$INTAKE_ROOT" --goal "检查当前实现并修复执行链路" --source smoke >/dev/null
+"$INTAKE_ROOT/.harness/bin/harness-runner" tick "$INTAKE_ROOT" --dispatch-mode print >/dev/null
+"$INTAKE_ROOT/.harness/bin/harness-runner" tick "$INTAKE_ROOT" --dispatch-mode print >/dev/null
+python3 - <<'PY' "$INTAKE_ROOT"
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+request_index = json.loads((root / ".harness/state/request-index.json").read_text())
+task_pool = json.loads((root / ".harness/task-pool.json").read_text())
+requests = request_index.get("requests", [])
+assert len(requests) >= 2, requests
+root_request = next(item for item in requests if item.get("requestId") == "R-0001")
+assert root_request.get("status") == "completed", root_request
+follow_up_ids = root_request.get("internalFollowUpRequestIds") or []
+assert follow_up_ids, root_request
+follow_ups = [item for item in requests if item.get("requestId") in follow_up_ids]
+assert any(item.get("source") == "runtime:intake" for item in follow_ups), follow_ups
+assert any(
+    item.get("kind") in {"implementation", "replan", "audit"} and item.get("status") in {"queued", "blocked", "running", "recoverable", "completed"}
+    for item in follow_ups
+), follow_ups
+tasks = task_pool.get("tasks", [])
+assert tasks, task_pool
+assert any(task.get("kind") in {"bootstrap", "audit"} for task in tasks), tasks
+PY
 harness-init "$PROJECT_ROOT" >/dev/null
 
 mkdir -p "$PROJECT_ROOT"

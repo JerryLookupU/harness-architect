@@ -265,7 +265,7 @@ def gc_project_tmux_sessions(root: Path, tasks: list[dict], heartbeats: dict, pr
     return killed
 
 
-def build_codex_command(session_id: str | None, execution_cwd: str) -> list[str]:
+def build_codex_command(task: dict, session_id: str | None, execution_cwd: str) -> list[str]:
     if session_id:
         return [
             "codex",
@@ -276,11 +276,18 @@ def build_codex_command(session_id: str | None, execution_cwd: str) -> list[str]
             "--skip-git-repo-check",
             "-",
         ]
+    model = (
+        task.get("executionModel")
+        or (task.get("dispatch") or {}).get("executionModel")
+        or "gpt-5.3-codex"
+    )
     return [
         "codex",
         "exec",
         "--yolo",
         "--skip-git-repo-check",
+        "-m",
+        model,
         "-C",
         execution_cwd,
         "-",
@@ -388,7 +395,28 @@ def call_route_session(script_path: Path, project_root: Path, task_id: str) -> d
     return json.loads(result.stdout)
 
 
+def bound_requests_for_task(project_root: str, task_id: str) -> list[dict]:
+    root = Path(project_root)
+    request_index = load_optional_json(root / ".harness" / "state" / "request-index.json", {}) or {}
+    task_map = load_optional_json(root / ".harness" / "state" / "request-task-map.json", {}) or {}
+    requests_by_id = {
+        request.get("requestId"): request
+        for request in request_index.get("requests", [])
+        if request.get("requestId")
+    }
+    related = []
+    for binding in task_map.get("bindings", []):
+        if binding.get("taskId") != task_id:
+            continue
+        request = requests_by_id.get(binding.get("requestId"))
+        if request:
+            related.append(request)
+    related.sort(key=lambda item: (item.get("seq", 0), item.get("createdAt") or ""))
+    return related
+
+
 def prompt_lines(task: dict, route_decision: dict, project_root: str, execution_cwd: str):
+    bound_requests = bound_requests_for_task(project_root, task.get("taskId"))
     lines = [
         "使用 klein-harness skill。",
         f"当前项目目录: {project_root}",
@@ -407,6 +435,17 @@ def prompt_lines(task: dict, route_decision: dict, project_root: str, execution_
         f"gateReason: {route_decision.get('gateReason')}",
         f"promptStages: {route_decision.get('promptStages', [])}",
         "",
+    ]
+    if bound_requests:
+        lines.extend([
+            "关联请求：",
+            *[
+                f"- {request.get('requestId')} [{request.get('kind')}/{request.get('status')}] {request.get('goal')}"
+                for request in bound_requests[-2:]
+            ],
+            "",
+        ])
+    lines.extend([
         "请读取 .harness/state/progress.json、.harness/state/todo-summary.json、.harness/state/completion-gate.json、.harness/state/guard-state.json、.harness/task-pool.json、.harness/session-registry.json。",
         "如果存在 .harness/state/feedback-summary.json，只读取当前 task 最近 3 条高严重度失败。",
         "如果存在 .harness/state/task-summary.json 或 .harness/state/worker-summary.json，先读这些 compact summaries。",
@@ -420,7 +459,19 @@ def prompt_lines(task: dict, route_decision: dict, project_root: str, execution_
         '{"oneScreenSummary":[],"crossWorkerFacts":[],"decisionsAssumptions":[],"touchedContractsPaths":[],"blockersRisks":[],"verification":[],"openQuestions":[],"tags":[],"evidenceRefs":[]}',
         "```",
         "这个 block 只写 cross-worker relevant facts，不要泄露隐藏推理，不要粘贴大段文件内容。",
-    ]
+    ])
+    if task.get("roleHint") == "orchestrator" or task.get("workerMode") in {"audit", "orchestrator"}:
+        lines.extend([
+            "",
+            "控制面约束：",
+            "- 什么算待做：只处理当前线程、当前 plan epoch、未 terminal、未 supersede、未被 completion gate 关闭的 actionable todo。",
+            "- 什么情况下允许自动改代码：只有 control-plane 明确放行且 guard-state safeToExecute=true 时，才允许后续 worker 自动改业务代码。",
+            "- 自动改完后谁来提交/推送：worker 负责本地修改与验证；是否提交/推送遵循 task 和 harness policy，默认不要替 operator 偷推远端。",
+            "- 出错、超时、脏工作区怎么处理：先区分 prompt 问题还是 harness 系统问题；保留证据链；不要绕过 spec 偷跑；unknown dirty 默认阻断自动化。",
+            "- 怎么知道真的完成：不能只看 exit code，必须同时看 verification、lineage/evidence、completion-gate、todo-summary 与 request/task 状态是否闭环。",
+            "- 如果观察到行为与这些要点不一致，先判定是提示词缺口还是 harness 系统缺口，再决定写结论还是继续修 .harness 控制面。",
+            "- 除非 task 明确允许，不要直接修改业务源码；优先修 harness/spec/流程问题。",
+        ])
     for failure in route_decision.get("recentFailures", [])[:3]:
         lines.append(
             f"- recentFailure: {failure.get('feedbackType')} [{failure.get('severity')}] {failure.get('message')}"
@@ -444,7 +495,7 @@ def dispatch_task(root: Path, task: dict, route_decision: dict, project_name: st
     execution_cwd = execution_cwd_for_task(root, task)
     prompt_path.write_text("\n".join(prompt_lines(task, route_decision, str(root), str(execution_cwd))) + "\n")
 
-    codex_cmd = build_codex_command(session_id, str(execution_cwd))
+    codex_cmd = build_codex_command(task, session_id, str(execution_cwd))
     runner_py = Path(__file__).resolve()
     refresh_state_py = state_dir.parent / "scripts" / "refresh-state.py"
     diff_summary_py = state_dir.parent / "scripts" / "diff-summary.py"
@@ -559,6 +610,16 @@ def write_runner_state(state_dir: Path, trigger: str, active_runs: list, recover
         "blockedRoutes": blocked_routes,
         "lastErrors": errors,
     })
+
+
+def emit_result_with_refresh(root: Path, payload: dict, exit_code: int = 0) -> int:
+    refresh_ok, refresh_error = refresh_hot_state(root)
+    if refresh_ok:
+        payload["refreshState"] = {"ok": True}
+    else:
+        payload["refreshState"] = {"ok": False, "error": refresh_error}
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return exit_code
 
 
 def write_heartbeat(state_dir: Path, task_id: str, tmux_session: str, phase: str = "running", exit_code: int | None = None):
@@ -920,8 +981,7 @@ def cmd_tick(root: Path, trigger: str = "shell", dispatch_mode: str = "tmux"):
                     errors=errors,
                     blocked_routes=blocked_routes,
                 )
-                print(json.dumps({"ok": True, "liveRuns": len(live_runs), "dispatched": [], "recoverable": len(recoverable), "dispatchable": len(dispatchable), "blocked": blocked_routes, "errors": errors, "guardState": guard_state, "tmuxGc": tmux_gc}, ensure_ascii=False, indent=2))
-                return 0
+                return emit_result_with_refresh(root, {"ok": True, "liveRuns": len(live_runs), "dispatched": [], "recoverable": len(recoverable), "dispatchable": len(dispatchable), "blocked": blocked_routes, "errors": errors, "guardState": guard_state, "tmuxGc": tmux_gc})
             preflight = evaluate_dispatch_preflight(
                 task,
                 request_summary=request_summary,
@@ -942,8 +1002,7 @@ def cmd_tick(root: Path, trigger: str = "shell", dispatch_mode: str = "tmux"):
                     errors=errors,
                     blocked_routes=blocked_routes,
                 )
-                print(json.dumps({"ok": True, "liveRuns": len(live_runs), "dispatched": [], "recoverable": len(recoverable), "dispatchable": len(dispatchable), "blocked": blocked_routes, "errors": errors, "tmuxGc": tmux_gc}, ensure_ascii=False, indent=2))
-                return 0
+                return emit_result_with_refresh(root, {"ok": True, "liveRuns": len(live_runs), "dispatched": [], "recoverable": len(recoverable), "dispatchable": len(dispatchable), "blocked": blocked_routes, "errors": errors, "tmuxGc": tmux_gc})
             route_decision = call_route_session(route_session_py, root, task["taskId"])
             if preflight.get("forceFresh") and route_decision.get("resumeStrategy") == "resume":
                 route_decision["resumeStrategy"] = "fresh"
@@ -989,8 +1048,7 @@ def cmd_tick(root: Path, trigger: str = "shell", dispatch_mode: str = "tmux"):
         "tmuxGc": tmux_gc,
         "errors": errors,
     }
-    print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0 if not errors else 1
+    return emit_result_with_refresh(root, result, 0 if not errors else 1)
 
 
 def cmd_run(root: Path, task_id: str, trigger: str = "shell", dispatch_mode: str = "tmux", lifecycle_status: str = "dispatched"):
@@ -1032,30 +1090,27 @@ def cmd_run(root: Path, task_id: str, trigger: str = "shell", dispatch_mode: str
             policy_summary=policy_summary,
         )
         if has_live_runner_session(task, heartbeats):
-            print(json.dumps({
+            return emit_result_with_refresh(root, {
                 "ok": True,
                 "taskId": task_id,
                 "status": task.get("status"),
                 "verificationStatus": task.get("verificationStatus"),
                 "note": "dispatch skipped: live runner session exists",
                 "tmuxGc": tmux_gc,
-            }, ensure_ascii=False, indent=2))
-            return 0
+            })
         if is_terminal_for_dispatch(task):
-            print(json.dumps({
+            return emit_result_with_refresh(root, {
                 "ok": True,
                 "taskId": task_id,
                 "status": task.get("status"),
                 "verificationStatus": task.get("verificationStatus"),
                 "note": "dispatch skipped: task already terminal by current task-pool state",
                 "tmuxGc": tmux_gc,
-            }, ensure_ascii=False, indent=2))
-            return 0
+            })
         if not guard_state.get("safeToExecute"):
             guard_override_reasons = manual_run_guard_override_reasons(guard_state)
             if not guard_override_reasons:
-                print(json.dumps({"ok": False, "taskId": task_id, "gateStatus": "blocked", "gateReason": "; ".join(guard_state.get("blockers", [])), "guardState": guard_state, "tmuxGc": tmux_gc}, ensure_ascii=False, indent=2))
-                return 1
+                return emit_result_with_refresh(root, {"ok": False, "taskId": task_id, "gateStatus": "blocked", "gateReason": "; ".join(guard_state.get("blockers", [])), "guardState": guard_state, "tmuxGc": tmux_gc}, 1)
         preflight = evaluate_dispatch_preflight(
             task,
             request_summary=request_summary,
@@ -1065,8 +1120,7 @@ def cmd_run(root: Path, task_id: str, trigger: str = "shell", dispatch_mode: str
             policy_summary=policy_summary,
         )
         if not preflight.get("ok"):
-            print(json.dumps({"ok": False, "taskId": task_id, "gateStatus": "blocked", "gateReason": "; ".join(preflight.get("blocked", [])), "tmuxGc": tmux_gc}, ensure_ascii=False, indent=2))
-            return 1
+            return emit_result_with_refresh(root, {"ok": False, "taskId": task_id, "gateStatus": "blocked", "gateReason": "; ".join(preflight.get("blocked", [])), "tmuxGc": tmux_gc}, 1)
         route_decision = call_route_session(route_session_py, root, task_id)
         if guard_override_reasons:
             prior_reason = route_decision.get("gateReason")
@@ -1083,23 +1137,20 @@ def cmd_run(root: Path, task_id: str, trigger: str = "shell", dispatch_mode: str
             route_decision["gateReason"] = f"{route_decision.get('gateReason')}; {resume_reason}"
         if not route_decision.get("dispatchReady"):
             emit_blocked_follow_up(root, task, route_decision)
-            print(json.dumps({
+            return emit_result_with_refresh(root, {
                 "ok": False,
                 "taskId": task_id,
                 "gateStatus": route_decision.get("gateStatus"),
                 "gateReason": route_decision.get("gateReason"),
                 "needsOrchestrator": route_decision.get("needsOrchestrator"),
                 "tmuxGc": tmux_gc,
-            }, ensure_ascii=False, indent=2))
-            return 1
+            }, 1)
         run = dispatch_task(root, task, route_decision, root.name, state_dir, log_dir, dispatch_mode)
         claim_dispatched_task(root, task_id, run, lifecycle_status=lifecycle_status)
         write_heartbeat(state_dir, task_id, run["tmuxSession"], phase=lifecycle_status)
-        print(json.dumps({"ok": True, "dispatched": run, "guardOverrideReasons": guard_override_reasons, "tmuxGc": tmux_gc}, ensure_ascii=False, indent=2))
-        return 0
+        return emit_result_with_refresh(root, {"ok": True, "dispatched": run, "guardOverrideReasons": guard_override_reasons, "tmuxGc": tmux_gc})
     except Exception as exc:
-        print(json.dumps({"ok": False, "error": str(exc), "tmuxGc": tmux_gc}, ensure_ascii=False, indent=2))
-        return 1
+        return emit_result_with_refresh(root, {"ok": False, "error": str(exc), "tmuxGc": tmux_gc}, 1)
 
 
 def cmd_recover(root: Path, task_id: str, trigger: str = "shell", dispatch_mode: str = "tmux"):

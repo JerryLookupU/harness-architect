@@ -33,7 +33,7 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INIT="$SCRIPT_DIR/harness-init"
-if [[ ! -x "$INIT" && -x "$SCRIPT_DIR/harness-init.sh" ]]; then
+if [[ ! -x "$INIT" && -f "$SCRIPT_DIR/harness-init.sh" ]]; then
   INIT="$SCRIPT_DIR/harness-init.sh"
 fi
 
@@ -43,11 +43,11 @@ ROOT="$(cd "$ROOT" && pwd)"
 LOCAL_SUBMIT="$ROOT/.harness/bin/harness-submit"
 
 if [[ ! -x "$LOCAL_SUBMIT" ]]; then
-  if [[ ! -x "$INIT" ]]; then
+  if [[ ! -f "$INIT" ]]; then
     echo "init helper not found: $INIT" >&2
     exit 1
   fi
-  "$INIT" "$ROOT" >/dev/null
+  bash "$INIT" "$ROOT" >/dev/null
 fi
 
 if [[ ! -x "$LOCAL_SUBMIT" ]]; then
