@@ -74,6 +74,18 @@ case "$COMMAND" in
   attach)
     attach_task "$@"
     ;;
+  run|recover)
+    if [[ "${KH_ENABLE_TWIN_NODE:-0}" = "1" ]] && command -v kh-worker-supervisor >/dev/null 2>&1; then
+      if [ "$#" -lt 2 ]; then
+        echo "usage: harness-runner $COMMAND <TASK_ID> <ROOT>" >&2
+        exit 1
+      fi
+      TASK_ID="$1"
+      ROOT="$2"
+      exec kh-worker-supervisor burst --root "$ROOT" --task-id "$TASK_ID" --worker-id "${KH_WORKER_ID:-worker-supervisor}" --causation-id "runner:$COMMAND:$TASK_ID"
+    fi
+    python3 "$PYTHON_RUNNER" "$COMMAND" "$@"
+    ;;
   tick|run|recover|finalize|list|daemon|daemon-stop|daemon-status)
     python3 "$PYTHON_RUNNER" "$COMMAND" "$@"
     ;;

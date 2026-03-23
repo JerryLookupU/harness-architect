@@ -214,6 +214,18 @@ def load_optional_json(path: Path, default=None):
 
 
 def write_json(path: Path, data):
+    if isinstance(data, dict) and data.get("schemaVersion"):
+        existing = load_optional_json(path, {})
+        current_revision = 0
+        if isinstance(existing, dict):
+            try:
+                current_revision = int(existing.get("revision") or 0)
+            except (TypeError, ValueError):
+                current_revision = 0
+        data = dict(data)
+        data.setdefault("generator", "klein-harness")
+        data["generatedAt"] = data.get("generatedAt") or now_iso()
+        data["revision"] = current_revision + 1
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False) as handle:
@@ -876,6 +888,9 @@ def ensure_runtime_scaffold(root: Path, generator: str = "harness-runtime"):
         "merge-summary.json",
         "worktree-registry.json",
         "merge-queue.json",
+        "lease-summary.json",
+        "dispatch-summary.json",
+        "checkpoint-summary.json",
     ):
         path = state_dir / path_name
         if not path.exists():

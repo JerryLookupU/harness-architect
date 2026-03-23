@@ -46,6 +46,24 @@ Current implementation note:
 - `lockHealthy` is currently derived from daemon/runtime health plus conflicting-execution checks
 - it is not yet a dedicated on-disk lease ledger
 
+## Planned node split
+
+The next refactor keeps the guard semantics but sharpens the runtime into two loops:
+
+- orchestrator big loop: `submit -> classify -> fuse -> bind -> route -> issue dispatch ticket -> ingest outcome -> verify -> emit repair/replan/complete -> refresh summaries`
+- worker-supervisor small loop: `claim ticket -> ensure worker -> ensure worktree -> run bounded burst -> write heartbeat/checkpoint/outcome -> release or renew lease`
+
+The critical rule stays the same:
+
+- the supervisor does not decide `fresh` vs `resume`
+- the route gate does
+
+See:
+
+- [twin-node-prd.md](/Users/mac/code/harness-architect/docs/dev/twin-node-prd.md)
+- [a2a-protocol-v1.md](/Users/mac/code/harness-architect/docs/dev/a2a-protocol-v1.md)
+- [migration-plan.md](/Users/mac/code/harness-architect/docs/dev/migration-plan.md)
+
 ## Key State
 
 - `.harness/state/guard-state.json`

@@ -50,6 +50,27 @@ submit
 -> optional follow-up request re-enters queue
 ```
 
+## Planned Node Split
+
+The current architecture already assumes `route-first-dispatch-second`, repo-local state, and explicit lineage.
+The next control-plane tightening is to freeze that split into two nodes:
+
+- `orchestrator-node`
+- `worker-supervisor-node`
+
+Planned authority:
+
+- orchestrator owns intake, reconcile, route, verify/RCA, and project summary refresh
+- worker supervisor owns worker-pool control, worktree preparation/reuse, bounded bursts, heartbeat/checkpoint/outcome write-back, and cleanup
+
+The detailed design is captured in:
+
+- [twin-node-prd.md](/Users/mac/code/harness-architect/docs/dev/twin-node-prd.md)
+- [a2a-protocol-v1.md](/Users/mac/code/harness-architect/docs/dev/a2a-protocol-v1.md)
+- [migration-plan.md](/Users/mac/code/harness-architect/docs/dev/migration-plan.md)
+
+This is a planned tightening of the current runtime boundary, not a claim that the full split already exists in code today.
+
 ## Lineage Dimensions
 
 The harness avoids self-intersection by adding explicit dimensions instead of letting prompts blur them together.

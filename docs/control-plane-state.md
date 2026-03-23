@@ -52,6 +52,26 @@ Every summary snapshot includes:
 - `generator`
 - `generatedAt`
 
+## Planned authority summaries
+
+For the orchestrator / worker-supervisor split, the next authority-tightening pass should add:
+
+- `.harness/state/lease-summary.json`
+- `.harness/state/dispatch-summary.json`
+- `.harness/state/checkpoint-summary.json`
+
+These are intended to answer:
+
+- which lease is active and who owns it
+- which dispatch ticket is currently approved or in flight
+- which checkpoint is the latest resumable execution boundary
+
+The design contract for this split is documented in:
+
+- [twin-node-prd.md](/Users/mac/code/harness-architect/docs/dev/twin-node-prd.md)
+- [a2a-protocol-v1.md](/Users/mac/code/harness-architect/docs/dev/a2a-protocol-v1.md)
+- [migration-plan.md](/Users/mac/code/harness-architect/docs/dev/migration-plan.md)
+
 ## Progress surfaces
 
 Machine-readable progress lives in `.harness/state/progress.json`.
