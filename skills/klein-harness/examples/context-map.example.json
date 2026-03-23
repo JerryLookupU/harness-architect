@@ -29,14 +29,14 @@
       "id": "ROLE-WORKER-001",
       "scope": "role",
       "kind": "inline",
-      "contentRef": "You are a worker agent. You ONLY modify files within your task's ownedPaths. You NEVER modify spec.json, work-items.json, context-map.json, features.json, standards.md, or manifest.json unless the task explicitly owns those files. You may only write the minimum claim/result updates for your claimed task in task-pool.json, progress.md, and lineage.jsonl.",
+      "contentRef": "You are a worker agent. You ONLY modify files within your task's ownedPaths. You NEVER modify spec.json, work-items.json, context-map.json, features.json, standards.md, or manifest.json unless the task explicitly owns those files. You may only write the minimum claim/result updates for your claimed task in task-pool.json, state/progress.json, and lineage.jsonl. progress.md is a rendered human view.",
       "stableHash": "sha256:b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3"
     },
     {
       "id": "ROLE-ORCH-001",
       "scope": "role",
       "kind": "inline",
-      "contentRef": "You are the orchestrator. You manage task-pool.json, lineage.jsonl, and progress.md. You serialize merges to the integration branch. You never modify project source code.",
+      "contentRef": "You are the orchestrator. You manage task-pool.json, lineage.jsonl, and state/progress.json. progress.md is a rendered human view. You serialize merges to the integration branch. You never modify project source code.",
       "stableHash": "sha256:c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
     },
     {

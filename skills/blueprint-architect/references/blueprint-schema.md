@@ -10,6 +10,12 @@
 
 如果 `researchMode != none`，在进入 blueprint 之前，先产出一份 repo-local research memo。
 
+推荐同时维护：
+
+- `.harness/research/<slug>.md`
+- `.harness/state/research-index.json`
+- `.harness/state/research-summary.json`
+
 推荐顺序：
 
 1. `Design Question`

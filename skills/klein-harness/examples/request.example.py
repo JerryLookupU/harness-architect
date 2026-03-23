@@ -91,6 +91,10 @@ def build_report_payload(root: Path, request_id: str | None):
     task_map = load_json(files["request_task_map_path"])
     current = load_optional_json(files["state_dir"] / "current.json", {})
     runtime = load_optional_json(files["state_dir"] / "runtime.json", {})
+    queue_summary = load_optional_json(files["queue_summary_path"], {})
+    task_summary = load_optional_json(files["task_summary_path"], {})
+    worker_summary = load_optional_json(files["worker_summary_path"], {})
+    daemon_summary = load_optional_json(files["daemon_summary_path"], {})
     request_summary = load_optional_json(files["request_summary_path"]) or build_request_summary(index, task_map, None)
     lineage_index = load_optional_json(files["lineage_index_path"], {})
     root_cause_summary = load_optional_json(files["root_cause_summary_path"]) or build_root_cause_summary(load_jsonl(files["root_cause_log_path"]))
@@ -126,11 +130,15 @@ def build_report_payload(root: Path, request_id: str | None):
         "currentTaskTitle": current.get("currentTaskTitle"),
         "activeTaskCount": runtime.get("activeTaskCount", 0),
         "activeRunnerCount": runtime.get("activeRunnerCount", 0),
+        "queueDepth": queue_summary.get("queueDepth", 0),
         "recoverableTaskCount": runtime.get("recoverableTaskCount", 0),
         "recoverableRequestCount": request_summary.get("recoverableRequestCount", 0),
         "blockedRequestCount": request_summary.get("blockedRequestCount", 0),
         "verifiedTaskCount": runtime.get("verifiedTaskCount", 0),
         "failingVerificationCount": runtime.get("failingVerificationCount", 0),
+        "taskSummary": task_summary,
+        "workerSummary": worker_summary,
+        "daemonSummary": daemon_summary,
         "lastTickAt": runtime.get("lastTickAt"),
         "lastTrigger": runtime.get("lastTrigger"),
         "orchestrationSessionId": runtime.get("orchestrationSessionId") or session_registry.get("orchestrationSessionId"),
@@ -154,11 +162,15 @@ def format_report_text(payload: dict):
         f"currentTask: {payload.get('currentTaskId')} {payload.get('currentTaskTitle')}",
         f"activeTaskCount: {payload.get('activeTaskCount')}",
         f"activeRunnerCount: {payload.get('activeRunnerCount')}",
+        f"queueDepth: {payload.get('queueDepth')}",
         f"recoverableTaskCount: {payload.get('recoverableTaskCount')}",
         f"recoverableRequestCount: {payload.get('recoverableRequestCount')}",
         f"blockedRequestCount: {payload.get('blockedRequestCount')}",
         f"verifiedTaskCount: {payload.get('verifiedTaskCount')}",
         f"failingVerificationCount: {payload.get('failingVerificationCount')}",
+        f"runtimeHealth: {payload.get('daemonSummary', {}).get('runtimeHealth')}",
+        f"dispatchBackendDefault: {payload.get('daemonSummary', {}).get('dispatchBackendDefault')}",
+        f"workerCount: {payload.get('workerSummary', {}).get('workerCount')}",
         f"lineageEventCount: {payload.get('lineageEventCount')}",
         f"rootCauseCount: {payload.get('rootCauseSummary', {}).get('rcaCount', 0)}",
         f"openRootCauseCount: {payload.get('rootCauseSummary', {}).get('openCount', 0)}",

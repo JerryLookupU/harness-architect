@@ -1,5 +1,8 @@
 # Blueprint Research Stage
 
+This document is retained as a compatibility pointer.
+See [`docs/blueprint-research-gate.md`](./blueprint-research-gate.md) for the current machine-first version.
+
 Blueprint work should not default to deep external research.
 
 Klein-Harness uses a gated pre-blueprint stage:

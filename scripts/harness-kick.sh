@@ -569,7 +569,7 @@ ${CONTEXT_PROMPT_BLOCK}
 2. 先读取用户指定的附加上下文（如果存在 --context / --prd），再做仓库探测与分析。
 3. 先生成 .harness/standards.md 和 .harness/verification-rules/manifest.json，再继续编排。
 4. 生成 .harness/features.json、.harness/work-items.json、.harness/spec.json，先 draft，再 refinement，不要直接把粗糙任务放进 task-pool。
-5. refinement 后再生成 .harness/task-pool.json、.harness/context-map.json、.harness/progress.md、.harness/session-registry.json、.harness/lineage.jsonl、.harness/audit-report.md。
+5. refinement 后再生成 .harness/task-pool.json、.harness/context-map.json、.harness/state/progress.json、.harness/progress.md（由 JSON 渲染）、.harness/session-registry.json、.harness/lineage.jsonl、.harness/audit-report.md。
 6. 检查项目根 AGENTS.md：
    - 如果已有规则，保留其他工程规则。
    - 如果缺少 SOUL 段，新增。
@@ -577,6 +577,7 @@ ${CONTEXT_PROMPT_BLOCK}
    - 除非用户明确要求，不要强加具体人格模板。
 7. 让 operator plane 可直接使用，至少确认这些入口可用：
    - .harness/bin/harness-status
+   - .harness/bin/harness-ops
    - .harness/bin/harness-watch
    - .harness/bin/harness-query
    - .harness/bin/harness-dashboard
@@ -623,6 +624,7 @@ print_commands() {
 
 Operator commands:
   "$PROJECT_ROOT/.harness/bin/harness-status" "$PROJECT_ROOT"
+  "$PROJECT_ROOT/.harness/bin/harness-ops" "$PROJECT_ROOT" top
   "$PROJECT_ROOT/.harness/bin/harness-watch" "$PROJECT_ROOT" 2
   "$PROJECT_ROOT/.harness/bin/harness-query" overview "$PROJECT_ROOT" --text
   "$PROJECT_ROOT/.harness/bin/harness-query" current "$PROJECT_ROOT" --text
@@ -676,7 +678,7 @@ EOF
 }
 
 bootstrap_ready() {
-  [[ -f "$PROJECT_ROOT/.harness/progress.md" ]] \
+  ([[ -f "$PROJECT_ROOT/.harness/state/progress.json" ]] || [[ -f "$PROJECT_ROOT/.harness/progress.md" ]]) \
     && [[ -f "$PROJECT_ROOT/.harness/task-pool.json" ]] \
     && [[ -f "$PROJECT_ROOT/.harness/work-items.json" ]] \
     && [[ -f "$PROJECT_ROOT/.harness/spec.json" ]]

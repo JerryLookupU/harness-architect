@@ -24,11 +24,11 @@ touch "$PROJECT_ROOT/.harness/.worktrees/T-100-smoke/smoke-pass.txt"
 mkdir -p "$PROJECT_ROOT/.harness/.worktrees/T-101-rca-repair"
 touch "$PROJECT_ROOT/.harness/.worktrees/T-101-rca-repair/smoke-rca-pass.txt"
 
-cat > "$PROJECT_ROOT/.harness/progress.md" <<'EOF'
-# Smoke Progress
-
-```json
+cat > "$PROJECT_ROOT/.harness/state/progress.json" <<'EOF'
 {
+  "schemaVersion": "1.0",
+  "generator": "smoke-test",
+  "generatedAt": "2026-03-22T00:00:00+08:00",
   "mode": "agent-entry",
   "planningStage": "execution-ready",
   "currentFocus": "WI-100",
@@ -42,9 +42,10 @@ cat > "$PROJECT_ROOT/.harness/progress.md" <<'EOF'
     "Route and preview dispatch",
     "Verify and report closed loop"
   ],
-  "lastAuditStatus": "pass"
+  "lastAuditStatus": "pass",
+  "claimSummary": {},
+  "legacyFallbackUsed": false
 }
-```
 EOF
 
 cat > "$PROJECT_ROOT/.harness/spec.json" <<'EOF'
@@ -346,6 +347,13 @@ REPAIR_RUN_JSON="$TMP_ROOT/repair-run.json"
 REPAIR_FINALIZE_JSON="$TMP_ROOT/repair-finalize.json"
 LOG_SEARCH_JSON="$TMP_ROOT/log-search.json"
 LOG_SEARCH_DETAIL_JSON="$TMP_ROOT/log-search-detail.json"
+OPS_TOP_JSON="$TMP_ROOT/ops-top.json"
+OPS_QUEUE_JSON="$TMP_ROOT/ops-queue.json"
+OPS_WORKERS_JSON="$TMP_ROOT/ops-workers.json"
+OPS_TASK_JSON="$TMP_ROOT/ops-task.json"
+OPS_DAEMON_JSON="$TMP_ROOT/ops-daemon.json"
+OPS_DOCTOR_JSON="$TMP_ROOT/ops-doctor.json"
+OPS_WATCH_TEXT="$TMP_ROOT/ops-watch.txt"
 
 harness-submit "$PROJECT_ROOT" --kind implementation --goal "Apply smoke runtime patch" --source smoke > "$SUBMIT_JSON"
 REQUEST_ID="$(python3 - <<'PY' "$SUBMIT_JSON"
@@ -416,8 +424,19 @@ python3 "$PROJECT_ROOT/.harness/scripts/refresh-state.py" "$PROJECT_ROOT" >/dev/
 harness-report "$PROJECT_ROOT" --request-id "$BUG_REQUEST_ID" --format json > "$RCA_REPORT_JSON"
 "$PROJECT_ROOT/.harness/bin/harness-log-search" "$PROJECT_ROOT" --task-id T-100 --keyword smoke --json > "$LOG_SEARCH_JSON"
 "$PROJECT_ROOT/.harness/bin/harness-log-search" "$PROJECT_ROOT" --task-id T-100 --keyword smoke --detail --json > "$LOG_SEARCH_DETAIL_JSON"
+"$PROJECT_ROOT/.harness/bin/harness-runner" daemon "$PROJECT_ROOT" --interval 1 --dispatch-mode print --replace >/dev/null
+sleep 2
+python3 "$PROJECT_ROOT/.harness/scripts/refresh-state.py" "$PROJECT_ROOT" >/dev/null
+"$PROJECT_ROOT/.harness/bin/harness-ops" "$PROJECT_ROOT" --format json top > "$OPS_TOP_JSON"
+"$PROJECT_ROOT/.harness/bin/harness-ops" "$PROJECT_ROOT" --format json queue > "$OPS_QUEUE_JSON"
+"$PROJECT_ROOT/.harness/bin/harness-ops" "$PROJECT_ROOT" --format json workers > "$OPS_WORKERS_JSON"
+"$PROJECT_ROOT/.harness/bin/harness-ops" "$PROJECT_ROOT" --format json task T-100 > "$OPS_TASK_JSON"
+"$PROJECT_ROOT/.harness/bin/harness-ops" "$PROJECT_ROOT" --format json daemon status > "$OPS_DAEMON_JSON"
+"$PROJECT_ROOT/.harness/bin/harness-ops" "$PROJECT_ROOT" --format json doctor > "$OPS_DOCTOR_JSON"
+"$PROJECT_ROOT/.harness/bin/harness-ops" "$PROJECT_ROOT" watch --view top --count 1 > "$OPS_WATCH_TEXT"
+"$PROJECT_ROOT/.harness/bin/harness-runner" daemon-stop "$PROJECT_ROOT" >/dev/null
 
-python3 - <<'PY' "$PROJECT_ROOT" "$REQUEST_ID" "$BUG_REQUEST_ID" "$RECONCILE_JSON" "$RUN_JSON" "$RECOVER_JSON" "$FINALIZE_JSON" "$REPORT_JSON" "$BUG_RECONCILE_JSON" "$REPAIR_RECONCILE_JSON" "$REPAIR_RUN_JSON" "$REPAIR_FINALIZE_JSON" "$RCA_REPORT_JSON" "$LOG_SEARCH_JSON" "$LOG_SEARCH_DETAIL_JSON"
+python3 - <<'PY' "$PROJECT_ROOT" "$REQUEST_ID" "$BUG_REQUEST_ID" "$RECONCILE_JSON" "$RUN_JSON" "$RECOVER_JSON" "$FINALIZE_JSON" "$REPORT_JSON" "$BUG_RECONCILE_JSON" "$REPAIR_RECONCILE_JSON" "$REPAIR_RUN_JSON" "$REPAIR_FINALIZE_JSON" "$RCA_REPORT_JSON" "$LOG_SEARCH_JSON" "$LOG_SEARCH_DETAIL_JSON" "$OPS_TOP_JSON" "$OPS_QUEUE_JSON" "$OPS_WORKERS_JSON" "$OPS_TASK_JSON" "$OPS_DAEMON_JSON" "$OPS_DOCTOR_JSON" "$OPS_WATCH_TEXT"
 import json
 import sys
 from pathlib import Path
@@ -437,6 +456,13 @@ repair_finalize = json.load(open(sys.argv[12]))
 rca_report = json.load(open(sys.argv[13]))
 log_search = json.load(open(sys.argv[14]))
 log_search_detail = json.load(open(sys.argv[15]))
+ops_top = json.load(open(sys.argv[16]))
+ops_queue = json.load(open(sys.argv[17]))
+ops_workers = json.load(open(sys.argv[18]))
+ops_task = json.load(open(sys.argv[19]))
+ops_daemon = json.load(open(sys.argv[20]))
+ops_doctor = json.load(open(sys.argv[21]))
+ops_watch_text = Path(sys.argv[22]).read_text()
 
 assert reconcile["bound"], "request should bind to at least one task"
 assert reconcile["bound"][0]["requestId"] == request_id
@@ -486,6 +512,12 @@ assert compact_log_path.exists(), "compact handoff log should exist after finali
 compact_text = compact_log_path.read_text()
 assert "One-screen summary" in compact_text
 assert "Cross-worker relevant facts" in compact_text
+
+progress_json = json.load(open(project_root / ".harness/state/progress.json"))
+progress_md_text = (project_root / ".harness/progress.md").read_text()
+assert progress_json["currentTaskId"] == "T-100"
+assert "```json" not in progress_md_text
+assert "rendered from `.harness/state/progress.json`" in progress_md_text
 
 log_index = json.load(open(project_root / ".harness/state/log-index.json"))
 assert log_index["compactLogCount"] >= 2
@@ -542,6 +574,31 @@ research_index = json.load(open(project_root / ".harness/state/research-index.js
 assert research_index["memoCount"] >= 1
 assert research_index["researchModes"]["targeted"] >= 1
 assert "smoke-runtime-scan" in research_index["bySlug"]
+
+queue_summary = json.load(open(project_root / ".harness/state/queue-summary.json"))
+task_summary = json.load(open(project_root / ".harness/state/task-summary.json"))
+worker_summary = json.load(open(project_root / ".harness/state/worker-summary.json"))
+daemon_summary = json.load(open(project_root / ".harness/state/daemon-summary.json"))
+policy_summary = json.load(open(project_root / ".harness/state/policy-summary.json"))
+research_summary = json.load(open(project_root / ".harness/state/research-summary.json"))
+
+assert queue_summary["totalRequests"] >= 2
+assert "taskStatusCounts" in task_summary
+assert "workerNodes" in worker_summary
+assert daemon_summary["dispatchBackendDefault"] == "print"
+assert daemon_summary["runtimeHealth"] in {"healthy", "degraded"}
+assert policy_summary["dispatch"]["defaultBackend"] == "tmux"
+assert research_summary["memoCount"] >= 1
+
+assert ops_top["dispatchBackendDefault"] == "print"
+assert ops_top["runtimeHealth"] in {"healthy", "degraded"}
+assert ops_queue["queueDepth"] >= 0
+assert "dispatchBackendCounts" in ops_workers
+assert ops_task["taskId"] == "T-100"
+assert ops_daemon["dispatchBackendDefault"] == "print"
+assert "workerBackendHealth" in ops_daemon
+assert ops_doctor["ok"] in {True, False}
+assert "Harness Ops Top" in ops_watch_text
 PY
 
 echo "release smoke passed"

@@ -49,7 +49,7 @@ Suggested full bootstrap prompt for Codex:
 1. 先探测项目边界、源码目录、包管理器、测试命令、lint、CI、git 状态、高冲突路径。
 2. 先生成 .harness/standards.md 和 .harness/verification-rules/manifest.json，再继续编排。
 3. 生成 .harness/features.json、.harness/work-items.json、.harness/spec.json，先 draft，再 refinement，不要直接把粗糙任务放进 task-pool。
-4. refinement 后再生成 .harness/task-pool.json、.harness/context-map.json、.harness/progress.md、.harness/session-registry.json、.harness/lineage.jsonl、.harness/audit-report.md。
+4. refinement 后再生成 .harness/task-pool.json、.harness/context-map.json、.harness/state/progress.json、.harness/progress.md（由 JSON 渲染）、.harness/session-registry.json、.harness/lineage.jsonl、.harness/audit-report.md。
 5. 检查项目根 AGENTS.md：
    - 如果已有规则，保留其他工程规则。
    - 如果缺少 SOUL 段，新增。

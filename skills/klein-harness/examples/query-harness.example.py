@@ -1,25 +1,21 @@
 #!/usr/bin/env python3
 import argparse
 import json
-import re
 import sys
 from collections import Counter
 from pathlib import Path
 
-from runtime_common import build_log_index, collect_compact_log_entries, extract_raw_log_windows
+from runtime_common import (
+    build_log_index,
+    collect_compact_log_entries,
+    ensure_runtime_scaffold,
+    extract_raw_log_windows,
+    read_progress_state,
+)
 
 
 def load_json(path: Path):
     return json.loads(path.read_text())
-
-
-def load_progress(path: Path):
-    text = path.read_text()
-    match = re.search(r"```json\s*(\{[\s\S]*?\})\s*```", text)
-    if not match:
-        raise ValueError(f"missing json block in {path}")
-    return json.loads(match.group(1))
-
 
 def load_optional_json(path: Path):
     if path.exists():
@@ -207,6 +203,43 @@ def make_feedback_view(feedback_summary, task_id=None):
         "recentFailures": feedback_summary.get("recentFailures", []),
         "byType": feedback_summary.get("byType", {}),
         "bySeverity": feedback_summary.get("bySeverity", {}),
+    }
+
+
+def make_requests_view(request_summary):
+    return {
+        "requestCounts": request_summary.get("requestCounts", {}),
+        "activeRequest": request_summary.get("activeRequest"),
+        "recentRequests": request_summary.get("recentRequests", []),
+        "bindings": request_summary.get("bindings", []),
+    }
+
+
+def make_workers_view(worker_summary):
+    return worker_summary or {
+        "workerCount": 0,
+        "healthyWorkerCount": 0,
+        "staleWorkerCount": 0,
+        "recoverableWorkerCount": 0,
+        "dispatchBackendCounts": {},
+        "workerNodes": [],
+    }
+
+
+def make_daemon_view(daemon_summary):
+    return daemon_summary or {
+        "status": "stopped",
+        "runtimeHealth": "unknown",
+        "dispatchBackendDefault": None,
+        "workerBackendHealth": {},
+    }
+
+
+def make_blockers_view(queue_summary, task_summary, log_index):
+    return {
+        "queueBlocked": queue_summary.get("recentBlockedRequests", []) if queue_summary else [],
+        "routeBlocked": task_summary.get("blockedRoutes", []) if task_summary else [],
+        "logBlocked": log_index.get("openBlockers", []) if log_index else [],
     }
 
 
@@ -430,13 +463,66 @@ def format_text(view, payload):
                 lines.append(f"- lines {window.get('lineStart')}-{window.get('lineEnd')}")
                 lines.append(window.get("snippet"))
         return "\n".join(lines)
+    if view == "requests":
+        lines = [
+            f"requestCounts: {payload.get('requestCounts', {})}",
+        ]
+        active = payload.get("activeRequest")
+        if active:
+            lines.append(f"activeRequest: {active.get('requestId')} [{active.get('status')}] {active.get('kind')}")
+        for item in payload.get("recentRequests", []):
+            lines.append(f"- {item.get('requestId')} [{item.get('status')}] {item.get('kind')} {item.get('goal')}")
+        return "\n".join(lines)
+    if view == "workers":
+        lines = [
+            f"workerCount: {payload.get('workerCount', 0)}",
+            f"healthyWorkerCount: {payload.get('healthyWorkerCount', 0)}",
+            f"staleWorkerCount: {payload.get('staleWorkerCount', 0)}",
+            f"recoverableWorkerCount: {payload.get('recoverableWorkerCount', 0)}",
+            f"dispatchBackendCounts: {payload.get('dispatchBackendCounts', {})}",
+        ]
+        for item in payload.get("workerNodes", []):
+            lines.append(
+                f"- {item.get('taskId')} node={item.get('nodeId')} backend={item.get('dispatchBackend')} nodeHealth={item.get('nodeHealth')} backendHealth={item.get('backendHealth')}"
+            )
+        return "\n".join(lines)
+    if view == "daemon":
+        return "\n".join(
+            [
+                f"status: {payload.get('status')}",
+                f"runtimeHealth: {payload.get('runtimeHealth')}",
+                f"dispatchBackendDefault: {payload.get('dispatchBackendDefault')}",
+                f"sessionName: {payload.get('sessionName')}",
+                f"sessionAlive: {payload.get('sessionAlive')}",
+                f"activeRunnerCount: {payload.get('activeRunnerCount')}",
+                f"staleRunnerCount: {payload.get('staleRunnerCount')}",
+                f"workerBackendHealth: {payload.get('workerBackendHealth', {})}",
+            ]
+        )
+    if view == "blockers":
+        lines = ["queueBlocked:"]
+        if payload.get("queueBlocked"):
+            lines.extend(f"- {item.get('requestId')} {item.get('statusReason')}" for item in payload["queueBlocked"])
+        else:
+            lines.append("- none")
+        lines.append("routeBlocked:")
+        if payload.get("routeBlocked"):
+            lines.extend(f"- {item.get('taskId')} {item.get('gateReason')}" for item in payload["routeBlocked"])
+        else:
+            lines.append("- none")
+        lines.append("logBlocked:")
+        if payload.get("logBlocked"):
+            lines.extend(f"- {item.get('taskId')} {item.get('blockers')}" for item in payload["logBlocked"])
+        else:
+            lines.append("- none")
+        return "\n".join(lines)
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", required=True)
-    parser.add_argument("--view", required=True, choices=["overview", "progress", "current", "blueprint", "task", "feedback", "logs", "log"])
+    parser.add_argument("--view", required=True, choices=["overview", "progress", "current", "blueprint", "task", "feedback", "requests", "workers", "daemon", "blockers", "logs", "log"])
     parser.add_argument("--task-id")
     parser.add_argument("--request-id")
     parser.add_argument("--session-id")
@@ -450,15 +536,21 @@ def main():
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
-    harness = root / ".harness"
-    state_dir = harness / "state"
+    files = ensure_runtime_scaffold(root, generator="harness-query")
+    harness = files["harness"]
+    state_dir = files["state_dir"]
     current_state = load_optional_json(state_dir / "current.json")
     runtime_state = load_optional_json(state_dir / "runtime.json")
     blueprint_state = load_optional_json(state_dir / "blueprint-index.json")
     feedback_summary = load_optional_json(state_dir / "feedback-summary.json")
+    queue_summary = load_optional_json(files["queue_summary_path"], {})
+    task_summary = load_optional_json(files["task_summary_path"], {})
+    worker_summary = load_optional_json(files["worker_summary_path"], {})
+    daemon_summary = load_optional_json(files["daemon_summary_path"], {})
+    request_summary = load_optional_json(files["request_summary_path"], {})
     log_index = load_optional_json(state_dir / "log-index.json") or build_log_index(root)
 
-    progress = current_state or load_progress(harness / "progress.md")
+    progress = current_state or read_progress_state(files, generator="harness-query")
     task_pool = load_json(harness / "task-pool.json")
     work_items = load_json(harness / "work-items.json")
     features = load_json(harness / "features.json")
@@ -498,6 +590,14 @@ def main():
         payload = make_task_view(find_task(tasks, args.task_id), feedback_summary)
     elif args.view == "feedback":
         payload = make_feedback_view(feedback_summary, args.task_id)
+    elif args.view == "requests":
+        payload = make_requests_view(request_summary)
+    elif args.view == "workers":
+        payload = make_workers_view(worker_summary)
+    elif args.view == "daemon":
+        payload = make_daemon_view(daemon_summary)
+    elif args.view == "blockers":
+        payload = make_blockers_view(queue_summary, task_summary, log_index)
     elif args.view == "logs":
         payload = make_logs_view(
             root,

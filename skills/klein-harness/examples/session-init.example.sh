@@ -188,12 +188,22 @@ else
   log_warn "Not a git repository — skipping git history"
 fi
 
-# ── Step 3: Parse progress.md header ──
+# ── Step 3: Parse progress.json ──
 
+PROGRESS_JSON_FILE="$HARNESS_DIR/state/progress.json"
 PROGRESS_FILE="$HARNESS_DIR/progress.md"
-if [[ -f "$PROGRESS_FILE" ]]; then
-  log_info "Parsing progress.md..."
-  # Extract JSON block between first ``` pair
+if [[ -f "$PROGRESS_JSON_FILE" ]]; then
+  log_info "Parsing state/progress.json..."
+  if command -v jq &>/dev/null; then
+    CURRENT_FOCUS=$(jq -r '.currentFocus // "null"' "$PROGRESS_JSON_FILE")
+    CURRENT_ROLE=$(jq -r '.currentRole // "unknown"' "$PROGRESS_JSON_FILE")
+    AUDIT_STATUS=$(jq -r '.lastAuditStatus // "unknown"' "$PROGRESS_JSON_FILE")
+    log_ok "Current focus: $CURRENT_FOCUS | Current role: $CURRENT_ROLE | Last audit: $AUDIT_STATUS"
+  else
+    log_warn "jq not found; skipping detailed progress.json parsing"
+  fi
+elif [[ -f "$PROGRESS_FILE" ]]; then
+  log_warn "Falling back to legacy progress.md parsing..."
   if command -v jq &>/dev/null; then
     PROGRESS_JSON=$(sed -n '/^```json$/,/^```$/p' "$PROGRESS_FILE" | sed '1d;$d')
     CURRENT_FOCUS=$(echo "$PROGRESS_JSON" | jq -r '.currentFocus // "null"')
@@ -201,14 +211,10 @@ if [[ -f "$PROGRESS_FILE" ]]; then
     AUDIT_STATUS=$(echo "$PROGRESS_JSON" | jq -r '.lastAuditStatus // "unknown"')
     log_ok "Current focus: $CURRENT_FOCUS | Current role: $CURRENT_ROLE | Last audit: $AUDIT_STATUS"
   else
-    # Fallback: grep
-    CURRENT_FOCUS=$(grep -o '"currentFocus"[[:space:]]*:[[:space:]]*"[^"]*"' "$PROGRESS_FILE" | head -1 | sed 's/.*: *"//;s/"//')
-    CURRENT_ROLE=$(grep -o '"currentRole"[[:space:]]*:[[:space:]]*"[^"]*"' "$PROGRESS_FILE" | head -1 | sed 's/.*: *"//;s/"//')
-    AUDIT_STATUS=$(grep -o '"lastAuditStatus"[[:space:]]*:[[:space:]]*"[^"]*"' "$PROGRESS_FILE" | head -1 | sed 's/.*: *"//;s/"//')
-    log_ok "Current focus: ${CURRENT_FOCUS:-unknown} | Current role: ${CURRENT_ROLE:-unknown} | Last audit: ${AUDIT_STATUS:-unknown}"
+    log_warn "jq not found; legacy progress.md parsing skipped"
   fi
 else
-  log_warn "progress.md not found"
+  log_warn "progress.json not found"
 fi
 
 # ── Step 4: Inspect work-items / task claims ──

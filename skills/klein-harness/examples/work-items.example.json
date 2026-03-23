@@ -214,7 +214,7 @@
       "childWorkItemIds": [],
       "lineagePath": ["F-003", "WI-001", "WI-004"],
       "replanScope": "self",
-      "ownedPaths": [".harness/audit-report.md", ".harness/progress.md", ".harness/lineage.jsonl"],
+      "ownedPaths": [".harness/audit-report.md", ".harness/state/progress.json", ".harness/progress.md", ".harness/lineage.jsonl"],
       "branchName": "task/T-004-audit-delta-fix",
       "worktreePath": ".worktrees/T-004-audit-delta-fix",
       "diffBase": "refs/heads/orch/spec-S-003",

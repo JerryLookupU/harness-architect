@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import re
+import subprocess
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,6 +58,47 @@ CAUSE_PREVENTION_TARGET = {
     "merge_handoff": ".harness/audit-report.md",
     "underdetermined": ".harness/audit-report.md",
 }
+DEFAULT_POLICY_SUMMARY = {
+    "schemaVersion": SCHEMA_VERSION,
+    "generator": "klein-harness",
+    "generatedAt": None,
+    "heartbeat": {
+        "staleAfterSeconds": 180,
+        "recoverableAfterSeconds": 45,
+        "maxRecentHeartbeats": 20,
+    },
+    "retry": {
+        "maxAttempts": 3,
+        "backoffSeconds": [15, 60, 300],
+    },
+    "queue": {
+        "priorityOrder": ["P0", "P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9"],
+        "maxRecentRequests": 10,
+        "maxBlockedItems": 10,
+    },
+    "daemon": {
+        "defaultIntervalSeconds": 60,
+        "maxRecentErrors": 5,
+        "maxRecentEvents": 10,
+        "degradedAfterSeconds": 180,
+    },
+    "dispatch": {
+        "defaultBackend": "tmux",
+        "supportedBackends": ["tmux", "print"],
+        "printIsNonExecuting": True,
+        "backendHealthThresholds": {
+            "tmuxSessionMissing": "error",
+            "printPreview": "info",
+        },
+    },
+    "hotState": {
+        "maxRecentFailures": 5,
+        "maxTaskFailures": 3,
+        "maxActiveItems": 10,
+        "maxRecentLogs": 10,
+        "maxOpenBlockers": 10,
+    },
+}
 
 
 def now_iso():
@@ -101,6 +143,248 @@ def load_progress(path: Path):
     if not match:
         raise ValueError(f"missing json block in {path}")
     return json.loads(match.group(1))
+
+
+def priority_rank(priority: str | None, order: list[str] | None = None) -> int:
+    priority_order = order or DEFAULT_POLICY_SUMMARY["queue"]["priorityOrder"]
+    if priority in priority_order:
+        return priority_order.index(priority)
+    return len(priority_order)
+
+
+def parse_iso(value: str | None):
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def age_seconds(value: str | None) -> int | None:
+    parsed = parse_iso(value)
+    if parsed is None:
+        return None
+    now = datetime.now(parsed.tzinfo or timezone.utc)
+    return max(0, int((now - parsed).total_seconds()))
+
+
+def bounded(items, limit: int):
+    return list(items or [])[:limit]
+
+
+def default_progress_state() -> dict:
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "generator": "klein-harness",
+        "generatedAt": now_iso(),
+        "mode": "bootstrap",
+        "planningStage": "draft",
+        "currentFocus": None,
+        "currentRole": "orchestrator",
+        "currentTaskId": None,
+        "currentTaskTitle": None,
+        "currentTaskSummary": None,
+        "blockers": [],
+        "nextActions": [],
+        "lastAuditStatus": "unknown",
+        "claimSummary": {},
+        "legacyFallbackUsed": False,
+    }
+
+
+def render_progress_markdown(progress: dict) -> str:
+    lines = [
+        "# Harness Progress",
+        "",
+        f"- mode: {progress.get('mode') or '-'}",
+        f"- planningStage: {progress.get('planningStage') or '-'}",
+        f"- currentFocus: {progress.get('currentFocus') or '-'}",
+        f"- currentRole: {progress.get('currentRole') or '-'}",
+        f"- currentTaskId: {progress.get('currentTaskId') or '-'}",
+        f"- currentTaskTitle: {progress.get('currentTaskTitle') or '-'}",
+        f"- lastAuditStatus: {progress.get('lastAuditStatus') or '-'}",
+        "",
+        "## Summary",
+        progress.get("currentTaskSummary") or "No current task summary.",
+        "",
+        "## Blockers",
+    ]
+    blockers = progress.get("blockers", [])
+    if blockers:
+        lines.extend(f"- {item}" for item in blockers[:10])
+    else:
+        lines.append("- none")
+    lines.extend(["", "## Next Actions"])
+    next_actions = progress.get("nextActions", [])
+    if next_actions:
+        lines.extend(f"- {item}" for item in next_actions[:10])
+    else:
+        lines.append("- none")
+    lines.extend([
+        "",
+        "## Machine Source",
+        "- This file is rendered from `.harness/state/progress.json`.",
+        "- Do not parse machine state from this Markdown surface.",
+    ])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_progress_projection(files: dict, progress: dict, *, generator: str):
+    snapshot = default_progress_state()
+    snapshot.update(progress or {})
+    snapshot["schemaVersion"] = SCHEMA_VERSION
+    snapshot["generator"] = generator
+    snapshot["generatedAt"] = now_iso()
+    write_json(files["progress_state_path"], snapshot)
+    files["progress_markdown_path"].write_text(render_progress_markdown(snapshot), encoding="utf-8")
+    return snapshot
+
+
+def read_progress_state(files: dict, *, generator: str):
+    progress_json = files["progress_state_path"]
+    progress_md = files["progress_markdown_path"]
+    if progress_json.exists():
+        data = load_json(progress_json)
+        data.setdefault("legacyFallbackUsed", False)
+        return data
+    if progress_md.exists():
+        legacy = load_progress(progress_md)
+        legacy["legacyFallbackUsed"] = True
+        legacy["deprecatedSource"] = ".harness/progress.md"
+        return write_progress_projection(files, legacy, generator=generator)
+    return write_progress_projection(files, default_progress_state(), generator=generator)
+
+
+def render_research_markdown(summary: dict) -> str:
+    lines = [
+        "# Research Summary",
+        "",
+        f"- memoCount: {summary.get('memoCount', 0)}",
+        f"- researchModes: {summary.get('researchModes', {})}",
+        "",
+        "## Recent Memos",
+    ]
+    recent = summary.get("recentMemos", [])
+    if recent:
+        for item in recent[:10]:
+            lines.append(
+                f"- {item.get('slug')} [{item.get('researchMode')}] {item.get('path')}"
+            )
+    else:
+        lines.append("- none")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def build_policy_summary(generator: str = "klein-harness") -> dict:
+    policy = json.loads(json.dumps(DEFAULT_POLICY_SUMMARY))
+    policy["generator"] = generator
+    policy["generatedAt"] = now_iso()
+    return policy
+
+
+def load_policy_summary(path: Path | None, default_generator: str = "klein-harness") -> dict:
+    if path and path.exists():
+        policy = load_json(path)
+        policy.setdefault("dispatch", DEFAULT_POLICY_SUMMARY["dispatch"])
+        policy.setdefault("heartbeat", DEFAULT_POLICY_SUMMARY["heartbeat"])
+        policy.setdefault("retry", DEFAULT_POLICY_SUMMARY["retry"])
+        policy.setdefault("queue", DEFAULT_POLICY_SUMMARY["queue"])
+        policy.setdefault("daemon", DEFAULT_POLICY_SUMMARY["daemon"])
+        policy.setdefault("hotState", DEFAULT_POLICY_SUMMARY["hotState"])
+        return policy
+    return build_policy_summary(generator=default_generator)
+
+
+def load_runner_heartbeats(state_dir: Path) -> dict:
+    data = load_optional_json(state_dir / "runner-heartbeats.json", {})
+    entries = data.get("entries", {}) if isinstance(data, dict) else {}
+    return entries if isinstance(entries, dict) else {}
+
+
+def runner_daemon_paths(state_dir: Path) -> dict:
+    return {
+        "state": state_dir / "runner-daemon.json",
+        "log": state_dir / "runner-daemon.log",
+        "session": state_dir / "runner-daemon-tmux-session.txt",
+        "script": state_dir / "runner-daemon.sh",
+    }
+
+
+def load_runner_daemon_state(state_dir: Path) -> dict:
+    return load_optional_json(
+        runner_daemon_paths(state_dir)["state"],
+        {
+            "schemaVersion": SCHEMA_VERSION,
+            "generator": "harness-runner",
+            "generatedAt": now_iso(),
+            "status": "stopped",
+            "sessionName": None,
+            "intervalSeconds": None,
+            "dispatchMode": None,
+            "lastTickAt": None,
+            "lastRefreshAt": None,
+            "lastTickResult": None,
+            "lastError": None,
+            "logPath": None,
+            "restartCount": 0,
+            "recentEvents": [],
+        },
+    )
+
+
+def backend_kind_from_label(label: str | None, dispatch_backend: str | None = None) -> str:
+    if dispatch_backend:
+        return dispatch_backend
+    if not label:
+        return "unknown"
+    if label.startswith("print:") or label.startswith("dispatch:print"):
+        return "print"
+    if label.startswith("tmux:"):
+        return "tmux"
+    return "unknown"
+
+
+def backend_session_label(label: str | None) -> str | None:
+    if not label:
+        return None
+    if label.startswith("tmux:"):
+        return label.split(":", 1)[1]
+    return label
+
+
+def tmux_session_alive(session_name: str | None) -> bool:
+    if not session_name or session_name.startswith("print:"):
+        return False
+    try:
+        subprocess.run(["tmux", "has-session", "-t", session_name], capture_output=True, check=True)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
+def assess_backend_health(dispatch_backend: str, backend_session: str | None) -> dict:
+    if dispatch_backend == "print":
+        return {
+            "dispatchBackend": "print",
+            "backendHealth": "non-executing",
+            "backendReachable": True,
+            "backendSession": backend_session,
+        }
+    if dispatch_backend == "tmux":
+        alive = tmux_session_alive(backend_session)
+        return {
+            "dispatchBackend": "tmux",
+            "backendHealth": "healthy" if alive else "missing",
+            "backendReachable": alive,
+            "backendSession": backend_session,
+        }
+    return {
+        "dispatchBackend": dispatch_backend or "unknown",
+        "backendHealth": "unknown",
+        "backendReachable": None,
+        "backendSession": backend_session,
+    }
 
 
 def ensure_runtime_scaffold(root: Path, generator: str = "harness-runtime"):
@@ -246,7 +530,26 @@ def ensure_runtime_scaffold(root: Path, generator: str = "harness-runtime"):
             "recentAllocations": [],
         })
 
-    for path_name in ("current.json", "runtime.json", "blueprint-index.json", "request-summary.json", "lineage-index.json"):
+    progress_state_path = state_dir / "progress.json"
+    progress_markdown_path = harness / "progress.md"
+    if not progress_state_path.exists() and not progress_markdown_path.exists():
+        write_json(progress_state_path, default_progress_state())
+    if progress_state_path.exists() and not progress_markdown_path.exists():
+        progress_markdown_path.write_text(render_progress_markdown(load_json(progress_state_path)), encoding="utf-8")
+
+    for path_name in (
+        "current.json",
+        "runtime.json",
+        "blueprint-index.json",
+        "request-summary.json",
+        "lineage-index.json",
+        "queue-summary.json",
+        "task-summary.json",
+        "worker-summary.json",
+        "daemon-summary.json",
+        "policy-summary.json",
+        "research-summary.json",
+    ):
         path = state_dir / path_name
         if not path.exists():
             write_json(path, {
@@ -303,6 +606,8 @@ def ensure_runtime_scaffold(root: Path, generator: str = "harness-runtime"):
         "root": root,
         "harness": harness,
         "state_dir": state_dir,
+        "progress_state_path": progress_state_path,
+        "progress_markdown_path": progress_markdown_path,
         "requests_dir": requests_dir,
         "queue_path": queue_path,
         "archive_dir": archive_dir,
@@ -314,6 +619,12 @@ def ensure_runtime_scaffold(root: Path, generator: str = "harness-runtime"):
         "feedback_summary_path": feedback_summary_path,
         "root_cause_log_path": root_cause_log_path,
         "root_cause_summary_path": root_cause_summary_path,
+        "queue_summary_path": state_dir / "queue-summary.json",
+        "task_summary_path": state_dir / "task-summary.json",
+        "worker_summary_path": state_dir / "worker-summary.json",
+        "daemon_summary_path": state_dir / "daemon-summary.json",
+        "policy_summary_path": state_dir / "policy-summary.json",
+        "research_summary_path": state_dir / "research-summary.json",
         "lineage_path": lineage_path,
         "lineage_index_path": state_dir / "lineage-index.json",
         "log_index_path": log_index_path,
@@ -810,6 +1121,288 @@ def write_research_index(root: Path, *, generator: str):
     index["generatedAt"] = now_iso()
     write_json(files["research_index_path"], index)
     return index
+
+
+def build_research_summary(research_index: dict, *, generator: str) -> dict:
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "generator": generator,
+        "generatedAt": now_iso(),
+        "memoCount": research_index.get("memoCount", 0),
+        "researchModes": research_index.get("researchModes", {}),
+        "recentMemos": bounded(research_index.get("recentMemos", []), DEFAULT_POLICY_SUMMARY["hotState"]["maxRecentLogs"]),
+        "bySlug": research_index.get("bySlug", {}),
+    }
+
+
+def build_queue_summary(request_index: dict, request_summary: dict, *, generator: str, policy_summary: dict) -> dict:
+    requests = request_index.get("requests", [])
+    queued = [item for item in requests if item.get("status") == "queued"]
+    bound = [item for item in requests if item.get("status") == "bound"]
+    blocked = [item for item in requests if item.get("status") == "blocked"]
+    recent_limit = policy_summary["queue"]["maxRecentRequests"]
+    queued_sorted = sorted(
+        queued,
+        key=lambda item: (priority_rank(item.get("priority"), policy_summary["queue"]["priorityOrder"]), item.get("createdAt") or ""),
+    )
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "generator": generator,
+        "generatedAt": now_iso(),
+        "totalRequests": len(requests),
+        "queueDepth": len(queued),
+        "queuedRequestCount": len(queued),
+        "boundRequestCount": request_summary.get("boundRequestCount", 0),
+        "runningRequestCount": request_summary.get("runningRequestCount", 0),
+        "recoverableRequestCount": request_summary.get("recoverableRequestCount", 0),
+        "blockedRequestCount": request_summary.get("blockedRequestCount", 0),
+        "completedRequestCount": request_summary.get("completedRequestCount", 0),
+        "cancelledRequestCount": sum(1 for item in requests if item.get("status") == "cancelled"),
+        "queuedByKind": dict(Counter(item.get("kind", "unknown") for item in queued)),
+        "queuedByPriority": dict(Counter(item.get("priority", "unknown") for item in queued)),
+        "oldestQueuedAt": queued_sorted[0].get("createdAt") if queued_sorted else None,
+        "activeQueueHead": queued_sorted[0] if queued_sorted else None,
+        "unboundQueuedRequestCount": sum(1 for item in queued if not item.get("boundTaskIds")),
+        "recentQueuedRequests": bounded(
+            [
+                {
+                    "requestId": item.get("requestId"),
+                    "kind": item.get("kind"),
+                    "priority": item.get("priority"),
+                    "goal": item.get("goal"),
+                    "createdAt": item.get("createdAt"),
+                }
+                for item in queued_sorted
+            ],
+            recent_limit,
+        ),
+        "recentBlockedRequests": bounded(
+            [
+                {
+                    "requestId": item.get("requestId"),
+                    "kind": item.get("kind"),
+                    "goal": item.get("goal"),
+                    "statusReason": item.get("statusReason"),
+                    "updatedAt": item.get("updatedAt"),
+                }
+                for item in blocked
+            ],
+            policy_summary["queue"]["maxBlockedItems"],
+        ),
+        "recentBoundRequests": bounded(
+            [
+                {
+                    "requestId": item.get("requestId"),
+                    "kind": item.get("kind"),
+                    "boundTaskIds": item.get("boundTaskIds", []),
+                    "bindingIds": item.get("bindingIds", []),
+                    "updatedAt": item.get("updatedAt"),
+                }
+                for item in bound
+            ],
+            recent_limit,
+        ),
+    }
+
+
+def build_task_summary(task_pool: dict, feedback_summary: dict, lineage_index: dict, runner_state: dict, *, generator: str, policy_summary: dict) -> dict:
+    tasks = task_pool.get("tasks", [])
+    hot_limit = policy_summary["hotState"]["maxActiveItems"]
+    dispatchable_ids = bounded(runner_state.get("dispatchableTaskIds", []), hot_limit)
+    recoverable_ids = bounded([item.get("taskId") for item in runner_state.get("recoverableRuns", []) if item.get("taskId")], hot_limit)
+    blocked_routes = bounded(runner_state.get("blockedRoutes", []), hot_limit)
+    task_feedback = feedback_summary.get("taskFeedbackSummary", {})
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "generator": generator,
+        "generatedAt": now_iso(),
+        "totalTaskCount": len(tasks),
+        "taskStatusCounts": dict(Counter(task.get("status", "unknown") for task in tasks)),
+        "taskKindCounts": dict(Counter(task.get("kind", "unknown") for task in tasks)),
+        "roleHintCounts": dict(Counter(task.get("roleHint", "unknown") for task in tasks)),
+        "workerModeCounts": dict(Counter(task.get("workerMode", "unknown") for task in tasks if task.get("workerMode"))),
+        "dispatchableTaskIds": dispatchable_ids,
+        "recoverableTaskIds": recoverable_ids,
+        "blockedRoutes": blocked_routes,
+        "verifiedTaskCount": sum(1 for task in tasks if task.get("verificationStatus") in {"pass", "skipped"}),
+        "failingVerificationCount": sum(1 for task in tasks if task.get("verificationStatus") == "fail"),
+        "tasksWithRecentFailures": bounded(
+            [
+                {
+                    "taskId": task_id,
+                    "latestFeedbackType": summary.get("latestFeedbackType"),
+                    "latestSeverity": summary.get("latestSeverity"),
+                    "latestMessage": summary.get("latestMessage"),
+                }
+                for task_id, summary in task_feedback.items()
+                if summary.get("recentFailures")
+            ],
+            hot_limit,
+        ),
+        "activeTasks": bounded(
+            [
+                {
+                    "taskId": task.get("taskId"),
+                    "kind": task.get("kind"),
+                    "roleHint": task.get("roleHint"),
+                    "status": task.get("status"),
+                    "title": task.get("title"),
+                    "nodeId": task.get("claim", {}).get("nodeId"),
+                    "worktreePath": task.get("worktreePath"),
+                    "dispatchBackend": task.get("claim", {}).get("dispatchBackend"),
+                    "boundSessionId": task.get("claim", {}).get("boundSessionId"),
+                }
+                for task in tasks
+                if task.get("status") in TASK_ACTIVE_STATUSES
+            ],
+            hot_limit,
+        ),
+        "lineageTaskCount": len(lineage_index.get("tasks", {})),
+    }
+
+
+def build_worker_summary(task_pool: dict, session_registry: dict, runner_state: dict, heartbeats: dict, *, generator: str, policy_summary: dict) -> dict:
+    tasks = {task.get("taskId"): task for task in task_pool.get("tasks", [])}
+    entries = []
+    seen = set()
+    for source in (runner_state.get("activeRuns", []), runner_state.get("recoverableRuns", []), runner_state.get("staleRuns", [])):
+        for item in source:
+            task_id = item.get("taskId")
+            if task_id and task_id not in seen:
+                seen.add(task_id)
+    for task_id in seen:
+        task = tasks.get(task_id, {})
+        heartbeat = heartbeats.get(task_id, {})
+        claim = task.get("claim", {})
+        dispatch_backend = (
+            claim.get("dispatchBackend")
+            or next((run.get("dispatchBackend") or run.get("dispatchMode") for run in runner_state.get("activeRuns", []) if run.get("taskId") == task_id), None)
+            or backend_kind_from_label(claim.get("nodeId") or heartbeat.get("tmuxSession"), None)
+        )
+        backend_session = heartbeat.get("backendSession") or heartbeat.get("tmuxSession") or claim.get("tmuxSession")
+        backend_status = assess_backend_health(dispatch_backend or "unknown", backend_session)
+        heartbeat_age = age_seconds(heartbeat.get("lastHeartbeatAt"))
+        stale_after = policy_summary["heartbeat"]["staleAfterSeconds"]
+        node_health = "stale" if heartbeat_age is not None and heartbeat_age > stale_after else "healthy"
+        if task.get("status") == "recoverable":
+            node_health = "recoverable"
+        if backend_status.get("dispatchBackend") == "print":
+            node_health = "non-executing"
+        entries.append(
+            {
+                "taskId": task_id,
+                "roleHint": task.get("roleHint"),
+                "kind": task.get("kind"),
+                "status": task.get("status"),
+                "workerMode": task.get("workerMode"),
+                "nodeId": claim.get("nodeId"),
+                "dispatchBackend": dispatch_backend,
+                "backendSession": backend_session,
+                "backendHealth": backend_status.get("backendHealth"),
+                "backendReachable": backend_status.get("backendReachable"),
+                "nodeHealth": node_health,
+                "boundSessionId": claim.get("boundSessionId"),
+                "worktreePath": task.get("worktreePath"),
+                "lastHeartbeatAt": heartbeat.get("lastHeartbeatAt"),
+                "heartbeatAgeSeconds": heartbeat_age,
+                "lastKnownPhase": heartbeat.get("lastKnownPhase"),
+                "lastExitCode": heartbeat.get("lastExitCode"),
+            }
+        )
+    hot_limit = policy_summary["hotState"]["maxActiveItems"]
+    active_bindings = bounded(session_registry.get("activeBindings", []), hot_limit)
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "generator": generator,
+        "generatedAt": now_iso(),
+        "workerCount": len(entries),
+        "healthyWorkerCount": sum(1 for item in entries if item.get("nodeHealth") == "healthy"),
+        "staleWorkerCount": sum(1 for item in entries if item.get("nodeHealth") == "stale"),
+        "recoverableWorkerCount": sum(1 for item in entries if item.get("nodeHealth") == "recoverable"),
+        "nonExecutingWorkerCount": sum(1 for item in entries if item.get("nodeHealth") == "non-executing"),
+        "dispatchBackendCounts": dict(Counter(item.get("dispatchBackend", "unknown") for item in entries)),
+        "workerNodes": bounded(entries, hot_limit),
+        "activeBindings": active_bindings,
+        "runtimeToWorkerMap": bounded(
+            [
+                {
+                    "taskId": item.get("taskId"),
+                    "dispatchBackend": item.get("dispatchBackend"),
+                    "nodeId": item.get("nodeId"),
+                    "backendSession": item.get("backendSession"),
+                    "boundSessionId": item.get("boundSessionId"),
+                    "nodeHealth": item.get("nodeHealth"),
+                }
+                for item in entries
+            ],
+            hot_limit,
+        ),
+    }
+
+
+def build_daemon_summary(daemon_state: dict, runner_state: dict, worker_summary: dict, *, generator: str, policy_summary: dict) -> dict:
+    degraded_after = policy_summary["daemon"]["degradedAfterSeconds"]
+    tick_age = age_seconds(daemon_state.get("lastTickAt"))
+    runtime_health = "stopped"
+    if daemon_state.get("status") == "running":
+        runtime_health = "healthy"
+        if tick_age is None or tick_age > degraded_after or daemon_state.get("lastError"):
+            runtime_health = "degraded"
+    session_name = daemon_state.get("sessionName")
+    backend_default = daemon_state.get("dispatchMode") or policy_summary["dispatch"]["defaultBackend"]
+    session_alive = None
+    if session_name:
+        session_alive = tmux_session_alive(session_name)
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "generator": generator,
+        "generatedAt": now_iso(),
+        "status": daemon_state.get("status"),
+        "runtimeHealth": runtime_health,
+        "dispatchBackendDefault": backend_default,
+        "backendAware": True,
+        "sessionName": session_name,
+        "sessionAlive": session_alive,
+        "intervalSeconds": daemon_state.get("intervalSeconds"),
+        "lastTickAt": daemon_state.get("lastTickAt"),
+        "lastTickAgeSeconds": tick_age,
+        "lastRefreshAt": daemon_state.get("lastRefreshAt"),
+        "lastError": daemon_state.get("lastError"),
+        "restartCount": daemon_state.get("restartCount", 0),
+        "recentEvents": bounded(daemon_state.get("recentEvents", []), policy_summary["daemon"]["maxRecentErrors"]),
+        "activeRunnerCount": len(runner_state.get("activeRuns", [])),
+        "recoverableTaskCount": len(runner_state.get("recoverableRuns", [])),
+        "staleRunnerCount": len(runner_state.get("staleRuns", [])),
+        "blockedRouteCount": len(runner_state.get("blockedRoutes", [])),
+        "workerBackendHealth": worker_summary.get("dispatchBackendCounts", {}),
+    }
+
+
+def build_progress_summary(
+    progress: dict,
+    request_summary: dict,
+    task_summary: dict,
+    worker_summary: dict,
+    daemon_summary: dict,
+    *,
+    generator: str,
+) -> dict:
+    snapshot = default_progress_state()
+    snapshot.update(progress or {})
+    snapshot.update(
+        {
+            "schemaVersion": SCHEMA_VERSION,
+            "generator": generator,
+            "generatedAt": now_iso(),
+            "queueDepth": request_summary.get("requestCounts", {}).get("queued", 0),
+            "activeTaskCount": task_summary.get("taskStatusCounts", {}).get("running", 0) + task_summary.get("taskStatusCounts", {}).get("dispatched", 0) + task_summary.get("taskStatusCounts", {}).get("resumed", 0) + task_summary.get("taskStatusCounts", {}).get("active", 0) + task_summary.get("taskStatusCounts", {}).get("claimed", 0) + task_summary.get("taskStatusCounts", {}).get("in_progress", 0),
+            "recoverableTaskCount": len(task_summary.get("recoverableTaskIds", [])),
+            "activeWorkerCount": worker_summary.get("workerCount", 0),
+            "runtimeHealth": daemon_summary.get("runtimeHealth"),
+            "dispatchBackendDefault": daemon_summary.get("dispatchBackendDefault"),
+        }
+    )
+    return snapshot
 
 
 def normalize_context_paths(root: Path, values: list[str]) -> list[str]:

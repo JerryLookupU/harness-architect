@@ -264,7 +264,7 @@ DO NOT 在以下动作之前投递命令：
 只修改 `<TASK_ID>` 的 ownedPaths。
 
 按下面顺序执行：
-1. 读取 `.harness/progress.md`、`.harness/task-pool.json`、`.harness/session-registry.json`。
+1. 读取 `.harness/state/progress.json`、`.harness/task-pool.json`、`.harness/session-registry.json`。
 2. 找到 `<TASK_ID>`。
 3. 如果存在 `.harness/state/feedback-summary.json`，只读取当前 task 最近 3 条高严重度失败。
 4. 读取 `resumeStrategy`、`preferredResumeSessionId`、`candidateResumeSessionIds`、`worktreePath`、`diffBase`。
@@ -272,7 +272,7 @@ DO NOT 在以下动作之前投递命令：
 6. 把实际使用的 session 写入 `claim.boundSessionId`。
 7. 在 `worktreePath` 中实现。
 8. 先写 `diffSummary`，再验证。
-9. 回写 `.harness/task-pool.json`、`.harness/progress.md`、`.harness/lineage.jsonl`、`.harness/session-registry.json`。
+9. 回写 `.harness/task-pool.json`、`.harness/state/progress.json`、`.harness/lineage.jsonl`、`.harness/session-registry.json`；`.harness/progress.md` 由 JSON 投影生成。
 
 如果依赖未满足、路径冲突、需要 rollback、需要 stop 其他 task、或路径边界不清：
 1. 写 request。
@@ -297,7 +297,7 @@ DO NOT 在以下动作之前投递命令：
 4. 写当前 audit task 的 `auditVerdict`
 
 按下面顺序执行：
-1. 读取 `.harness/progress.md`、`.harness/task-pool.json`、`.harness/lineage.jsonl`、`.harness/audit-report.md`。
+1. 读取 `.harness/state/progress.json`、`.harness/task-pool.json`、`.harness/lineage.jsonl`、`.harness/audit-report.md`。
 2. 找到 `<TASK_ID>`。
 3. 读取 `reviewOfTaskIds`、`auditScope`、`verificationRuleIds`、`handoff`、`branchName`、`diffBase`。
 4. 只做证据采样和结论整理，不做业务实现。
@@ -323,7 +323,7 @@ DO NOT 在以下动作之前投递命令：
 2. 只在程序 gate 判定 `needsOrchestrator=true` 时做 routing fallback
 3. 生成给 `gpt-5.3-codex` 的 worker prompt
 
-先读取 `.harness/progress.md`、`.harness/work-items.json`、`.harness/task-pool.json`、`.harness/spec.json`、`.harness/standards.md`、`.harness/session-registry.json`、`.harness/state/feedback-summary.json`（如果存在）。
+先读取 `.harness/state/progress.json`、`.harness/work-items.json`、`.harness/task-pool.json`、`.harness/spec.json`、`.harness/standards.md`、`.harness/session-registry.json`、`.harness/state/feedback-summary.json`（如果存在）。
 
 对每个待派发 task，至少写回：
 - `orchestrationSessionId`

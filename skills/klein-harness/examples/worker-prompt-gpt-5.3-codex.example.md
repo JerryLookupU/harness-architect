@@ -20,7 +20,7 @@
 按下面顺序执行：
 
 1. 读取：
-   - `.harness/progress.md`
+   - `.harness/state/progress.json`
    - `.harness/task-pool.json`
    - `.harness/session-registry.json`
    - `.harness/state/feedback-summary.json`（如果存在）
@@ -85,9 +85,11 @@ claim 当前任务时，必须回写：
 
 - `claim.boundSessionId`
 - `lastKnownSessionId`
-- `.harness/progress.md`
+- `.harness/state/progress.json`
 - `.harness/task-pool.json`
 - `.harness/lineage.jsonl`
+
+`.harness/progress.md` 是给人看的渲染视图，不要把 Markdown 当机器状态源。
 
 禁止：
 

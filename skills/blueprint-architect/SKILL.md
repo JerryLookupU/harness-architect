@@ -214,6 +214,7 @@ allowed-tools: ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch"]
 
 - `.harness/research/<slug>.md`
 - `.harness/state/research-index.json`
+- `.harness/state/research-summary.json`
 
 research memo 推荐至少包含：
 

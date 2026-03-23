@@ -15,7 +15,7 @@
 
 先读取：
 
-- `.harness/progress.md`
+- `.harness/state/progress.json`
 - `.harness/work-items.json`
 - `.harness/task-pool.json`
 - `.harness/spec.json`

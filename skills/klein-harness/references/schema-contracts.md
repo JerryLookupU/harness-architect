@@ -35,7 +35,7 @@
 - `refinement`
 - `execution-ready`
 
-这个阶段值可以放在 `spec.json`、`progress.md` 或等效状态文件里。
+这个阶段值可以放在 `spec.json`、`state/progress.json` 或等效状态文件里。
 
 如果用户关心性能、CLI 响应速度或 query 频率较高，推荐额外维护一组热路径状态文件：
 
@@ -44,15 +44,29 @@
 - `state/blueprint-index.json`
 - `state/feedback-summary.json`
 - `state/root-cause-summary.json`
+- `state/progress.json`
+- `state/queue-summary.json`
+- `state/task-summary.json`
+- `state/worker-summary.json`
+- `state/daemon-summary.json`
+- `state/log-index.json`
+- `state/policy-summary.json`
+- `state/research-summary.json`
 
 推荐规则：
 
-- `progress.md` 继续服务人类阅读
+- `progress.md` 继续服务人类阅读，并由 `state/progress.json` 渲染
 - `state/*.json` 优先服务机器读取
 - query / dashboard / daemon / operator 脚本默认先读 `state/*.json`
 - state 缺失时再回退到 `progress.md` / `task-pool.json` / `spec.json`
 - 下游 worker 默认读取顺序应为：`current/runtime/request-summary/lineage-index -> log-index / compact log -> raw runner log`
 - 不要默认让 worker 扫全文 `.harness/state/runner-logs/*.log`
+
+推荐把控制面显式理解为三层：
+
+- cold evidence：`requests/queue.jsonl`、`lineage.jsonl`、`feedback-log.jsonl`、`root-cause-log.jsonl`、`state/runner-logs/*.log`
+- runtime ledgers：`state/request-index.json`、`state/request-task-map.json`、`task-pool.json`、`session-registry.json`
+- hot summaries：`current.json`、`runtime.json`、`request-summary.json`、`lineage-index.json`、`feedback-summary.json`、`progress.json`、`queue-summary.json`、`task-summary.json`、`worker-summary.json`、`daemon-summary.json`、`log-index.json`、`policy-summary.json`、`research-summary.json`
 
 ## `lint` 复审节奏
 
@@ -97,6 +111,7 @@
 - `spec.json` -> `examples/spec.example.json`
 - `task-pool.json` -> `examples/task-pool.example.json`
 - `context-map.json` -> `examples/context-map.example.json`
+- `state/progress.json` -> `machine-readable progress surface`
 - `progress.md` -> `examples/progress.example.md`
 - `AGENTS.md template` -> `examples/AGENTS.example.md`
 - `operator status output` -> `examples/operator-status.example.txt`
@@ -118,6 +133,12 @@
 - `state/root-cause-summary.json` -> `hot-state RCA summary`
 - `state/log-index.json` -> `compact log hot index`
 - `state/research-index.json` -> `research memo hot index`
+- `state/research-summary.json` -> `bounded research memo summary`
+- `state/queue-summary.json` -> `queue hot summary`
+- `state/task-summary.json` -> `task hot summary`
+- `state/worker-summary.json` -> `worker / node hot summary`
+- `state/daemon-summary.json` -> `runtime daemon hot summary`
+- `state/policy-summary.json` -> `deterministic policy / threshold summary`
 
 如果项目准备把 CLI 模板复制到 `.harness/bin` / `.harness/scripts`，推荐再维护：
 

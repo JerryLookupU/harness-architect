@@ -1,21 +1,14 @@
 #!/usr/bin/env python3
 import argparse
 import json
-import re
 import sys
 from pathlib import Path
+
+from runtime_common import ensure_runtime_scaffold, read_progress_state
 
 
 def load_json(path: Path):
     return json.loads(path.read_text())
-
-
-def load_progress(path: Path):
-    text = path.read_text()
-    match = re.search(r"```json\s*(\{[\s\S]*?\})\s*```", text)
-    if not match:
-      raise ValueError(f"missing json block in {path}")
-    return json.loads(match.group(1))
 
 
 def load_optional_json(path: Path):
@@ -34,13 +27,17 @@ def main():
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
-    harness = root / ".harness"
-    state_dir = harness / "state"
+    files = ensure_runtime_scaffold(root, generator="harness-status")
+    harness = files["harness"]
+    state_dir = files["state_dir"]
     current_state = load_optional_json(state_dir / "current.json")
     runtime_state = load_optional_json(state_dir / "runtime.json")
     feedback_summary = load_optional_json(state_dir / "feedback-summary.json")
+    queue_summary = load_optional_json(files["queue_summary_path"], {})
+    worker_summary = load_optional_json(files["worker_summary_path"], {})
+    daemon_summary = load_optional_json(files["daemon_summary_path"], {})
 
-    progress = current_state or load_progress(harness / "progress.md")
+    progress = current_state or read_progress_state(files, generator="harness-status")
     task_pool = load_json(harness / "task-pool.json")
 
     session_registry_path = harness / "session-registry.json"
@@ -48,7 +45,7 @@ def main():
 
     tasks = task_pool.get("tasks", [])
     if runtime_state:
-        active_workers = runtime_state.get("activeWorkerCount", 0)
+        active_workers = worker_summary.get("workerCount", runtime_state.get("activeWorkerCount", 0))
         active_audit_workers = runtime_state.get("activeAuditWorkerCount", 0)
         active_orchestrators = runtime_state.get("activeOrchestratorCount", 0)
     else:
@@ -88,12 +85,14 @@ def main():
     print(f"active request: {active_request.get('requestId', '-')}")
     print(f"request status: {active_request.get('status', '-')}")
     print()
+    print(f"queue depth: {queue_summary.get('queueDepth', 0)}")
     print(f"active workers: {active_workers}")
     print(f"active audit workers: {active_audit_workers}")
     print(f"active orchestrator tasks: {active_orchestrators}")
     print(f"active runners: {(runtime_state or {}).get('activeRunnerCount', 0)}")
     print(f"recoverable tasks: {(runtime_state or {}).get('recoverableTaskCount', 0)}")
     print(f"stale runners: {(runtime_state or {}).get('staleRunnerCount', 0)}")
+    print(f"stale workers: {worker_summary.get('staleWorkerCount', 0)}")
     print(f"blocked routes: {(runtime_state or {}).get('blockedRouteCount', 0)}")
     print(f"verified tasks: {(runtime_state or {}).get('verifiedTaskCount', 0)}")
     print(f"failed verifications: {(runtime_state or {}).get('failingVerificationCount', 0)}")
@@ -102,6 +101,9 @@ def main():
     print(f"compact logs: {(runtime_state or {}).get('compactLogCount', 0)}")
     print(f"log blockers: {len((runtime_state or {}).get('openLogBlockers', []))}")
     print(f"research memos: {(runtime_state or {}).get('researchMemoCount', 0)}")
+    print(f"runtime health: {daemon_summary.get('runtimeHealth', '-')}")
+    print(f"dispatch backend: {daemon_summary.get('dispatchBackendDefault', '-')}")
+    print(f"backend counts: {worker_summary.get('dispatchBackendCounts', {})}")
     print(f"orchestration session: {(runtime_state or {}).get('orchestrationSessionId', session_registry.get('orchestrationSessionId', '-'))}")
     print(f"pending blockers: {len(blockers)}")
     if (runtime_state or {}).get('lastTickAt'):

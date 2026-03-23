@@ -263,7 +263,7 @@
       "diffBase": "refs/heads/orch/spec-S-003",
       "diffSummary": null,
       "workerBranch": null,
-      "ownedPaths": [".harness/audit-report.md", ".harness/progress.md", ".harness/lineage.jsonl"],
+      "ownedPaths": [".harness/audit-report.md", ".harness/state/progress.json", ".harness/progress.md", ".harness/lineage.jsonl"],
       "forbiddenPaths": ["src/**", ".harness/spec.json", ".harness/work-items.json"],
       "verificationRuleIds": ["VR-004"],
       "routingModel": "gpt-5.4",

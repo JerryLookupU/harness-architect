@@ -9,17 +9,28 @@ from runtime_common import (
     build_feedback_summary,
     build_lineage_index,
     build_log_index,
+    build_policy_summary,
+    build_progress_summary,
+    build_queue_summary,
+    build_research_summary,
     build_root_cause_summary,
     build_research_index,
     build_request_summary,
+    build_task_summary,
+    build_worker_summary,
+    build_daemon_summary,
     ensure_runtime_scaffold,
     load_json,
     load_jsonl,
     load_optional_json,
-    load_progress,
+    load_policy_summary,
+    load_runner_daemon_state,
+    load_runner_heartbeats,
     maybe_complete_request,
     now_iso,
+    read_progress_state,
     reconcile_requests,
+    write_progress_projection,
     write_json,
 )
 
@@ -37,7 +48,8 @@ def main():
     files = ensure_runtime_scaffold(root, generator="harness-refresh-state")
     reconcile_requests(root, generator="harness-refresh-state")
 
-    progress = load_progress(files["harness"] / "progress.md")
+    policy_summary = load_policy_summary(files["policy_summary_path"], default_generator="harness-refresh-state")
+    progress = read_progress_state(files, generator="harness-refresh-state")
     task_pool = load_json(files["harness"] / "task-pool.json")
     work_items = load_json(files["harness"] / "work-items.json")
     spec = load_json(files["harness"] / "spec.json")
@@ -49,6 +61,8 @@ def main():
     log_index = build_log_index(root)
     research_index = build_research_index(root)
     runner_state = load_json(files["runner_state_path"])
+    heartbeats = load_runner_heartbeats(files["state_dir"])
+    daemon_state = load_runner_daemon_state(files["state_dir"])
     request_index = load_json(files["request_index_path"])
     request_task_map = load_json(files["request_task_map_path"])
     lineage_entries = load_jsonl(files["lineage_path"])
@@ -64,6 +78,12 @@ def main():
 
     request_summary = build_request_summary(request_index, request_task_map, task_pool)
     lineage_index = build_lineage_index(lineage_entries, task_pool, request_task_map)
+    queue_summary = build_queue_summary(request_index, request_summary, generator="klein-harness", policy_summary=policy_summary)
+    task_summary = build_task_summary(task_pool, feedback_summary, lineage_index, runner_state, generator="klein-harness", policy_summary=policy_summary)
+    worker_summary = build_worker_summary(task_pool, session_registry, runner_state, heartbeats, generator="klein-harness", policy_summary=policy_summary)
+    daemon_summary = build_daemon_summary(daemon_state, runner_state, worker_summary, generator="klein-harness", policy_summary=policy_summary)
+    research_summary = build_research_summary(research_index, generator="klein-harness")
+    progress = build_progress_summary(progress, request_summary, task_summary, worker_summary, daemon_summary, generator="klein-harness")
     active_request = request_summary.get("activeRequest") or {}
     active_binding = next(
         (
@@ -113,6 +133,9 @@ def main():
         ),
         "compactLogCount": log_index.get("compactLogCount", 0),
         "researchMemoCount": research_index.get("memoCount", 0),
+        "queueDepth": queue_summary.get("queueDepth", 0),
+        "runtimeHealth": daemon_summary.get("runtimeHealth"),
+        "dispatchBackendDefault": daemon_summary.get("dispatchBackendDefault"),
     }
 
     runtime_state = {
@@ -121,7 +144,7 @@ def main():
         "generatedAt": now_iso(),
         "orchestrationSessionId": session_registry.get("orchestrationSessionId"),
         "activeTaskCount": len(active),
-        "activeWorkerCount": sum(1 for task in active if task.get("roleHint") == "worker"),
+        "activeWorkerCount": worker_summary.get("workerCount", 0),
         "activeAuditWorkerCount": sum(1 for task in active if task.get("kind") == "audit"),
         "activeOrchestratorCount": sum(
             1
@@ -188,6 +211,10 @@ def main():
         "researchMemoCount": research_index.get("memoCount", 0),
         "researchModes": research_index.get("researchModes", {}),
         "recentResearchMemos": research_index.get("recentMemos", []),
+        "queueDepth": queue_summary.get("queueDepth", 0),
+        "runtimeHealth": daemon_summary.get("runtimeHealth"),
+        "dispatchBackendDefault": daemon_summary.get("dispatchBackendDefault"),
+        "workerBackendCounts": worker_summary.get("dispatchBackendCounts", {}),
     }
 
     blocks = {}
@@ -218,13 +245,20 @@ def main():
         "blocks": blocks,
     }
 
+    write_progress_projection(files, progress, generator="klein-harness")
     write_json(files["state_dir"] / "current.json", current_state)
     write_json(files["state_dir"] / "runtime.json", runtime_state)
     write_json(files["state_dir"] / "blueprint-index.json", blueprint_index)
     write_json(files["feedback_summary_path"], feedback_summary)
     write_json(files["root_cause_summary_path"], root_cause_summary)
     write_json(files["log_index_path"], log_index)
+    write_json(files["queue_summary_path"], queue_summary)
+    write_json(files["task_summary_path"], task_summary)
+    write_json(files["worker_summary_path"], worker_summary)
+    write_json(files["daemon_summary_path"], daemon_summary)
+    write_json(files["policy_summary_path"], policy_summary)
     write_json(files["research_index_path"], research_index)
+    write_json(files["research_summary_path"], research_summary)
     write_json(files["request_summary_path"], request_summary)
     write_json(files["lineage_index_path"], lineage_index)
 

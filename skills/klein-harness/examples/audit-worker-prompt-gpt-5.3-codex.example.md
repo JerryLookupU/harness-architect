@@ -31,7 +31,7 @@
 按下面顺序执行：
 
 1. 读取：
-   - `.harness/progress.md`
+   - `.harness/state/progress.json`
    - `.harness/task-pool.json`
    - `.harness/lineage.jsonl`
    - `.harness/audit-report.md`
@@ -68,6 +68,6 @@
 
 - `auditVerdict`
 - `.harness/audit-report.md`
-- `.harness/progress.md`
+- `.harness/state/progress.json`
 - `.harness/task-pool.json`
 - `.harness/lineage.jsonl`

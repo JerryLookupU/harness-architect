@@ -141,6 +141,11 @@ Primary hot state:
 
 - `.harness/state/current.json`
 - `.harness/state/runtime.json`
+- `.harness/state/progress.json`
+- `.harness/state/queue-summary.json`
+- `.harness/state/task-summary.json`
+- `.harness/state/worker-summary.json`
+- `.harness/state/daemon-summary.json`
 - `.harness/state/blueprint-index.json`
 - `.harness/state/feedback-summary.json`
 - `.harness/state/root-cause-summary.json`
@@ -160,7 +165,14 @@ Primary mutable ledgers:
 
 - `.harness/state/request-index.json`
 - `.harness/state/request-task-map.json`
+- `.harness/task-pool.json`
 - `.harness/session-registry.json`
+
+The control plane stays explicit in three layers:
+
+- cold evidence: append-only logs and raw runner output
+- runtime ledgers: mutable request/task/session truth
+- hot summaries: bounded JSON snapshots for operator and worker reads
 
 Evidence and RCA are intentionally split:
 
@@ -182,6 +194,10 @@ harness-kick "<PROJECT_GOAL>" [STACK_HINT] [PROJECT_ROOT]
 Project-local operator commands:
 
 ```bash
+.harness/bin/harness-ops . top
+.harness/bin/harness-ops . workers
+.harness/bin/harness-ops . daemon status
+.harness/bin/harness-ops . doctor
 .harness/bin/harness-status .
 .harness/bin/harness-report .
 .harness/bin/harness-query overview . --text
@@ -207,12 +223,14 @@ python3 .harness/scripts/refresh-state.py .
 
 Notes:
 
-- `--dispatch-mode tmux` is the default real dispatch mode
-- `--dispatch-mode print` writes route and dispatch evidence without starting `tmux`
+- the repo-local runtime / daemon is the scheduler and source of truth
+- `--dispatch-mode tmux` is the current default execution backend
+- `--dispatch-mode print` is a non-executing compatibility / debug backend
 - `harness-runner daemon` keeps ticking and refreshing hot state on a fixed interval
 - `harness-bootstrap` and `harness-kick` start the runner daemon by default after bootstrap success
 - use `--no-daemon` when you want a manual or fully operator-driven session
 - downstream workers should prefer hot state -> compact log md -> raw log
+- worker/backend health and runtime health are intentionally surfaced separately
 
 ## Compact Logs
 
@@ -233,6 +251,7 @@ Blueprint work includes a gated research stage instead of forcing deep research 
 - `researchMode: none | targeted | deep`
 - research memos live in `.harness/research/<slug>.md`
 - hot memo summary lives in `.harness/state/research-index.json`
+- bounded machine summary lives in `.harness/state/research-summary.json`
 - blueprint generation should consume repo-local scan + research memo + conflict review
 
 Recommended triggers for `targeted` or `deep` research:
@@ -272,10 +291,12 @@ Primary skills:
 
 Primary docs:
 
+- `docs/control-plane-state.md`
+- `docs/operator-cli.md`
+- `docs/blueprint-research-gate.md`
 - `docs/runtime-request-spec.md`
 - `docs/klein-architecture.md`
 - `docs/log-search-architecture.md`
-- `docs/blueprint-research-stage.md`
 
 Primary references:
 
@@ -301,11 +322,13 @@ Read in this order:
 2. `skills/blueprint-architect/SKILL.md`
 3. `docs/runtime-request-spec.md`
 4. `docs/klein-architecture.md`
-5. `docs/log-search-architecture.md`
-6. `docs/blueprint-research-stage.md`
-7. `skills/klein-harness/references/schema-contracts.md`
-8. `skills/klein-harness/references/openclaw-dispatch.md`
-9. `skills/klein-harness/references/model-routing.md`
+5. `docs/control-plane-state.md`
+6. `docs/operator-cli.md`
+7. `docs/log-search-architecture.md`
+8. `docs/blueprint-research-gate.md`
+9. `skills/klein-harness/references/schema-contracts.md`
+10. `skills/klein-harness/references/openclaw-dispatch.md`
+11. `skills/klein-harness/references/model-routing.md`
 
 ## Trial and Feedback
 

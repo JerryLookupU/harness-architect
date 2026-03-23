@@ -24,7 +24,8 @@
 
 - `.harness/spec.json`
 - `.harness/context-map.json`
-- `.harness/progress.md`
+- `.harness/state/progress.json`
+- `.harness/progress.md`（渲染视图）
 - `.harness/lineage.jsonl`
 
 默认禁写：
@@ -40,7 +41,8 @@
 
 - `.harness/work-items.json`
 - `.harness/task-pool.json`
-- `.harness/progress.md`
+- `.harness/state/progress.json`
+- `.harness/progress.md`（渲染视图）
 - `.harness/lineage.jsonl`
 - `.harness/drift-log/*.jsonl`
 - `.harness/session-registry.json`
@@ -56,7 +58,8 @@
 
 - 当前 task / work item 的 `ownedPaths`
 - 当前 task 的 claim / status / handoff 所需的最小回写
-- `.harness/progress.md`
+- `.harness/state/progress.json`
+- `.harness/progress.md`（如果当前任务显式拥有渲染输出）
 - `.harness/lineage.jsonl`
 
 默认禁写：
@@ -75,7 +78,7 @@
 
 如果当前 task `kind = "audit"`：
 
-- 默认只允许写 `.harness/audit-report.md`、`.harness/progress.md`、`.harness/lineage.jsonl` 与最小 claim/status 回写
+- 默认只允许写 `.harness/audit-report.md`、`.harness/state/progress.json`、`.harness/progress.md`、`.harness/lineage.jsonl` 与最小 claim/status 回写
 - 默认不直接改业务源码
 - 发现问题时先写 request，再交回 `orchestrator`
 
