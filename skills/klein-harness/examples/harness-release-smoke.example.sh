@@ -744,6 +744,10 @@ assert dispatched["dispatchMode"] == "print"
 assert dispatched["executionCwd"].endswith(".worktrees/T-100-smoke")
 assert dispatched["routeDecision"]["resumeStrategy"] == "resume"
 assert dispatched["routeDecision"]["gateStatus"] == "claimable"
+prompt_path = Path(dispatched["promptPath"])
+prompt_text = prompt_path.read_text()
+assert "禁止读取当前正在运行 task 的 .harness/state/runner-logs/<taskId>.log" in prompt_text
+assert "只允许定向读取直接前序 task 的单个 raw runner log" in prompt_text
 
 recover = recover_payload["dispatched"]
 assert recover["taskId"] == "T-100"

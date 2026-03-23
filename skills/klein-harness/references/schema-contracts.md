@@ -66,8 +66,9 @@
 - `state/*.json` 优先服务机器读取
 - query / dashboard / daemon / operator 脚本默认先读 `state/*.json`
 - state 缺失时再回退到 `progress.md` / `task-pool.json` / `spec.json`
-- 下游 worker 默认读取顺序应为：`current/runtime/request-summary/lineage-index -> log-index / compact log -> raw runner log`
+- 下游 worker 默认读取顺序应为：`current/runtime/request-summary/lineage-index -> log-index / compact log -> 前序 task 的 raw runner log`
 - 不要默认让 worker 扫全文 `.harness/state/runner-logs/*.log`
+- 不要让 worker 读取当前正在运行 task 自己的 raw runner log；它包含当前 prompt 与执行回显，容易造成自回环。
 
 推荐把控制面显式理解为三层：
 
