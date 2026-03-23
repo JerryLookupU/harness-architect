@@ -23,6 +23,10 @@ This repo ships three Codex skills:
 - `blueprint-architect` for decomposition, research, draft blueprinting, conflict review, and final blueprint handoff
 - `harness-log-search-cskill` for compact handoff log retrieval and targeted raw evidence windows
 
+Phase-1 body-vs-target loop:
+
+- see [docs/phase1-validation-loop.md](docs/phase1-validation-loop.md)
+
 ## At A Glance
 
 Klein-Harness is for repositories that need more than a one-shot prompt.
