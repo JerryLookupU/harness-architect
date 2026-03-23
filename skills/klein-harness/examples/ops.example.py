@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 import argparse
 import json
 import subprocess
@@ -22,9 +23,15 @@ def collect_state(root: Path):
         "current": load_summary(state_dir / "current.json", {}),
         "runtime": load_summary(state_dir / "runtime.json", {}),
         "queue": load_summary(files["queue_summary_path"], {}),
+        "intake": load_summary(files["intake_summary_path"], {}),
+        "thread": load_summary(files["thread_state_path"], {}),
+        "change": load_summary(files["change_summary_path"], {}),
         "task": load_summary(files["task_summary_path"], {}),
         "worker": load_summary(files["worker_summary_path"], {}),
         "daemon": load_summary(files["daemon_summary_path"], {}),
+        "worktrees": load_summary(files["worktree_registry_path"], {}),
+        "mergeQueue": load_summary(files["merge_queue_path"], {}),
+        "mergeSummary": load_summary(files["merge_summary_path"], {}),
         "request": load_summary(files["request_summary_path"], {}),
         "lineage": load_summary(files["lineage_index_path"], {}),
         "feedback": load_summary(files["feedback_summary_path"], {}),
@@ -39,6 +46,9 @@ def collect_state(root: Path):
 def top_view(state: dict):
     progress = state["progress"]
     queue = state["queue"]
+    intake = state["intake"]
+    thread = state["thread"]
+    change = state["change"]
     task = state["task"]
     worker = state["worker"]
     daemon = state["daemon"]
@@ -52,6 +62,13 @@ def top_view(state: dict):
         "currentTaskId": current.get("currentTaskId"),
         "currentTaskTitle": current.get("currentTaskTitle"),
         "queueDepth": queue.get("queueDepth", 0),
+        "duplicateRequestCount": intake.get("duplicateCount", 0),
+        "contextMergeCount": intake.get("contextMergeCount", 0),
+        "inspectionOverlayCount": intake.get("inspectionOverlayCount", 0),
+        "threadCount": thread.get("threadCount", 0),
+        "activeThreadCount": thread.get("activeThreadCount", 0),
+        "appendChangeCount": change.get("appendChangeCount", 0),
+        "supersededQueuedTaskCount": change.get("supersededQueuedTaskCount", 0),
         "activeTaskCount": runtime.get("activeTaskCount", 0),
         "workerCount": worker.get("workerCount", 0),
         "runtimeHealth": daemon.get("runtimeHealth"),
@@ -61,6 +78,11 @@ def top_view(state: dict):
         "staleWorkerCount": worker.get("staleWorkerCount", 0),
         "blockedRouteCount": daemon.get("blockedRouteCount", 0),
         "compactLogCount": state["log"].get("compactLogCount", 0),
+        "activeWorktreeCount": len(state["worktrees"].get("worktrees", [])),
+        "mergeQueueDepth": state["mergeSummary"].get("queueDepth", 0),
+        "mergeConflictCount": state["mergeSummary"].get("conflictCount", 0),
+        "contextRotWarnings": runtime.get("contextRotWarnings", []),
+        "driftChecklistFailures": runtime.get("driftChecklistFailures", []),
     }
 
 
@@ -69,9 +91,12 @@ def tasks_view(state: dict):
     return {
         "taskStatusCounts": task.get("taskStatusCounts", {}),
         "taskKindCounts": task.get("taskKindCounts", {}),
+        "threadKeyCount": task.get("threadKeyCount", 0),
+        "planEpochs": task.get("planEpochs", {}),
         "roleHintCounts": task.get("roleHintCounts", {}),
         "dispatchableTaskIds": task.get("dispatchableTaskIds", []),
         "recoverableTaskIds": task.get("recoverableTaskIds", []),
+        "supersededTaskIds": task.get("supersededTaskIds", []),
         "activeTasks": task.get("activeTasks", []),
         "tasksWithRecentFailures": task.get("tasksWithRecentFailures", []),
     }
@@ -103,6 +128,7 @@ def blockers_view(state: dict):
         "queueBlocked": state["queue"].get("recentBlockedRequests", []),
         "routeBlocked": state["task"].get("blockedRoutes", []),
         "logBlocked": state["log"].get("openBlockers", []),
+        "mergeBlocked": state["mergeSummary"].get("openConflicts", []),
     }
 
 
@@ -112,6 +138,24 @@ def logs_view(state: dict):
         "recentHighSignalLogs": state["log"].get("recentHighSignalLogs", []),
         "openBlockers": state["log"].get("openBlockers", []),
         "recurringTags": state["log"].get("recurringTags", {}),
+    }
+
+
+def worktrees_view(state: dict):
+    return state["worktrees"]
+
+
+def merge_queue_view(state: dict):
+    return {
+        "integrationBranch": state["mergeQueue"].get("integrationBranch"),
+        "queueDepth": state["mergeSummary"].get("queueDepth", 0),
+        "readyToMergeCount": state["mergeSummary"].get("readyToMergeCount", 0),
+        "conflictCount": state["mergeSummary"].get("conflictCount", 0),
+        "items": state["mergeQueue"].get("items", []),
+        "readyToMerge": state["mergeSummary"].get("readyToMerge", []),
+        "openConflicts": state["mergeSummary"].get("openConflicts", []),
+        "recentMerged": state["mergeSummary"].get("recentMerged", []),
+        "supersededCandidates": state["mergeSummary"].get("supersededCandidates", []),
     }
 
 
@@ -137,6 +181,10 @@ def doctor_view(state: dict):
         warnings.append(f"stale workers detected: {worker.get('staleWorkerCount')}")
     if daemon.get("status") == "running" and daemon.get("dispatchBackendDefault") == "tmux" and daemon.get("sessionAlive") is False:
         issues.append("daemon claims tmux backend but tmux session is not alive")
+    if state["runtime"].get("driftChecklistFailures"):
+        warnings.append(f"drift checklist failures: {len(state['runtime'].get('driftChecklistFailures', []))}")
+    if state["runtime"].get("contextRotWarnings"):
+        warnings.append(f"context rot warnings: {len(state['runtime'].get('contextRotWarnings', []))}")
     return {
         "ok": not issues,
         "issues": issues,
@@ -159,6 +207,13 @@ def print_text(title: str, payload):
             f"role: {payload.get('currentRole')}",
             f"currentTask: {payload.get('currentTaskId')} {payload.get('currentTaskTitle')}",
             f"queueDepth: {payload.get('queueDepth')}",
+            f"duplicateRequestCount: {payload.get('duplicateRequestCount')}",
+            f"contextMergeCount: {payload.get('contextMergeCount')}",
+            f"inspectionOverlayCount: {payload.get('inspectionOverlayCount')}",
+            f"threadCount: {payload.get('threadCount')}",
+            f"activeThreadCount: {payload.get('activeThreadCount')}",
+            f"appendChangeCount: {payload.get('appendChangeCount')}",
+            f"supersededQueuedTaskCount: {payload.get('supersededQueuedTaskCount')}",
             f"activeTaskCount: {payload.get('activeTaskCount')}",
             f"workerCount: {payload.get('workerCount')}",
             f"runtimeHealth: {payload.get('runtimeHealth')}",
@@ -168,6 +223,11 @@ def print_text(title: str, payload):
             f"staleWorkerCount: {payload.get('staleWorkerCount')}",
             f"blockedRouteCount: {payload.get('blockedRouteCount')}",
             f"compactLogCount: {payload.get('compactLogCount')}",
+            f"activeWorktreeCount: {payload.get('activeWorktreeCount')}",
+            f"mergeQueueDepth: {payload.get('mergeQueueDepth')}",
+            f"mergeConflictCount: {payload.get('mergeConflictCount')}",
+            f"contextRotWarnings: {len(payload.get('contextRotWarnings', []))}",
+            f"driftChecklistFailures: {len(payload.get('driftChecklistFailures', []))}",
         ]
         return "\n".join(lines)
     if title == "queue":
@@ -186,11 +246,14 @@ def print_text(title: str, payload):
             "== Harness Tasks ==",
             f"taskStatusCounts: {payload.get('taskStatusCounts')}",
             f"taskKindCounts: {payload.get('taskKindCounts')}",
+            f"threadKeyCount: {payload.get('threadKeyCount')}",
+            f"planEpochs: {payload.get('planEpochs')}",
             f"dispatchableTaskIds: {payload.get('dispatchableTaskIds')}",
             f"recoverableTaskIds: {payload.get('recoverableTaskIds')}",
+            f"supersededTaskIds: {payload.get('supersededTaskIds')}",
         ]
         for item in payload.get("activeTasks", [])[:10]:
-            lines.append(f"- {item.get('taskId')} [{item.get('status')}] {item.get('title')} backend={item.get('dispatchBackend')}")
+            lines.append(f"- {item.get('taskId')} thread={item.get('threadKey')} epoch={item.get('planEpoch')} [{item.get('status')}] {item.get('title')} backend={item.get('dispatchBackend')}")
         return "\n".join(lines)
     if title == "workers":
         lines = [
@@ -203,7 +266,7 @@ def print_text(title: str, payload):
         ]
         for item in payload.get("workerNodes", [])[:10]:
             lines.append(
-                f"- {item.get('taskId')} node={item.get('nodeId')} backend={item.get('dispatchBackend')} nodeHealth={item.get('nodeHealth')} backendHealth={item.get('backendHealth')}"
+                f"- {item.get('taskId')} thread={item.get('threadKey')} epoch={item.get('planEpoch')} node={item.get('nodeId')} backend={item.get('dispatchBackend')} nodeHealth={item.get('nodeHealth')} backendHealth={item.get('backendHealth')} worktree={item.get('worktreePath')}"
             )
         return "\n".join(lines)
     if title == "daemon":
@@ -239,6 +302,51 @@ def print_text(title: str, payload):
         ]
         for item in payload.get("recentHighSignalLogs", [])[:10]:
             lines.append(f"- {item.get('taskId')} [{item.get('severity')}] {item.get('path')}")
+        return "\n".join(lines)
+    if title == "worktrees":
+        lines = [
+            "== Harness Worktrees ==",
+            f"worktreeCount: {len(payload.get('worktrees', []))}",
+        ]
+        for item in payload.get("worktrees", [])[:10]:
+            lines.append(
+                f"- {item.get('taskId')} [{item.get('status')}] branch={item.get('branchName')} worktree={item.get('worktreePath')} merge={item.get('mergeRequired')} cleanup={item.get('cleanupStatus')}"
+            )
+        return "\n".join(lines)
+    if title == "merge-queue":
+        lines = [
+            "== Harness Merge Queue ==",
+            f"integrationBranch: {payload.get('integrationBranch')}",
+            f"queueDepth: {payload.get('queueDepth')}",
+            f"readyToMergeCount: {payload.get('readyToMergeCount')}",
+            f"conflictCount: {payload.get('conflictCount')}",
+        ]
+        for item in payload.get("items", [])[:10]:
+            lines.append(
+                f"- {item.get('taskId')} [{item.get('mergeStatus')}] branch={item.get('branchName')} epoch={item.get('planEpoch')} worktree={item.get('worktreePath')}"
+            )
+        return "\n".join(lines)
+    if title == "conflicts":
+        lines = [
+            "== Harness Merge Conflicts ==",
+            f"conflictCount: {payload.get('conflictCount')}",
+        ]
+        for item in payload.get("openConflicts", [])[:10]:
+            lines.append(
+                f"- {item.get('taskId')} branch={item.get('branchName')} conflictPaths={item.get('conflictPaths')}"
+            )
+        return "\n".join(lines)
+    if title == "integration":
+        lines = [
+            "== Harness Integration ==",
+            f"integrationBranch: {payload.get('integrationBranch')}",
+            f"readyToMergeCount: {payload.get('readyToMergeCount')}",
+            f"conflictCount: {payload.get('conflictCount')}",
+        ]
+        for item in payload.get("recentMerged", [])[:10]:
+            lines.append(
+                f"- merged {item.get('taskId')} commit={item.get('mergedCommit')} branch={item.get('branchName')}"
+            )
         return "\n".join(lines)
     if title == "doctor":
         lines = ["== Harness Doctor ==", f"ok: {payload.get('ok')}"]
@@ -277,6 +385,10 @@ def main():
     p_request = sub.add_parser("request")
     p_request.add_argument("request_id")
     sub.add_parser("workers")
+    sub.add_parser("worktrees")
+    sub.add_parser("merge-queue")
+    sub.add_parser("conflicts")
+    sub.add_parser("integration")
     p_daemon = sub.add_parser("daemon")
     p_daemon.add_argument("action", choices=["status", "start", "stop", "restart"], nargs="?", default="status")
     p_daemon.add_argument("--interval", type=int, default=60)
@@ -284,7 +396,7 @@ def main():
     sub.add_parser("blockers")
     sub.add_parser("logs")
     p_watch = sub.add_parser("watch")
-    p_watch.add_argument("--view", choices=["top", "queue", "workers", "daemon", "blockers", "logs"], default="top")
+    p_watch.add_argument("--view", choices=["top", "queue", "workers", "daemon", "worktrees", "merge-queue", "conflicts", "integration", "blockers", "logs"], default="top")
     p_watch.add_argument("--interval", type=int, default=2)
     p_watch.add_argument("--count", type=int, default=0)
     sub.add_parser("doctor")
@@ -313,6 +425,14 @@ def main():
                 payload = state["worker"]
             elif args.view == "daemon":
                 payload = state["daemon"]
+            elif args.view == "worktrees":
+                payload = worktrees_view(state)
+            elif args.view == "merge-queue":
+                payload = merge_queue_view(state)
+            elif args.view == "conflicts":
+                payload = {"conflictCount": state["mergeSummary"].get("conflictCount", 0), "openConflicts": state["mergeSummary"].get("openConflicts", [])}
+            elif args.view == "integration":
+                payload = merge_queue_view(state)
             elif args.view == "blockers":
                 payload = blockers_view(state)
             else:
@@ -340,6 +460,14 @@ def main():
         emit(request_view(state, args.request_id), args.format, "request")
     elif args.command == "workers":
         emit(state["worker"], args.format, "workers")
+    elif args.command == "worktrees":
+        emit(worktrees_view(state), args.format, "worktrees")
+    elif args.command == "merge-queue":
+        emit(merge_queue_view(state), args.format, "merge-queue")
+    elif args.command == "conflicts":
+        emit({"conflictCount": state["mergeSummary"].get("conflictCount", 0), "openConflicts": state["mergeSummary"].get("openConflicts", [])}, args.format, "conflicts")
+    elif args.command == "integration":
+        emit(merge_queue_view(state), args.format, "integration")
     elif args.command == "daemon":
         emit(state["daemon"], args.format, "daemon")
     elif args.command == "blockers":

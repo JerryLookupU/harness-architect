@@ -16,7 +16,10 @@ from runtime_common import (
     maybe_complete_request,
     now_iso,
     request_bindings_for_task,
+    task_merge_required,
     update_binding_state,
+    upsert_merge_queue_entry,
+    upsert_worktree_registry_entry,
     write_root_cause_summary,
     write_json,
 )
@@ -186,8 +189,46 @@ def main():
                     worktree_path=task.get("worktreePath"),
                     diff_summary=task.get("diffSummary"),
                 )
-                maybe_complete_request(root, binding.get("requestId"), generator="harness-verify-task")
-                if task.get("kind") != "audit" and task.get("handoff", {}).get("mergeRequired"):
+                if task.get("kind") != "audit" and task_merge_required(task):
+                    task["status"] = "merge_queued"
+                    task["mergeStatus"] = "merge_queued"
+                    task["mergeQueuedAt"] = report["generatedAt"]
+                    write_json(task_pool_path, task_pool)
+                    upsert_merge_queue_entry(
+                        root,
+                        task,
+                        binding.get("requestId"),
+                        generator="harness-verify-task",
+                        merge_status="merge_queued",
+                        extra={
+                            "verificationResultPath": task["verificationResultPath"],
+                            "lastAuditVerdict": task.get("auditVerdict"),
+                        },
+                    )
+                    upsert_worktree_registry_entry(
+                        root,
+                        task,
+                        generator="harness-verify-task",
+                        status="merge_queued",
+                        cleanup_status=task.get("cleanupStatus"),
+                        extra={
+                            "mergeStatus": "merge_queued",
+                            "verificationResultPath": task["verificationResultPath"],
+                        },
+                    )
+                    update_binding_state(
+                        root,
+                        binding.get("requestId"),
+                        args.task_id,
+                        "merge_queued",
+                        reason="verification passed; queued for local integration merge",
+                        generator="harness-verify-task",
+                        session_id=binding.get("lineage", {}).get("sessionId"),
+                        verification=verification,
+                        worktree_path=task.get("worktreePath"),
+                        diff_summary=task.get("diffSummary"),
+                        outcome={"status": "merge_queued"},
+                    )
                     emit_follow_up_request(
                         root,
                         kind="audit",
@@ -200,6 +241,8 @@ def main():
                         reason="verified work requires audit before merge",
                         dedupe_key=f"audit:{args.task_id}:{overall_status}",
                     )
+                else:
+                    maybe_complete_request(root, binding.get("requestId"), generator="harness-verify-task")
             else:
                 update_binding_state(
                     root,
@@ -214,6 +257,15 @@ def main():
                     diff_summary=task.get("diffSummary"),
                     outcome={"status": "verification_failed"},
                 )
+                if task.get("worktreePath"):
+                    upsert_worktree_registry_entry(
+                        root,
+                        task,
+                        generator="harness-verify-task",
+                        status="recoverable",
+                        cleanup_status=task.get("cleanupStatus"),
+                        extra={"recoveryReason": task.get("verificationSummary")},
+                    )
                 emit_follow_up_request(
                     root,
                     kind="replan",

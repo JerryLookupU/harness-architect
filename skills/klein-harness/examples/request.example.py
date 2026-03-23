@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 import argparse
 import json
 import sys
@@ -6,18 +7,30 @@ from collections import Counter
 from pathlib import Path
 
 from runtime_common import (
+    build_change_summary,
+    build_feedback_summary,
+    build_intake_summary,
+    build_log_index,
     build_root_cause_summary,
     build_request_id,
     build_request_summary,
+    build_thread_state,
+    checkpoint_active_thread_tasks,
+    ensure_request_index_shape,
     ensure_runtime_scaffold,
     find_request,
+    infer_request_impact_class,
     lineage_event,
     load_json,
     load_jsonl,
+    load_policy_summary,
     load_optional_json,
+    normalize_request_record,
     now_iso,
     normalize_context_paths,
+    record_request_thread_state,
     reconcile_requests,
+    supersede_queued_thread_tasks,
     update_request_snapshot,
     upsert_request_record,
     update_request_status,
@@ -25,21 +38,43 @@ from runtime_common import (
 )
 
 
+def write_request_hot_state(root: Path, files: dict, index: dict):
+    task_map = load_json(files["request_task_map_path"])
+    task_pool = load_optional_json(files["harness"] / "task-pool.json")
+    policy_summary = load_policy_summary(files["policy_summary_path"], default_generator="harness-request")
+    feedback_summary = load_optional_json(files["feedback_summary_path"]) or build_feedback_summary(load_jsonl(files["feedback_log_path"]))
+    log_index = load_optional_json(files["log_index_path"]) or build_log_index(root)
+    request_summary = build_request_summary(index, task_map, task_pool)
+    thread_state = build_thread_state(index, task_pool, request_summary, generator="harness-request", policy_summary=policy_summary)
+    intake_summary = build_intake_summary(index, thread_state, generator="harness-request", policy_summary=policy_summary)
+    change_summary = build_change_summary(index, task_pool, thread_state, generator="harness-request", policy_summary=policy_summary)
+    write_json(files["request_summary_path"], request_summary)
+    write_json(files["thread_state_path"], thread_state)
+    write_json(files["intake_summary_path"], intake_summary)
+    write_json(files["change_summary_path"], change_summary)
+    return request_summary, thread_state, intake_summary, change_summary
+
+
 def cmd_submit(args):
     root = Path(args.root).resolve()
     files = ensure_runtime_scaffold(root, generator="harness-request")
     index = load_json(files["request_index_path"])
+    ensure_request_index_shape(index)
+    task_map = load_json(files["request_task_map_path"])
+    task_pool = load_optional_json(files["harness"] / "task-pool.json")
+    thread_state = load_optional_json(files["thread_state_path"], index) or index
     seq = int(index.get("nextSeq", 1))
     request_id = build_request_id(seq)
     request = {
         "requestId": request_id,
         "seq": seq,
         "source": args.source,
-        "kind": args.kind,
+        "kind": args.kind or "implementation",
         "goal": args.goal,
         "projectRoot": str(root),
         "contextPaths": normalize_context_paths(root, args.context or []),
         "threadKey": args.thread_key,
+        "idempotencyKey": args.idempotency_key,
         "priority": args.priority,
         "scope": args.scope,
         "mergePolicy": args.merge_policy,
@@ -48,24 +83,60 @@ def cmd_submit(args):
         "createdAt": now_iso(),
     }
 
-    with files["queue_path"].open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(request, ensure_ascii=False) + "\n")
+    summary = normalize_request_record(
+        {
+            **request,
+            "summary": args.goal[:120],
+            "boundTaskIds": [],
+            "bindingIds": [],
+            "statusReason": None,
+            "updatedAt": request["createdAt"],
+        },
+        index=index,
+        task_map=task_map,
+        thread_state=thread_state,
+        generator="harness-request",
+    )
 
-    summary = {
-        **request,
-        "summary": args.goal[:120],
-        "boundTaskIds": [],
-        "bindingIds": [],
-        "statusReason": None,
-        "updatedAt": request["createdAt"],
-    }
+    impact_classification = "continue_safe"
+    impacted_task_ids = []
+    superseded_task_ids = []
+    checkpoint_task_ids = []
+    if task_pool:
+        impact_classification, impacted = infer_request_impact_class(summary, task_pool.get("tasks", []), load_optional_json(files["feedback_summary_path"], {}))
+        impacted_task_ids = [item.get("taskId") for item in impacted if item.get("taskId")]
+        summary["impactClassification"] = impact_classification
+        summary["impactedTaskIds"] = impacted_task_ids
+        if summary.get("normalizedIntentClass") == "append_change" and impact_classification in {"supersede_queued", "checkpoint_then_replan"}:
+            superseded_task_ids = supersede_queued_thread_tasks(root, summary, generator="harness-request")
+            checkpoint_task_ids = checkpoint_active_thread_tasks(root, summary, generator="harness-request")
+            summary["supersededQueuedTaskIds"] = superseded_task_ids
+            summary["checkpointTaskIds"] = checkpoint_task_ids
+
+    with files["queue_path"].open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(summary, ensure_ascii=False) + "\n")
+
+    if summary.get("fusionDecision") in {"duplicate_of_existing", "merged_as_context", "noop"}:
+        summary["status"] = "completed"
+        summary["effectStatus"] = "closed"
+        summary["statusReason"] = summary.get("classificationReason")
+
     index["nextSeq"] = seq + 1
     index["generatedAt"] = request["createdAt"]
     index["generator"] = "harness-request"
     upsert_request_record(index, summary)
+    record_request_thread_state(
+        index,
+        summary,
+        impact_classification=summary.get("impactClassification"),
+        impacted_task_ids=impacted_task_ids,
+        superseded_task_ids=superseded_task_ids,
+        checkpoint_task_ids=checkpoint_task_ids,
+        generator="harness-request",
+    )
     write_json(files["request_index_path"], index)
     update_request_snapshot(files, summary, generator="harness-request")
-    write_json(files["request_summary_path"], build_request_summary(index, load_json(files["request_task_map_path"]), None))
+    write_request_hot_state(root, files, index)
 
     lineage_event(
         root,
@@ -73,13 +144,29 @@ def cmd_submit(args):
         "harness-request",
         request_id=request_id,
         detail=args.goal,
-        context={"kind": args.kind, "source": args.source},
+        context={
+            "kindHint": args.kind,
+            "source": args.source,
+            "normalizedIntentClass": summary.get("normalizedIntentClass"),
+            "fusionDecision": summary.get("fusionDecision"),
+            "threadKey": summary.get("targetThreadKey"),
+            "targetPlanEpoch": summary.get("targetPlanEpoch"),
+            "impactClassification": summary.get("impactClassification"),
+        },
     )
 
     print(json.dumps({
         "ok": True,
         "requestId": request_id,
-        "status": "queued",
+        "status": summary.get("status"),
+        "threadKey": summary.get("targetThreadKey"),
+        "normalizedIntentClass": summary.get("normalizedIntentClass"),
+        "fusionDecision": summary.get("fusionDecision"),
+        "targetPlanEpoch": summary.get("targetPlanEpoch"),
+        "impactClassification": summary.get("impactClassification"),
+        "duplicateOfRequestId": summary.get("duplicateOfRequestId"),
+        "mergedIntoRequestId": summary.get("mergedIntoRequestId"),
+        "effectRequestIds": summary.get("effectRequestIds", []),
         "queuePath": str(files["queue_path"]),
     }, ensure_ascii=False, indent=2))
     return 0
@@ -92,9 +179,14 @@ def build_report_payload(root: Path, request_id: str | None):
     current = load_optional_json(files["state_dir"] / "current.json", {})
     runtime = load_optional_json(files["state_dir"] / "runtime.json", {})
     queue_summary = load_optional_json(files["queue_summary_path"], {})
+    intake_summary = load_optional_json(files["intake_summary_path"], {})
+    thread_state = load_optional_json(files["thread_state_path"], {})
+    change_summary = load_optional_json(files["change_summary_path"], {})
     task_summary = load_optional_json(files["task_summary_path"], {})
     worker_summary = load_optional_json(files["worker_summary_path"], {})
     daemon_summary = load_optional_json(files["daemon_summary_path"], {})
+    worktree_registry = load_optional_json(files["worktree_registry_path"], {})
+    merge_summary = load_optional_json(files["merge_summary_path"], {})
     request_summary = load_optional_json(files["request_summary_path"]) or build_request_summary(index, task_map, None)
     lineage_index = load_optional_json(files["lineage_index_path"], {})
     root_cause_summary = load_optional_json(files["root_cause_summary_path"]) or build_root_cause_summary(load_jsonl(files["root_cause_log_path"]))
@@ -131,6 +223,9 @@ def build_report_payload(root: Path, request_id: str | None):
         "activeTaskCount": runtime.get("activeTaskCount", 0),
         "activeRunnerCount": runtime.get("activeRunnerCount", 0),
         "queueDepth": queue_summary.get("queueDepth", 0),
+        "intakeSummary": intake_summary,
+        "threadState": thread_state,
+        "changeSummary": change_summary,
         "recoverableTaskCount": runtime.get("recoverableTaskCount", 0),
         "recoverableRequestCount": request_summary.get("recoverableRequestCount", 0),
         "blockedRequestCount": request_summary.get("blockedRequestCount", 0),
@@ -139,6 +234,8 @@ def build_report_payload(root: Path, request_id: str | None):
         "taskSummary": task_summary,
         "workerSummary": worker_summary,
         "daemonSummary": daemon_summary,
+        "worktreeRegistry": worktree_registry,
+        "mergeSummary": merge_summary,
         "lastTickAt": runtime.get("lastTickAt"),
         "lastTrigger": runtime.get("lastTrigger"),
         "orchestrationSessionId": runtime.get("orchestrationSessionId") or session_registry.get("orchestrationSessionId"),
@@ -163,6 +260,9 @@ def format_report_text(payload: dict):
         f"activeTaskCount: {payload.get('activeTaskCount')}",
         f"activeRunnerCount: {payload.get('activeRunnerCount')}",
         f"queueDepth: {payload.get('queueDepth')}",
+        f"duplicateRequestCount: {payload.get('intakeSummary', {}).get('duplicateCount', 0)}",
+        f"contextMergeCount: {payload.get('intakeSummary', {}).get('contextMergeCount', 0)}",
+        f"inspectionOverlayCount: {payload.get('intakeSummary', {}).get('inspectionOverlayCount', 0)}",
         f"recoverableTaskCount: {payload.get('recoverableTaskCount')}",
         f"recoverableRequestCount: {payload.get('recoverableRequestCount')}",
         f"blockedRequestCount: {payload.get('blockedRequestCount')}",
@@ -171,6 +271,10 @@ def format_report_text(payload: dict):
         f"runtimeHealth: {payload.get('daemonSummary', {}).get('runtimeHealth')}",
         f"dispatchBackendDefault: {payload.get('daemonSummary', {}).get('dispatchBackendDefault')}",
         f"workerCount: {payload.get('workerSummary', {}).get('workerCount')}",
+        f"activeWorktreeCount: {len(payload.get('worktreeRegistry', {}).get('worktrees', []))}",
+        f"mergeQueueDepth: {payload.get('mergeSummary', {}).get('queueDepth', 0)}",
+        f"readyToMergeCount: {payload.get('mergeSummary', {}).get('readyToMergeCount', 0)}",
+        f"mergeConflictCount: {payload.get('mergeSummary', {}).get('conflictCount', 0)}",
         f"lineageEventCount: {payload.get('lineageEventCount')}",
         f"rootCauseCount: {payload.get('rootCauseSummary', {}).get('rcaCount', 0)}",
         f"openRootCauseCount: {payload.get('rootCauseSummary', {}).get('openCount', 0)}",
@@ -181,8 +285,14 @@ def format_report_text(payload: dict):
             "",
             f"activeRequest: {active_request.get('requestId')}",
             f"requestKind: {active_request.get('kind')}",
+            f"kindHint: {active_request.get('kindHint')}",
             f"requestStatus: {active_request.get('status')}",
             f"requestGoal: {active_request.get('goal')}",
+            f"normalizedIntentClass: {active_request.get('normalizedIntentClass')}",
+            f"fusionDecision: {active_request.get('fusionDecision')}",
+            f"threadKey: {active_request.get('threadKey')}",
+            f"targetPlanEpoch: {active_request.get('targetPlanEpoch')}",
+            f"impactClassification: {active_request.get('impactClassification')}",
         ])
         if active_request.get("rcaId"):
             lines.append(f"rcaId: {active_request.get('rcaId')}")
@@ -194,6 +304,7 @@ def format_report_text(payload: dict):
                 f"bindingStatus: {active_binding.get('bindingStatus')}",
                 f"boundSession: {active_binding.get('sessionId')}",
                 f"worktreePath: {active_binding.get('worktreePath')}",
+                f"mergeStatus: {active_binding.get('outcome', {}).get('status') or active_binding.get('bindingStatus')}",
                 f"verification: {active_binding.get('verificationStatus')}",
                 f"verificationResultPath: {active_binding.get('verificationResultPath')}",
                 f"diffSummary: {active_binding.get('diffSummary')}",
@@ -227,9 +338,7 @@ def cmd_reconcile(args):
     result = reconcile_requests(root, generator="harness-reconcile")
     files = ensure_runtime_scaffold(root, generator="harness-reconcile")
     index = load_json(files["request_index_path"])
-    task_map = load_json(files["request_task_map_path"])
-    task_pool = load_optional_json(files["harness"] / "task-pool.json")
-    write_json(files["request_summary_path"], build_request_summary(index, task_map, task_pool))
+    write_request_hot_state(root, files, index)
     print(json.dumps({"ok": True, **result}, ensure_ascii=False, indent=2))
     return 0
 
@@ -243,7 +352,7 @@ def cmd_cancel(args):
     index["generator"] = "harness-request"
     write_json(files["request_index_path"], index)
     update_request_snapshot(files, find_request(index.get("requests", []), args.request_id), generator="harness-request")
-    write_json(files["request_summary_path"], build_request_summary(index, load_json(files["request_task_map_path"]), load_optional_json(files["harness"] / "task-pool.json")))
+    write_request_hot_state(root, files, index)
     lineage_event(
         root,
         "request.cancelled",
@@ -261,11 +370,12 @@ def main():
 
     p_submit = sub.add_parser("submit", help="append a request into the project queue")
     p_submit.add_argument("--root", required=True)
-    p_submit.add_argument("--kind", required=True)
+    p_submit.add_argument("--kind")
     p_submit.add_argument("--goal", required=True)
     p_submit.add_argument("--source", default="shell")
     p_submit.add_argument("--context", action="append", default=[])
     p_submit.add_argument("--thread-key")
+    p_submit.add_argument("--idempotency-key")
     p_submit.add_argument("--priority", default="P2")
     p_submit.add_argument("--scope", default="project")
     p_submit.add_argument("--merge-policy", default="append")

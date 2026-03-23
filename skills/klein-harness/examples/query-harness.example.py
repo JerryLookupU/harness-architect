@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 import argparse
 import json
 import sys
@@ -151,6 +152,8 @@ def make_blueprint(spec, task_pool, work_items, tasks):
 def make_task_view(task, feedback_summary=None):
     return {
         "taskId": task.get("taskId"),
+        "threadKey": task.get("threadKey"),
+        "planEpoch": task.get("planEpoch"),
         "kind": task.get("kind"),
         "roleHint": task.get("roleHint"),
         "workerMode": task.get("workerMode"),
@@ -163,7 +166,17 @@ def make_task_view(task, feedback_summary=None):
         "ownedPaths": task.get("ownedPaths", []),
         "verificationRuleIds": task.get("verificationRuleIds", []),
         "branchName": task.get("branchName"),
+        "baseRef": task.get("baseRef") or task.get("dispatch", {}).get("baseRef"),
         "worktreePath": task.get("worktreePath"),
+        "worktreeStatus": task.get("worktreeStatus"),
+        "worktreePreparedAt": task.get("worktreePreparedAt"),
+        "integrationBranch": task.get("integrationBranch") or task.get("dispatch", {}).get("integrationBranch"),
+        "mergeRequired": task.get("mergeRequired", task.get("handoff", {}).get("mergeRequired")),
+        "mergeStatus": task.get("mergeStatus"),
+        "mergeCheckedAt": task.get("mergeCheckedAt"),
+        "mergedCommit": task.get("mergedCommit"),
+        "cleanupStatus": task.get("cleanupStatus"),
+        "conflictPaths": task.get("conflictPaths", []),
         "diffBase": task.get("diffBase"),
         "diffSummary": task.get("diffSummary"),
         "resumeStrategy": task.get("resumeStrategy"),
@@ -173,6 +186,9 @@ def make_task_view(task, feedback_summary=None):
         "verificationResultPath": task.get("verificationResultPath"),
         "claim": task.get("claim", {}),
         "handoff": task.get("handoff", {}),
+        "checkpointRequired": task.get("checkpointRequired"),
+        "checkpointReason": task.get("checkpointReason"),
+        "supersededByRequestId": task.get("supersededByRequestId"),
         "recentFailures": recent_task_failures(feedback_summary, task.get("taskId")),
     }
 
@@ -206,11 +222,19 @@ def make_feedback_view(feedback_summary, task_id=None):
     }
 
 
-def make_requests_view(request_summary):
+def make_requests_view(request_summary, intake_summary=None, thread_state=None, change_summary=None):
     return {
         "requestCounts": request_summary.get("requestCounts", {}),
+        "duplicateRequestCount": request_summary.get("duplicateRequestCount", 0),
+        "contextMergeCount": request_summary.get("contextMergeCount", 0),
+        "inspectionOverlayCount": request_summary.get("inspectionOverlayCount", 0),
+        "threadCount": (thread_state or {}).get("threadCount", 0),
+        "activeThreadCount": (thread_state or {}).get("activeThreadCount", 0),
+        "compoundSplitCount": (intake_summary or {}).get("compoundSplitCount", 0),
+        "appendChangeCount": (change_summary or {}).get("appendChangeCount", 0),
         "activeRequest": request_summary.get("activeRequest"),
         "recentRequests": request_summary.get("recentRequests", []),
+        "recentSubmissionClassifications": request_summary.get("recentSubmissionClassifications", []),
         "bindings": request_summary.get("bindings", []),
     }
 
@@ -232,6 +256,27 @@ def make_daemon_view(daemon_summary):
         "runtimeHealth": "unknown",
         "dispatchBackendDefault": None,
         "workerBackendHealth": {},
+    }
+
+
+def make_worktrees_view(worktree_registry):
+    return worktree_registry or {
+        "schemaVersion": "1.0",
+        "worktrees": [],
+    }
+
+
+def make_merge_queue_view(merge_queue, merge_summary):
+    return {
+        "integrationBranch": merge_queue.get("integrationBranch") if merge_queue else None,
+        "queueDepth": merge_summary.get("queueDepth", 0) if merge_summary else 0,
+        "readyToMergeCount": merge_summary.get("readyToMergeCount", 0) if merge_summary else 0,
+        "conflictCount": merge_summary.get("conflictCount", 0) if merge_summary else 0,
+        "items": (merge_queue or {}).get("items", []),
+        "readyToMerge": (merge_summary or {}).get("readyToMerge", []),
+        "openConflicts": (merge_summary or {}).get("openConflicts", []),
+        "recentMerged": (merge_summary or {}).get("recentMerged", []),
+        "supersededCandidates": (merge_summary or {}).get("supersededCandidates", []),
     }
 
 
@@ -386,6 +431,8 @@ def format_text(view, payload):
     if view == "task":
         lines = [
             f"taskId: {payload.get('taskId')}",
+            f"threadKey: {payload.get('threadKey')}",
+            f"planEpoch: {payload.get('planEpoch')}",
             f"kind: {payload.get('kind')}",
             f"roleHint: {payload.get('roleHint')}",
             f"workerMode: {payload.get('workerMode')}",
@@ -396,12 +443,24 @@ def format_text(view, payload):
             f"nodeId: {payload.get('claim', {}).get('nodeId')}",
             f"boundSessionId: {payload.get('claim', {}).get('boundSessionId')}",
             f"branchName: {payload.get('branchName')}",
+            f"baseRef: {payload.get('baseRef')}",
             f"worktreePath: {payload.get('worktreePath')}",
+            f"worktreeStatus: {payload.get('worktreeStatus')}",
+            f"worktreePreparedAt: {payload.get('worktreePreparedAt')}",
+            f"integrationBranch: {payload.get('integrationBranch')}",
+            f"mergeRequired: {payload.get('mergeRequired')}",
+            f"mergeStatus: {payload.get('mergeStatus')}",
+            f"mergeCheckedAt: {payload.get('mergeCheckedAt')}",
+            f"mergedCommit: {payload.get('mergedCommit')}",
+            f"cleanupStatus: {payload.get('cleanupStatus')}",
+            f"conflictPaths: {payload.get('conflictPaths')}",
             f"diffBase: {payload.get('diffBase')}",
             f"diffSummary: {payload.get('diffSummary')}",
             f"verificationStatus: {payload.get('verificationStatus')}",
             f"verificationSummary: {payload.get('verificationSummary')}",
             f"verificationResultPath: {payload.get('verificationResultPath')}",
+            f"checkpointRequired: {payload.get('checkpointRequired')}",
+            f"supersededByRequestId: {payload.get('supersededByRequestId')}",
         ]
         for failure in payload.get("recentFailures", []):
             lines.append(f"recentFailure: {failure.get('feedbackType')} [{failure.get('severity')}] {failure.get('message')}")
@@ -466,12 +525,19 @@ def format_text(view, payload):
     if view == "requests":
         lines = [
             f"requestCounts: {payload.get('requestCounts', {})}",
+            f"duplicateRequestCount: {payload.get('duplicateRequestCount', 0)}",
+            f"contextMergeCount: {payload.get('contextMergeCount', 0)}",
+            f"inspectionOverlayCount: {payload.get('inspectionOverlayCount', 0)}",
+            f"threadCount: {payload.get('threadCount', 0)}",
+            f"activeThreadCount: {payload.get('activeThreadCount', 0)}",
         ]
         active = payload.get("activeRequest")
         if active:
-            lines.append(f"activeRequest: {active.get('requestId')} [{active.get('status')}] {active.get('kind')}")
+            lines.append(f"activeRequest: {active.get('requestId')} [{active.get('status')}] {active.get('kind')} intent={active.get('normalizedIntentClass')} fusion={active.get('fusionDecision')} thread={active.get('threadKey')} epoch={active.get('targetPlanEpoch')}")
+        for item in payload.get("recentSubmissionClassifications", []):
+            lines.append(f"- classification {item.get('requestId')} intent={item.get('normalizedIntentClass')} fusion={item.get('fusionDecision')} thread={item.get('threadKey')} epoch={item.get('targetPlanEpoch')}")
         for item in payload.get("recentRequests", []):
-            lines.append(f"- {item.get('requestId')} [{item.get('status')}] {item.get('kind')} {item.get('goal')}")
+            lines.append(f"- {item.get('requestId')} [{item.get('status')}] {item.get('kind')} thread={item.get('threadKey')} epoch={item.get('targetPlanEpoch')} {item.get('goal')}")
         return "\n".join(lines)
     if view == "workers":
         lines = [
@@ -483,7 +549,7 @@ def format_text(view, payload):
         ]
         for item in payload.get("workerNodes", []):
             lines.append(
-                f"- {item.get('taskId')} node={item.get('nodeId')} backend={item.get('dispatchBackend')} nodeHealth={item.get('nodeHealth')} backendHealth={item.get('backendHealth')}"
+                f"- {item.get('taskId')} thread={item.get('threadKey')} epoch={item.get('planEpoch')} node={item.get('nodeId')} backend={item.get('dispatchBackend')} nodeHealth={item.get('nodeHealth')} backendHealth={item.get('backendHealth')} worktree={item.get('worktreePath')}"
             )
         return "\n".join(lines)
     if view == "daemon":
@@ -499,6 +565,47 @@ def format_text(view, payload):
                 f"workerBackendHealth: {payload.get('workerBackendHealth', {})}",
             ]
         )
+    if view == "worktrees":
+        lines = [
+            f"worktreeCount: {len(payload.get('worktrees', []))}",
+        ]
+        for item in payload.get("worktrees", [])[:10]:
+            lines.append(
+                f"- {item.get('taskId')} [{item.get('status')}] branch={item.get('branchName')} worktree={item.get('worktreePath')} merge={item.get('mergeRequired')} cleanup={item.get('cleanupStatus')}"
+            )
+        return "\n".join(lines)
+    if view == "merge-queue":
+        lines = [
+            f"integrationBranch: {payload.get('integrationBranch')}",
+            f"queueDepth: {payload.get('queueDepth')}",
+            f"readyToMergeCount: {payload.get('readyToMergeCount')}",
+            f"conflictCount: {payload.get('conflictCount')}",
+        ]
+        for item in payload.get("items", [])[:10]:
+            lines.append(
+                f"- {item.get('taskId')} [{item.get('mergeStatus')}] branch={item.get('branchName')} epoch={item.get('planEpoch')} supersededByEpoch={item.get('supersededByEpoch')}"
+            )
+        return "\n".join(lines)
+    if view == "integration":
+        lines = [
+            f"integrationBranch: {payload.get('integrationBranch')}",
+            f"readyToMergeCount: {payload.get('readyToMergeCount')}",
+            f"conflictCount: {payload.get('conflictCount')}",
+        ]
+        for item in payload.get("recentMerged", [])[:10]:
+            lines.append(
+                f"- merged {item.get('taskId')} commit={item.get('mergedCommit')} branch={item.get('branchName')}"
+            )
+        return "\n".join(lines)
+    if view == "conflicts":
+        lines = [
+            f"conflictCount: {payload.get('conflictCount')}",
+        ]
+        for item in payload.get("openConflicts", [])[:10]:
+            lines.append(
+                f"- {item.get('taskId')} branch={item.get('branchName')} conflictPaths={item.get('conflictPaths')}"
+            )
+        return "\n".join(lines)
     if view == "blockers":
         lines = ["queueBlocked:"]
         if payload.get("queueBlocked"):
@@ -522,7 +629,7 @@ def format_text(view, payload):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", required=True)
-    parser.add_argument("--view", required=True, choices=["overview", "progress", "current", "blueprint", "task", "feedback", "requests", "workers", "daemon", "blockers", "logs", "log"])
+    parser.add_argument("--view", required=True, choices=["overview", "progress", "current", "blueprint", "task", "feedback", "requests", "workers", "daemon", "worktrees", "merge-queue", "integration", "conflicts", "blockers", "logs", "log"])
     parser.add_argument("--task-id")
     parser.add_argument("--request-id")
     parser.add_argument("--session-id")
@@ -544,10 +651,16 @@ def main():
     blueprint_state = load_optional_json(state_dir / "blueprint-index.json")
     feedback_summary = load_optional_json(state_dir / "feedback-summary.json")
     queue_summary = load_optional_json(files["queue_summary_path"], {})
+    intake_summary = load_optional_json(files["intake_summary_path"], {})
+    thread_state = load_optional_json(files["thread_state_path"], {})
+    change_summary = load_optional_json(files["change_summary_path"], {})
     task_summary = load_optional_json(files["task_summary_path"], {})
     worker_summary = load_optional_json(files["worker_summary_path"], {})
     daemon_summary = load_optional_json(files["daemon_summary_path"], {})
     request_summary = load_optional_json(files["request_summary_path"], {})
+    worktree_registry = load_optional_json(files["worktree_registry_path"], {})
+    merge_queue = load_optional_json(files["merge_queue_path"], {})
+    merge_summary = load_optional_json(files["merge_summary_path"], {})
     log_index = load_optional_json(state_dir / "log-index.json") or build_log_index(root)
 
     progress = current_state or read_progress_state(files, generator="harness-query")
@@ -591,11 +704,22 @@ def main():
     elif args.view == "feedback":
         payload = make_feedback_view(feedback_summary, args.task_id)
     elif args.view == "requests":
-        payload = make_requests_view(request_summary)
+        payload = make_requests_view(request_summary, intake_summary, thread_state, change_summary)
     elif args.view == "workers":
         payload = make_workers_view(worker_summary)
     elif args.view == "daemon":
         payload = make_daemon_view(daemon_summary)
+    elif args.view == "worktrees":
+        payload = make_worktrees_view(worktree_registry)
+    elif args.view == "merge-queue":
+        payload = make_merge_queue_view(merge_queue, merge_summary)
+    elif args.view == "integration":
+        payload = make_merge_queue_view(merge_queue, merge_summary)
+    elif args.view == "conflicts":
+        payload = {
+            "conflictCount": merge_summary.get("conflictCount", 0),
+            "openConflicts": merge_summary.get("openConflicts", []),
+        }
     elif args.view == "blockers":
         payload = make_blockers_view(queue_summary, task_summary, log_index)
     elif args.view == "logs":

@@ -18,7 +18,7 @@ Global entry commands:
 
 - `harness-init <ROOT>`
 - `harness-bootstrap <ROOT> <GOAL> [STACK_HINT] [kick options...]`
-- `harness-submit <ROOT> --kind <KIND> --goal <TEXT> [options...]`
+- `harness-submit <ROOT> --goal <TEXT> [options...]`
 - `harness-report <ROOT> [--request-id <ID>] [--format text|json]`
 
 Project-local entry commands under `.harness/bin`:
@@ -39,6 +39,42 @@ Repo-local Python control surface:
 - `.harness/scripts/request.py cancel --root <ROOT> --request-id <ID>`
 - `.harness/scripts/refresh-state.py <ROOT>`
 
+`harness-submit` stays the single human-originating write path.
+`--kind` remains supported, but it is only a hint.
+The runtime decides deterministic-first classification, fusion, thread correlation, selective replan, and dispatch impact.
+
+## Single-Entry Intake
+
+Every submission remains append-only in `.harness/requests/queue.jsonl`, but its effect is normalized in mutable ledgers and hot summaries.
+
+Deterministic-first internal intent classes:
+
+- `duplicate_or_noop`
+- `context_enrichment`
+- `inspection`
+- `append_change`
+- `fresh_work`
+- `compound_split`
+- `ambiguous_needs_orchestrator`
+
+Deterministic-first fusion decisions:
+
+- `accepted_new_thread`
+- `accepted_existing_thread`
+- `duplicate_of_existing`
+- `merged_as_context`
+- `inspection_overlay`
+- `append_requires_replan`
+- `compound_split_created`
+- `noop`
+
+Important distinction:
+
+- requests are append-only events
+- effects are expected to be idempotent
+- same thread + same idempotency key should not create duplicate effective work
+- same thread + new evidence usually merges as context instead of spawning a full new implementation plan
+
 ## Request Lifecycle
 
 Append-only intake lives in `.harness/requests/queue.jsonl`.
@@ -52,14 +88,24 @@ Supported request states:
 - `queued -> cancelled`
 - `running -> recoverable -> resumed`
 
+For code-bearing tasks the runtime may also materialize task/merge lifecycle stages through task status and merge ledgers:
+
+- `queued -> worktree_prepared -> dispatched -> running -> verified -> merge_queued -> merge_checked -> merged -> completed`
+- conflict path: `verified -> merge_queued -> merge_conflict -> merge_resolution_requested`
+
 Notes:
 
 - `bound` means runtime chose at least one task and wrote an explicit binding artifact.
 - `dispatched` means routing passed and runner wrote dispatch evidence, even in `--dispatch-mode print`.
 - `running` is driven by runner heartbeat, not by model self-report.
 - `verified` is written by `harness-verify-task`.
+- `worktree_prepared` means the runtime prepared the task branch/worktree binding before execution.
+- `merge_queued` / `merge_checked` / `merged` are runtime-controlled local integration stages; workers do not choose these transitions themselves.
 - `completed` closes the request loop once all bound work is verified.
 - `recoverable` means the runtime has enough lineage/session state to resume or replan.
+
+The runtime remains live while new submissions arrive.
+Fresh bootstrap is not required for appended requirements.
 
 ## Init
 
@@ -77,6 +123,9 @@ Creates at least:
 - `.harness/state/request-summary.json`
 - `.harness/state/lineage-index.json`
 - `.harness/state/root-cause-summary.json`
+- `.harness/state/worktree-registry.json`
+- `.harness/state/merge-queue.json`
+- `.harness/state/merge-summary.json`
 - `.harness/lineage.jsonl`
 - `.harness/session-registry.json`
 - `.harness/project-meta.json`
@@ -122,6 +171,14 @@ Each binding records at least:
 - `lineage.verificationStatus`
 - `lineage.verificationResultPath`
 - `history[]`
+
+Thread-aware execution metadata should remain explicit when available:
+
+- `threadKey`
+- `targetPlanEpoch`
+- `impactClassification`
+- `duplicateOfRequestId`
+- `mergedIntoRequestId`
 
 ## RCA Allocation
 
@@ -177,6 +234,16 @@ Runtime contract:
 
 The execution model never decides `fresh` vs `resume` on its own.
 
+Pre-dispatch / pre-resume checks are deterministic-first:
+
+- task still on latest valid plan epoch
+- queued task not superseded
+- checkpoint not required
+- owned paths still valid
+- new appended requirements have not invalidated the task
+- resume is safe for the task/session relationship
+- compact handoff and verification state are not stale beyond policy thresholds
+
 ## Anti-Self-Intersection Rules
 
 - sibling concurrent workers must not resume the same active session
@@ -194,6 +261,9 @@ Primary machine-readable hot path:
 - `.harness/state/feedback-summary.json`
 - `.harness/state/root-cause-summary.json`
 - `.harness/state/request-summary.json`
+- `.harness/state/intake-summary.json`
+- `.harness/state/thread-state.json`
+- `.harness/state/change-summary.json`
 - `.harness/state/lineage-index.json`
 
 `refresh-state.py` refreshes these from:
@@ -207,6 +277,9 @@ Primary machine-readable hot path:
 - lineage log
 
 Operator tools should prefer hot state first and degrade gracefully to the source ledgers.
+
+`progress.md` is a human projection rendered from `.harness/state/progress.json`.
+Machine-facing tools should prefer JSON summaries over Markdown parsing.
 
 ## Re-entrant Follow-Ups
 

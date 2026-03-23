@@ -14,6 +14,7 @@ Klein-Harness turns a repository into a re-entrant control surface:
 - runtime binds requests to tasks explicitly
 - session / worktree / verification lineage stays repo-local
 - symptom evidence stays separate from RCA allocation
+- code workers default to isolated task worktrees with local merge integration
 - reports, failures, audits, and replans can re-enter as the next request
 
 This repo ships three Codex skills:
@@ -60,6 +61,7 @@ That is how it avoids self-intersection, unsafe resume, and lost context.
 - request intake is append-only, but runtime state is still hot and queryable
 - worker evidence, compact handoff logs, verification, and RCA all stay repo-local
 - routing is explicit before dispatch; resume is not left to model guesswork
+- code workers execute in task worktrees and merge locally through runtime-controlled integration
 - blueprint work can stop at repo-local scan, or escalate through `researchMode`
 - downstream workers default to hot state -> compact logs -> raw logs, not transcript flooding
 
@@ -94,10 +96,13 @@ Use `--no-daemon` when you want a fully manual session.
 Submit incremental work:
 
 ```bash
-harness-submit /path/to/project --kind implementation --goal "根据 PRD 落一个增量改动" --context docs/prd.md
+harness-submit /path/to/project --goal "根据 PRD 落一个增量改动" --context docs/prd.md
 ```
 
-Bug / feedback intake uses the same request surface:
+`harness-submit` is the only human write path. `--kind` is optional and treated as a hint.
+The runtime classifies duplicate / context enrichment / inspection / append change / fresh work internally.
+
+Bug / feedback intake still uses the same request surface:
 
 ```bash
 harness-submit /path/to/project --kind bug --goal "T-042 在 verify 后回归"
@@ -117,11 +122,16 @@ Default loop:
 ```text
 submit
   -> .harness/requests/queue.jsonl
+  -> intake classification + request fusion
+  -> thread correlation + inflight impact analysis
+  -> selective replan / inspection overlay when needed
   -> request reconcile
   -> request-task binding
+  -> worktree prepare
   -> route-session
   -> runner dispatch / recover / resume
   -> verify-task
+  -> local merge queue / merge preview / conflict follow-up
   -> root-cause allocation / repair emission
   -> refresh-state
   -> report
@@ -134,6 +144,8 @@ Core lifecycle states:
 - `queued -> blocked`
 - `queued -> cancelled`
 - `running -> recoverable -> resumed`
+- code-task merge stages: `worktree_prepared -> merge_queued -> merge_checked -> merged`
+- conflict path: `merge_conflict -> merge_resolution_requested`
 
 ## Shared Surface
 
@@ -146,10 +158,16 @@ Primary hot state:
 - `.harness/state/task-summary.json`
 - `.harness/state/worker-summary.json`
 - `.harness/state/daemon-summary.json`
+- `.harness/state/worktree-registry.json`
+- `.harness/state/merge-queue.json`
+- `.harness/state/merge-summary.json`
 - `.harness/state/blueprint-index.json`
 - `.harness/state/feedback-summary.json`
 - `.harness/state/root-cause-summary.json`
 - `.harness/state/request-summary.json`
+- `.harness/state/intake-summary.json`
+- `.harness/state/thread-state.json`
+- `.harness/state/change-summary.json`
 - `.harness/state/lineage-index.json`
 - `.harness/state/log-index.json`
 - `.harness/state/research-index.json`
@@ -167,12 +185,22 @@ Primary mutable ledgers:
 - `.harness/state/request-task-map.json`
 - `.harness/task-pool.json`
 - `.harness/session-registry.json`
+- `.harness/state/worktree-registry.json`
+- `.harness/state/merge-queue.json`
 
 The control plane stays explicit in three layers:
 
 - cold evidence: append-only logs and raw runner output
 - runtime ledgers: mutable request/task/session truth
 - hot summaries: bounded JSON snapshots for operator and worker reads
+
+Progressive execution is thread-aware:
+
+- each submission gets classified and fused into a thread
+- `planEpoch` only bumps when appended change really affects current work
+- unaffected inflight tasks continue
+- superseded queued tasks stay visible in ledgers but do not dispatch
+- context rot and drift checks prefer checkpoint + fresh session over blind resume
 
 Evidence and RCA are intentionally split:
 
@@ -186,7 +214,7 @@ Global entry points:
 ```bash
 harness-init /path/to/project
 harness-bootstrap /path/to/project "<GOAL>" [STACK_HINT]
-harness-submit /path/to/project --kind implementation --goal "<GOAL>"
+harness-submit /path/to/project --goal "<GOAL>" [--kind <HINT>] [--thread-key <KEY>] [--idempotency-key <KEY>]
 harness-report /path/to/project
 harness-kick "<PROJECT_GOAL>" [STACK_HINT] [PROJECT_ROOT]
 ```
@@ -196,6 +224,10 @@ Project-local operator commands:
 ```bash
 .harness/bin/harness-ops . top
 .harness/bin/harness-ops . workers
+.harness/bin/harness-ops . worktrees
+.harness/bin/harness-ops . merge-queue
+.harness/bin/harness-ops . conflicts
+.harness/bin/harness-ops . integration
 .harness/bin/harness-ops . daemon status
 .harness/bin/harness-ops . doctor
 .harness/bin/harness-status .
@@ -226,6 +258,8 @@ Notes:
 - the repo-local runtime / daemon is the scheduler and source of truth
 - `--dispatch-mode tmux` is the current default execution backend
 - `--dispatch-mode print` is a non-executing compatibility / debug backend
+- workers should not merge or push directly; runtime serializes local integration through `integrationBranch`
+- git conflict is treated as a structured harness event, not as a late remote-push surprise
 - `harness-runner daemon` keeps ticking and refreshing hot state on a fixed interval
 - `harness-bootstrap` and `harness-kick` start the runner daemon by default after bootstrap success
 - use `--no-daemon` when you want a manual or fully operator-driven session
@@ -269,7 +303,7 @@ Minimal end-to-end demo:
 ```bash
 harness-init /path/to/project
 harness-bootstrap /path/to/project "根据当前仓库建立第一轮闭环"
-harness-submit /path/to/project --kind implementation --goal "实现一个最小 smoke 任务"
+harness-submit /path/to/project --goal "实现一个最小 smoke 任务"
 /path/to/project/.harness/bin/harness-runner tick /path/to/project --dispatch-mode print
 python3 /path/to/project/.harness/scripts/refresh-state.py /path/to/project
 harness-report /path/to/project
@@ -279,6 +313,7 @@ Release smoke:
 
 ```bash
 bash ./skills/klein-harness/examples/harness-release-smoke.example.sh
+bash ./skills/klein-harness/examples/worktree-merge-smoke.example.sh
 ```
 
 ## Layout
@@ -294,6 +329,12 @@ Primary docs:
 - `docs/control-plane-state.md`
 - `docs/operator-cli.md`
 - `docs/blueprint-research-gate.md`
+- `docs/worktree-first-execution.md`
+- `docs/local-merge-queue.md`
+- `docs/merge-conflict-as-runtime-signal.md`
+- `docs/single-entry-intake.md`
+- `docs/request-fusion-and-progressive-execution.md`
+- `docs/context-rot-and-drift-guards.md`
 - `docs/runtime-request-spec.md`
 - `docs/klein-architecture.md`
 - `docs/log-search-architecture.md`
@@ -324,11 +365,14 @@ Read in this order:
 4. `docs/klein-architecture.md`
 5. `docs/control-plane-state.md`
 6. `docs/operator-cli.md`
-7. `docs/log-search-architecture.md`
-8. `docs/blueprint-research-gate.md`
-9. `skills/klein-harness/references/schema-contracts.md`
-10. `skills/klein-harness/references/openclaw-dispatch.md`
-11. `skills/klein-harness/references/model-routing.md`
+7. `docs/worktree-first-execution.md`
+8. `docs/local-merge-queue.md`
+9. `docs/merge-conflict-as-runtime-signal.md`
+10. `docs/log-search-architecture.md`
+11. `docs/blueprint-research-gate.md`
+12. `skills/klein-harness/references/schema-contracts.md`
+13. `skills/klein-harness/references/openclaw-dispatch.md`
+14. `skills/klein-harness/references/model-routing.md`
 
 ## Trial and Feedback
 

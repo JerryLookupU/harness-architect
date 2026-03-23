@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 import json
 import sys
 from collections import Counter
@@ -6,9 +7,12 @@ from pathlib import Path
 
 from runtime_common import (
     TASK_ACTIVE_STATUSES,
+    build_change_summary,
     build_feedback_summary,
+    build_intake_summary,
     build_lineage_index,
     build_log_index,
+    build_merge_summary,
     build_policy_summary,
     build_progress_summary,
     build_queue_summary,
@@ -17,8 +21,11 @@ from runtime_common import (
     build_research_index,
     build_request_summary,
     build_task_summary,
+    build_thread_state,
     build_worker_summary,
+    context_rot_score,
     build_daemon_summary,
+    evaluate_task_drift_checklist,
     ensure_runtime_scaffold,
     load_json,
     load_jsonl,
@@ -26,6 +33,8 @@ from runtime_common import (
     load_policy_summary,
     load_runner_daemon_state,
     load_runner_heartbeats,
+    load_merge_queue,
+    load_worktree_registry,
     maybe_complete_request,
     now_iso,
     read_progress_state,
@@ -63,6 +72,8 @@ def main():
     runner_state = load_json(files["runner_state_path"])
     heartbeats = load_runner_heartbeats(files["state_dir"])
     daemon_state = load_runner_daemon_state(files["state_dir"])
+    worktree_registry = load_worktree_registry(files, generator="harness-refresh-state")
+    merge_queue = load_merge_queue(files, generator="harness-refresh-state")
     request_index = load_json(files["request_index_path"])
     request_task_map = load_json(files["request_task_map_path"])
     lineage_entries = load_jsonl(files["lineage_path"])
@@ -78,10 +89,20 @@ def main():
 
     request_summary = build_request_summary(request_index, request_task_map, task_pool)
     lineage_index = build_lineage_index(lineage_entries, task_pool, request_task_map)
+    thread_state = build_thread_state(
+        request_index,
+        task_pool,
+        request_summary,
+        generator="klein-harness",
+        policy_summary=policy_summary,
+    )
+    intake_summary = build_intake_summary(request_index, thread_state, generator="klein-harness", policy_summary=policy_summary)
+    change_summary = build_change_summary(request_index, task_pool, thread_state, generator="klein-harness", policy_summary=policy_summary)
     queue_summary = build_queue_summary(request_index, request_summary, generator="klein-harness", policy_summary=policy_summary)
     task_summary = build_task_summary(task_pool, feedback_summary, lineage_index, runner_state, generator="klein-harness", policy_summary=policy_summary)
     worker_summary = build_worker_summary(task_pool, session_registry, runner_state, heartbeats, generator="klein-harness", policy_summary=policy_summary)
     daemon_summary = build_daemon_summary(daemon_state, runner_state, worker_summary, generator="klein-harness", policy_summary=policy_summary)
+    merge_summary = build_merge_summary(merge_queue, worktree_registry, generator="klein-harness")
     research_summary = build_research_summary(research_index, generator="klein-harness")
     progress = build_progress_summary(progress, request_summary, task_summary, worker_summary, daemon_summary, generator="klein-harness")
     active_request = request_summary.get("activeRequest") or {}
@@ -107,6 +128,10 @@ def main():
         "currentRequestId": active_request.get("requestId"),
         "currentRequestKind": active_request.get("kind"),
         "currentRequestStatus": active_request.get("status"),
+        "currentIntentClass": active_request.get("normalizedIntentClass"),
+        "currentFusionDecision": active_request.get("fusionDecision"),
+        "currentThreadKey": active_request.get("targetThreadKey") or active_request.get("threadKey"),
+        "currentPlanEpoch": active_request.get("targetPlanEpoch"),
         "currentBindingId": active_binding.get("bindingId") if active_binding else None,
         "currentSessionId": active_binding.get("sessionId") if active_binding else None,
         "currentVerificationStatus": active_binding.get("verificationStatus") if active_binding else None,
@@ -134,9 +159,42 @@ def main():
         "compactLogCount": log_index.get("compactLogCount", 0),
         "researchMemoCount": research_index.get("memoCount", 0),
         "queueDepth": queue_summary.get("queueDepth", 0),
+        "activeWorktreeCount": len(worktree_registry.get("worktrees", [])),
+        "mergeQueueDepth": merge_summary.get("queueDepth", 0),
+        "mergeConflictCount": merge_summary.get("conflictCount", 0),
+        "readyToMergeCount": merge_summary.get("readyToMergeCount", 0),
+        "duplicateRequestCount": intake_summary.get("duplicateCount", 0),
+        "contextMergeCount": intake_summary.get("contextMergeCount", 0),
+        "inspectionOverlayCount": intake_summary.get("inspectionOverlayCount", 0),
         "runtimeHealth": daemon_summary.get("runtimeHealth"),
         "dispatchBackendDefault": daemon_summary.get("dispatchBackendDefault"),
     }
+
+    rot_entries = []
+    drift_failures = []
+    for task in tasks:
+        compact_log = log_index.get("logsByTaskId", {}).get(task.get("taskId")) if isinstance(log_index.get("logsByTaskId"), dict) else None
+        rot = context_rot_score(task, request_summary, heartbeats, thread_state, compact_log, policy_summary)
+        drift = evaluate_task_drift_checklist(task, latest_plan_epoch=rot.get("latestPlanEpoch"), request_summary=request_summary, compact_log=compact_log)
+        rot_entries.append(
+            {
+                "taskId": task.get("taskId"),
+                "threadKey": task.get("threadKey"),
+                "planEpoch": task.get("planEpoch"),
+                "contextRotScore": rot.get("score"),
+                "contextRotStatus": rot.get("status"),
+                "contextRotReasons": rot.get("reasons"),
+            }
+        )
+        if drift.get("failures"):
+            drift_failures.append(
+                {
+                    "taskId": task.get("taskId"),
+                    "threadKey": task.get("threadKey"),
+                    "planEpoch": task.get("planEpoch"),
+                    "failures": drift.get("failures"),
+                }
+            )
 
     runtime_state = {
         "schemaVersion": "1.0",
@@ -163,6 +221,8 @@ def main():
                 "boundSessionId": task.get("claim", {}).get("boundSessionId"),
                 "branchName": task.get("branchName"),
                 "worktreePath": task.get("worktreePath"),
+                "integrationBranch": task.get("integrationBranch") or task_pool.get("integrationBranch"),
+                "mergeStatus": task.get("mergeStatus"),
                 "recentFailures": feedback_summary.get("taskFeedbackSummary", {}).get(task.get("taskId"), {}).get("recentFailures", []),
             }
             for task in active
@@ -187,11 +247,17 @@ def main():
         "requestCounts": request_summary.get("requestCounts", {}),
         "activeRequest": active_request,
         "activeBinding": active_binding,
+        "activeThreadKey": active_request.get("targetThreadKey") or active_request.get("threadKey"),
+        "activePlanEpoch": active_request.get("targetPlanEpoch"),
         "boundRequestCount": request_summary.get("boundRequestCount", 0),
         "runningRequestCount": request_summary.get("runningRequestCount", 0),
         "recoverableRequestCount": request_summary.get("recoverableRequestCount", 0),
         "blockedRequestCount": request_summary.get("blockedRequestCount", 0),
         "completedRequestCount": request_summary.get("completedRequestCount", 0),
+        "duplicateRequestCount": intake_summary.get("duplicateCount", 0),
+        "contextMergeCount": intake_summary.get("contextMergeCount", 0),
+        "inspectionOverlayCount": intake_summary.get("inspectionOverlayCount", 0),
+        "compoundSplitCount": intake_summary.get("compoundSplitCount", 0),
         "lineageEventCount": lineage_index.get("eventCount", 0),
         "lineageLastSeq": lineage_index.get("lastSeq", 0),
         "activeLineageBindings": lineage_index.get("activeBindings", []),
@@ -208,10 +274,22 @@ def main():
         "recentHighSignalLogs": log_index.get("recentHighSignalLogs", []),
         "openLogBlockers": log_index.get("openBlockers", []),
         "recurringLogTags": log_index.get("recurringTags", {}),
+        "worktreeRegistry": worktree_registry,
+        "mergeQueue": merge_queue,
+        "mergeSummary": merge_summary,
+        "activeWorktrees": worktree_registry.get("worktrees", []),
+        "mergeQueueDepth": merge_summary.get("queueDepth", 0),
+        "mergeConflictCount": merge_summary.get("conflictCount", 0),
+        "readyToMergeCount": merge_summary.get("readyToMergeCount", 0),
         "researchMemoCount": research_index.get("memoCount", 0),
         "researchModes": research_index.get("researchModes", {}),
         "recentResearchMemos": research_index.get("recentMemos", []),
         "queueDepth": queue_summary.get("queueDepth", 0),
+        "intakeSummary": intake_summary,
+        "threadState": thread_state,
+        "changeSummary": change_summary,
+        "contextRotWarnings": [item for item in rot_entries if item.get("contextRotStatus") in {"warning", "downgraded"}][:10],
+        "driftChecklistFailures": drift_failures[:10],
         "runtimeHealth": daemon_summary.get("runtimeHealth"),
         "dispatchBackendDefault": daemon_summary.get("dispatchBackendDefault"),
         "workerBackendCounts": worker_summary.get("dispatchBackendCounts", {}),
@@ -238,6 +316,9 @@ def main():
         "planningStage": spec.get("planningStage"),
         "objective": spec.get("objective"),
         "integrationBranch": task_pool.get("integrationBranch"),
+        "mergeQueueDepth": merge_summary.get("queueDepth", 0),
+        "mergeConflictCount": merge_summary.get("conflictCount", 0),
+        "readyToMergeCount": merge_summary.get("readyToMergeCount", 0),
         "taskStatusCounts": dict(Counter(task.get("status", "unknown") for task in tasks)),
         "compactLogCount": log_index.get("compactLogCount", 0),
         "researchMemoCount": research_index.get("memoCount", 0),
@@ -252,6 +333,12 @@ def main():
     write_json(files["feedback_summary_path"], feedback_summary)
     write_json(files["root_cause_summary_path"], root_cause_summary)
     write_json(files["log_index_path"], log_index)
+    write_json(files["worktree_registry_path"], worktree_registry)
+    write_json(files["merge_queue_path"], merge_queue)
+    write_json(files["merge_summary_path"], merge_summary)
+    write_json(files["intake_summary_path"], intake_summary)
+    write_json(files["thread_state_path"], thread_state)
+    write_json(files["change_summary_path"], change_summary)
     write_json(files["queue_summary_path"], queue_summary)
     write_json(files["task_summary_path"], task_summary)
     write_json(files["worker_summary_path"], worker_summary)

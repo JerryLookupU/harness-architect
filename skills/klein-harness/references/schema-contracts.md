@@ -45,6 +45,10 @@
 - `state/feedback-summary.json`
 - `state/root-cause-summary.json`
 - `state/progress.json`
+- `state/request-summary.json`
+- `state/intake-summary.json`
+- `state/thread-state.json`
+- `state/change-summary.json`
 - `state/queue-summary.json`
 - `state/task-summary.json`
 - `state/worker-summary.json`
@@ -52,6 +56,9 @@
 - `state/log-index.json`
 - `state/policy-summary.json`
 - `state/research-summary.json`
+- `state/worktree-registry.json`
+- `state/merge-queue.json`
+- `state/merge-summary.json`
 
 推荐规则：
 
@@ -65,8 +72,8 @@
 推荐把控制面显式理解为三层：
 
 - cold evidence：`requests/queue.jsonl`、`lineage.jsonl`、`feedback-log.jsonl`、`root-cause-log.jsonl`、`state/runner-logs/*.log`
-- runtime ledgers：`state/request-index.json`、`state/request-task-map.json`、`task-pool.json`、`session-registry.json`
-- hot summaries：`current.json`、`runtime.json`、`request-summary.json`、`lineage-index.json`、`feedback-summary.json`、`progress.json`、`queue-summary.json`、`task-summary.json`、`worker-summary.json`、`daemon-summary.json`、`log-index.json`、`policy-summary.json`、`research-summary.json`
+- runtime ledgers：`state/request-index.json`、`state/request-task-map.json`、`task-pool.json`、`session-registry.json`、`state/worktree-registry.json`、`state/merge-queue.json`
+- hot summaries：`current.json`、`runtime.json`、`request-summary.json`、`intake-summary.json`、`thread-state.json`、`change-summary.json`、`lineage-index.json`、`feedback-summary.json`、`progress.json`、`queue-summary.json`、`task-summary.json`、`worker-summary.json`、`daemon-summary.json`、`log-index.json`、`policy-summary.json`、`research-summary.json`、`merge-summary.json`
 
 ## `lint` 复审节奏
 
@@ -128,6 +135,10 @@
 - `audit worker prompt (gpt-5.3-codex)` -> `examples/audit-worker-prompt-gpt-5.3-codex.example.md`
 - `state/current.json` -> `examples/current-state.example.json`
 - `state/runtime.json` -> `examples/runtime-state.example.json`
+- `state/request-summary.json` -> `request / binding hot summary`
+- `state/intake-summary.json` -> `single-entry intake classification / fusion summary`
+- `state/thread-state.json` -> `thread / epoch / merged-context / rot summary`
+- `state/change-summary.json` -> `append-change / inspection-overlay / supersede summary`
 - `state/blueprint-index.json` -> `examples/blueprint-index.example.json`
 - `state/feedback-summary.json` -> `examples/feedback-summary.example.json`
 - `state/root-cause-summary.json` -> `hot-state RCA summary`
@@ -138,6 +149,9 @@
 - `state/task-summary.json` -> `task hot summary`
 - `state/worker-summary.json` -> `worker / node hot summary`
 - `state/daemon-summary.json` -> `runtime daemon hot summary`
+- `state/worktree-registry.json` -> `task branch / worktree / cleanup registry`
+- `state/merge-queue.json` -> `local integration queue ledger`
+- `state/merge-summary.json` -> `bounded local merge / conflict summary`
 - `state/policy-summary.json` -> `deterministic policy / threshold summary`
 
 如果项目准备把 CLI 模板复制到 `.harness/bin` / `.harness/scripts`，推荐再维护：

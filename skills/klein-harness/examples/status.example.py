@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 import argparse
 import json
 import sys
@@ -34,8 +35,13 @@ def main():
     runtime_state = load_optional_json(state_dir / "runtime.json")
     feedback_summary = load_optional_json(state_dir / "feedback-summary.json")
     queue_summary = load_optional_json(files["queue_summary_path"], {})
+    intake_summary = load_optional_json(files["intake_summary_path"], {})
+    thread_state = load_optional_json(files["thread_state_path"], {})
+    change_summary = load_optional_json(files["change_summary_path"], {})
     worker_summary = load_optional_json(files["worker_summary_path"], {})
     daemon_summary = load_optional_json(files["daemon_summary_path"], {})
+    worktree_registry = load_optional_json(files["worktree_registry_path"], {})
+    merge_summary = load_optional_json(files["merge_summary_path"], {})
 
     progress = current_state or read_progress_state(files, generator="harness-status")
     task_pool = load_json(harness / "task-pool.json")
@@ -84,8 +90,19 @@ def main():
     active_request = (runtime_state or {}).get("activeRequest", {})
     print(f"active request: {active_request.get('requestId', '-')}")
     print(f"request status: {active_request.get('status', '-')}")
+    print(f"request intent: {active_request.get('normalizedIntentClass', '-')}")
+    print(f"fusion decision: {active_request.get('fusionDecision', '-')}")
+    print(f"thread key: {active_request.get('targetThreadKey', active_request.get('threadKey', '-'))}")
+    print(f"plan epoch: {active_request.get('targetPlanEpoch', '-')}")
     print()
     print(f"queue depth: {queue_summary.get('queueDepth', 0)}")
+    print(f"duplicate requests: {intake_summary.get('duplicateCount', 0)}")
+    print(f"context merges: {intake_summary.get('contextMergeCount', 0)}")
+    print(f"inspection overlays: {intake_summary.get('inspectionOverlayCount', 0)}")
+    print(f"threads: {thread_state.get('threadCount', 0)}")
+    print(f"active threads: {thread_state.get('activeThreadCount', 0)}")
+    print(f"append changes: {change_summary.get('appendChangeCount', 0)}")
+    print(f"superseded queued tasks: {change_summary.get('supersededQueuedTaskCount', 0)}")
     print(f"active workers: {active_workers}")
     print(f"active audit workers: {active_audit_workers}")
     print(f"active orchestrator tasks: {active_orchestrators}")
@@ -104,6 +121,12 @@ def main():
     print(f"runtime health: {daemon_summary.get('runtimeHealth', '-')}")
     print(f"dispatch backend: {daemon_summary.get('dispatchBackendDefault', '-')}")
     print(f"backend counts: {worker_summary.get('dispatchBackendCounts', {})}")
+    print(f"active worktrees: {len(worktree_registry.get('worktrees', []))}")
+    print(f"merge queue depth: {merge_summary.get('queueDepth', 0)}")
+    print(f"ready to merge: {merge_summary.get('readyToMergeCount', 0)}")
+    print(f"merge conflicts: {merge_summary.get('conflictCount', 0)}")
+    print(f"context rot warnings: {len((runtime_state or {}).get('contextRotWarnings', []))}")
+    print(f"drift checklist failures: {len((runtime_state or {}).get('driftChecklistFailures', []))}")
     print(f"orchestration session: {(runtime_state or {}).get('orchestrationSessionId', session_registry.get('orchestrationSessionId', '-'))}")
     print(f"pending blockers: {len(blockers)}")
     if (runtime_state or {}).get('lastTickAt'):

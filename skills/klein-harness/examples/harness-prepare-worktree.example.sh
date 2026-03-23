@@ -2,13 +2,14 @@
 set -euo pipefail
 
 if [ "$#" -lt 1 ]; then
-  echo "usage: $0 <TASK_ID> [ROOT] [--create]" >&2
+  echo "usage: $0 <TASK_ID> [ROOT] [--create] [--write-back]" >&2
   exit 1
 fi
 
 TASK_ID="$1"
 ROOT="${2:-$(pwd)}"
 CREATE_FLAG="${3:-}"
+WRITE_BACK_FLAG="${4:-}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PYTHON_PREPARE=""
 
@@ -21,8 +22,12 @@ else
   exit 1
 fi
 
+ARGS=(--root "$ROOT" --task-id "$TASK_ID")
 if [ "$CREATE_FLAG" = "--create" ]; then
-  python3 "$PYTHON_PREPARE" --root "$ROOT" --task-id "$TASK_ID" --create
-else
-  python3 "$PYTHON_PREPARE" --root "$ROOT" --task-id "$TASK_ID"
+  ARGS+=(--create)
 fi
+if [ "$WRITE_BACK_FLAG" = "--write-back" ] || [ "$CREATE_FLAG" = "--write-back" ]; then
+  ARGS+=(--write-back)
+fi
+
+python3 "$PYTHON_PREPARE" "${ARGS[@]}"

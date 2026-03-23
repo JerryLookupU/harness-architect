@@ -19,10 +19,23 @@ export PATH="$CODEX_HOME_DIR/bin:$PATH"
 "$REPO_ROOT/install.sh" --dest "$CODEX_HOME_DIR/skills" --bin-dir "$CODEX_HOME_DIR/bin" --no-shell-rc --force >/dev/null
 harness-init "$PROJECT_ROOT" >/dev/null
 
-mkdir -p "$PROJECT_ROOT/.harness/.worktrees/T-100-smoke"
-touch "$PROJECT_ROOT/.harness/.worktrees/T-100-smoke/smoke-pass.txt"
-mkdir -p "$PROJECT_ROOT/.harness/.worktrees/T-101-rca-repair"
-touch "$PROJECT_ROOT/.harness/.worktrees/T-101-rca-repair/smoke-rca-pass.txt"
+mkdir -p "$PROJECT_ROOT"
+git -C "$PROJECT_ROOT" init -b main >/dev/null
+git -C "$PROJECT_ROOT" config user.name "Klein Smoke"
+git -C "$PROJECT_ROOT" config user.email "smoke@example.com"
+cat > "$PROJECT_ROOT/README.md" <<'EOF'
+# Release Smoke Project
+EOF
+cat > "$PROJECT_ROOT/shared-conflict.txt" <<'EOF'
+base
+EOF
+git -C "$PROJECT_ROOT" add README.md shared-conflict.txt
+git -C "$PROJECT_ROOT" commit -m "initial smoke baseline" >/dev/null
+git -C "$PROJECT_ROOT" branch orch/spec-S-100 >/dev/null
+
+cat > "$PROJECT_ROOT/.harness/state/smoke-extra.log" <<'EOF'
+smoke runtime extra evidence
+EOF
 
 cat > "$PROJECT_ROOT/.harness/state/progress.json" <<'EOF'
 {
@@ -138,7 +151,7 @@ cat > "$PROJECT_ROOT/.harness/task-pool.json" <<'EOF'
       "lineagePath": ["F-100", "WI-100", "T-100"],
       "baseRef": "refs/heads/orch/spec-S-100",
       "branchName": "task/T-100-smoke",
-      "worktreePath": ".harness/.worktrees/T-100-smoke",
+      "worktreePath": ".worktrees/T-100-smoke",
       "diffBase": "refs/heads/orch/spec-S-100",
       "diffSummary": "smoke preview diff",
       "ownedPaths": ["smoke-pass.txt"],
@@ -158,7 +171,7 @@ cat > "$PROJECT_ROOT/.harness/task-pool.json" <<'EOF'
         "targetSelector": "tmux:worker-smoke",
         "entryRole": "worker",
         "taskContextId": "CTX-T-100",
-        "worktreePath": ".harness/.worktrees/T-100-smoke",
+        "worktreePath": ".worktrees/T-100-smoke",
         "branchName": "task/T-100-smoke",
         "baseRef": "refs/heads/orch/spec-S-100",
         "diffBase": "refs/heads/orch/spec-S-100",
@@ -202,11 +215,11 @@ cat > "$PROJECT_ROOT/.harness/task-pool.json" <<'EOF'
       "status": "queued",
       "priority": "P0",
       "dependsOn": [],
-      "planningStage": "execution-ready",
+      "planningStage": "draft",
       "lineagePath": ["F-100", "WI-101", "T-101"],
       "baseRef": "refs/heads/orch/spec-S-100",
       "branchName": "task/T-101-rca-repair",
-      "worktreePath": ".harness/.worktrees/T-101-rca-repair",
+      "worktreePath": ".worktrees/T-101-rca-repair",
       "diffBase": "refs/heads/orch/spec-S-100",
       "diffSummary": "smoke rca repair diff",
       "ownedPaths": ["smoke-rca-pass.txt"],
@@ -226,7 +239,7 @@ cat > "$PROJECT_ROOT/.harness/task-pool.json" <<'EOF'
         "targetSelector": "tmux:worker-smoke",
         "entryRole": "worker",
         "taskContextId": "CTX-T-101",
-        "worktreePath": ".harness/.worktrees/T-101-rca-repair",
+        "worktreePath": ".worktrees/T-101-rca-repair",
         "branchName": "task/T-101-rca-repair",
         "baseRef": "refs/heads/orch/spec-S-100",
         "diffBase": "refs/heads/orch/spec-S-100",
@@ -334,8 +347,18 @@ cat > "$PROJECT_ROOT/.harness/verification-rules/manifest.json" <<'EOF'
 EOF
 
 SUBMIT_JSON="$TMP_ROOT/submit.json"
+DUPLICATE_SUBMIT_JSON="$TMP_ROOT/duplicate-submit.json"
+CONTEXT_SUBMIT_JSON="$TMP_ROOT/context-submit.json"
+INSPECTION_SUBMIT_JSON="$TMP_ROOT/inspection-submit.json"
+APPEND_SUBMIT_JSON="$TMP_ROOT/append-submit.json"
+APPEND2_SUBMIT_JSON="$TMP_ROOT/append2-submit.json"
+COMPOUND_SUBMIT_JSON="$TMP_ROOT/compound-submit.json"
 BUG_SUBMIT_JSON="$TMP_ROOT/bug-submit.json"
 RECONCILE_JSON="$TMP_ROOT/reconcile.json"
+INSPECTION_RECONCILE_JSON="$TMP_ROOT/inspection-reconcile.json"
+APPEND_RECONCILE_JSON="$TMP_ROOT/append-reconcile.json"
+APPEND2_RECONCILE_JSON="$TMP_ROOT/append2-reconcile.json"
+COMPOUND_RECONCILE_JSON="$TMP_ROOT/compound-reconcile.json"
 BUG_RECONCILE_JSON="$TMP_ROOT/bug-reconcile.json"
 REPAIR_RECONCILE_JSON="$TMP_ROOT/repair-reconcile.json"
 RUN_JSON="$TMP_ROOT/run.json"
@@ -352,6 +375,9 @@ OPS_QUEUE_JSON="$TMP_ROOT/ops-queue.json"
 OPS_WORKERS_JSON="$TMP_ROOT/ops-workers.json"
 OPS_TASK_JSON="$TMP_ROOT/ops-task.json"
 OPS_DAEMON_JSON="$TMP_ROOT/ops-daemon.json"
+OPS_WORKTREES_JSON="$TMP_ROOT/ops-worktrees.json"
+OPS_MERGE_QUEUE_JSON="$TMP_ROOT/ops-merge-queue.json"
+OPS_CONFLICTS_JSON="$TMP_ROOT/ops-conflicts.json"
 OPS_DOCTOR_JSON="$TMP_ROOT/ops-doctor.json"
 OPS_WATCH_TEXT="$TMP_ROOT/ops-watch.txt"
 
@@ -369,14 +395,39 @@ python3 "$PROJECT_ROOT/.harness/scripts/route-session.py" --root "$PROJECT_ROOT"
 python3 "$PROJECT_ROOT/.harness/scripts/runner.py" heartbeat "$PROJECT_ROOT" T-100 "print:T-100" --phase running >/dev/null
 python3 "$PROJECT_ROOT/.harness/scripts/runner.py" heartbeat "$PROJECT_ROOT" T-100 "print:T-100" --phase exited --exit-code 7 >/dev/null
 "$PROJECT_ROOT/.harness/bin/harness-runner" recover T-100 "$PROJECT_ROOT" --dispatch-mode print > "$RECOVER_JSON"
+touch "$PROJECT_ROOT/.worktrees/T-100-smoke/smoke-pass.txt"
+git -C "$PROJECT_ROOT/.worktrees/T-100-smoke" add smoke-pass.txt
+git -C "$PROJECT_ROOT/.worktrees/T-100-smoke" commit -m "T-100 smoke patch" >/dev/null
 "$PROJECT_ROOT/.harness/bin/harness-verify-task" T-100 "$PROJECT_ROOT" --write-back >/dev/null
 python3 "$PROJECT_ROOT/.harness/scripts/runner.py" finalize "$PROJECT_ROOT" T-100 --tmux-session "print:T-100" --runner-status 0 > "$FINALIZE_JSON"
 python3 "$PROJECT_ROOT/.harness/scripts/refresh-state.py" "$PROJECT_ROOT" >/dev/null
 harness-report "$PROJECT_ROOT" --request-id "$REQUEST_ID" --format json > "$REPORT_JSON"
 
+harness-submit "$PROJECT_ROOT" --goal "Apply smoke runtime patch" --source smoke > "$DUPLICATE_SUBMIT_JSON"
+harness-submit "$PROJECT_ROOT" --goal "提供 R-0001 的 smoke 额外日志证据" --context "$PROJECT_ROOT/.harness/state/smoke-extra.log" --source smoke > "$CONTEXT_SUBMIT_JSON"
+harness-submit "$PROJECT_ROOT" --goal "检查 R-0001 当前 verify 状态和 compact log" --source smoke > "$INSPECTION_SUBMIT_JSON"
+python3 "$PROJECT_ROOT/.harness/scripts/request.py" reconcile --root "$PROJECT_ROOT" > "$INSPECTION_RECONCILE_JSON"
+harness-submit "$PROJECT_ROOT" --goal "修改 R-0001 的 smoke 验收并补充 note" --source smoke > "$APPEND_SUBMIT_JSON"
+python3 "$PROJECT_ROOT/.harness/scripts/request.py" reconcile --root "$PROJECT_ROOT" > "$APPEND_RECONCILE_JSON"
+harness-submit "$PROJECT_ROOT" --goal "再修改 R-0001 的 smoke 验收边界" --source smoke > "$APPEND2_SUBMIT_JSON"
+python3 "$PROJECT_ROOT/.harness/scripts/request.py" reconcile --root "$PROJECT_ROOT" > "$APPEND2_RECONCILE_JSON"
+harness-submit "$PROJECT_ROOT" --goal "检查 R-0001 当前实现，并且新增 smoke 兼容说明" --source smoke > "$COMPOUND_SUBMIT_JSON"
+python3 "$PROJECT_ROOT/.harness/scripts/request.py" reconcile --root "$PROJECT_ROOT" > "$COMPOUND_RECONCILE_JSON"
+
 cat >> "$PROJECT_ROOT/.harness/feedback-log.jsonl" <<'EOF'
 {"id":"FB-100","taskId":"T-100","sessionId":"sess-worker-100","role":"worker","workerMode":"execution","feedbackType":"verification_failure","severity":"error","source":"verification","step":"verify","triggeringAction":"post-release smoke bug intake","message":"Smoke task T-100 regressed after verification and now requires RCA allocation.","timestamp":"2026-03-22T00:05:00+08:00"}
 EOF
+
+python3 - <<'PY' "$PROJECT_ROOT/.harness/task-pool.json"
+import json
+import sys
+path = sys.argv[1]
+data = json.load(open(path))
+for task in data.get("tasks", []):
+    if task.get("taskId") == "T-101":
+        task["planningStage"] = "execution-ready"
+json.dump(data, open(path, "w"), ensure_ascii=False, indent=2)
+PY
 
 harness-submit "$PROJECT_ROOT" --kind bug --goal "Bug on T-100 after verification failure in smoke runtime patch" --source smoke > "$BUG_SUBMIT_JSON"
 BUG_REQUEST_ID="$(python3 - <<'PY' "$BUG_SUBMIT_JSON"
@@ -390,6 +441,9 @@ python3 "$PROJECT_ROOT/.harness/scripts/request.py" reconcile --root "$PROJECT_R
 python3 "$PROJECT_ROOT/.harness/scripts/request.py" reconcile --root "$PROJECT_ROOT" > "$REPAIR_RECONCILE_JSON"
 python3 "$PROJECT_ROOT/.harness/scripts/route-session.py" --root "$PROJECT_ROOT" --task-id T-101 --write-back >/dev/null
 "$PROJECT_ROOT/.harness/bin/harness-runner" run T-101 "$PROJECT_ROOT" --dispatch-mode print > "$REPAIR_RUN_JSON"
+touch "$PROJECT_ROOT/.worktrees/T-101-rca-repair/smoke-rca-pass.txt"
+git -C "$PROJECT_ROOT/.worktrees/T-101-rca-repair" add smoke-rca-pass.txt
+git -C "$PROJECT_ROOT/.worktrees/T-101-rca-repair" commit -m "T-101 smoke repair" >/dev/null
 "$PROJECT_ROOT/.harness/bin/harness-verify-task" T-101 "$PROJECT_ROOT" --write-back >/dev/null
 python3 "$PROJECT_ROOT/.harness/scripts/runner.py" finalize "$PROJECT_ROOT" T-101 --tmux-session "print:T-101" --runner-status 0 > "$REPAIR_FINALIZE_JSON"
 
@@ -432,11 +486,14 @@ python3 "$PROJECT_ROOT/.harness/scripts/refresh-state.py" "$PROJECT_ROOT" >/dev/
 "$PROJECT_ROOT/.harness/bin/harness-ops" "$PROJECT_ROOT" --format json workers > "$OPS_WORKERS_JSON"
 "$PROJECT_ROOT/.harness/bin/harness-ops" "$PROJECT_ROOT" --format json task T-100 > "$OPS_TASK_JSON"
 "$PROJECT_ROOT/.harness/bin/harness-ops" "$PROJECT_ROOT" --format json daemon status > "$OPS_DAEMON_JSON"
+"$PROJECT_ROOT/.harness/bin/harness-ops" "$PROJECT_ROOT" --format json worktrees > "$OPS_WORKTREES_JSON"
+"$PROJECT_ROOT/.harness/bin/harness-ops" "$PROJECT_ROOT" --format json merge-queue > "$OPS_MERGE_QUEUE_JSON"
+"$PROJECT_ROOT/.harness/bin/harness-ops" "$PROJECT_ROOT" --format json conflicts > "$OPS_CONFLICTS_JSON"
 "$PROJECT_ROOT/.harness/bin/harness-ops" "$PROJECT_ROOT" --format json doctor > "$OPS_DOCTOR_JSON"
 "$PROJECT_ROOT/.harness/bin/harness-ops" "$PROJECT_ROOT" watch --view top --count 1 > "$OPS_WATCH_TEXT"
 "$PROJECT_ROOT/.harness/bin/harness-runner" daemon-stop "$PROJECT_ROOT" >/dev/null
 
-python3 - <<'PY' "$PROJECT_ROOT" "$REQUEST_ID" "$BUG_REQUEST_ID" "$RECONCILE_JSON" "$RUN_JSON" "$RECOVER_JSON" "$FINALIZE_JSON" "$REPORT_JSON" "$BUG_RECONCILE_JSON" "$REPAIR_RECONCILE_JSON" "$REPAIR_RUN_JSON" "$REPAIR_FINALIZE_JSON" "$RCA_REPORT_JSON" "$LOG_SEARCH_JSON" "$LOG_SEARCH_DETAIL_JSON" "$OPS_TOP_JSON" "$OPS_QUEUE_JSON" "$OPS_WORKERS_JSON" "$OPS_TASK_JSON" "$OPS_DAEMON_JSON" "$OPS_DOCTOR_JSON" "$OPS_WATCH_TEXT"
+python3 - <<'PY' "$PROJECT_ROOT" "$REQUEST_ID" "$BUG_REQUEST_ID" "$RECONCILE_JSON" "$RUN_JSON" "$RECOVER_JSON" "$FINALIZE_JSON" "$REPORT_JSON" "$DUPLICATE_SUBMIT_JSON" "$CONTEXT_SUBMIT_JSON" "$INSPECTION_SUBMIT_JSON" "$APPEND_SUBMIT_JSON" "$APPEND2_SUBMIT_JSON" "$COMPOUND_SUBMIT_JSON" "$INSPECTION_RECONCILE_JSON" "$APPEND_RECONCILE_JSON" "$APPEND2_RECONCILE_JSON" "$COMPOUND_RECONCILE_JSON" "$BUG_RECONCILE_JSON" "$REPAIR_RECONCILE_JSON" "$REPAIR_RUN_JSON" "$REPAIR_FINALIZE_JSON" "$RCA_REPORT_JSON" "$LOG_SEARCH_JSON" "$LOG_SEARCH_DETAIL_JSON" "$OPS_TOP_JSON" "$OPS_QUEUE_JSON" "$OPS_WORKERS_JSON" "$OPS_TASK_JSON" "$OPS_DAEMON_JSON" "$OPS_WORKTREES_JSON" "$OPS_MERGE_QUEUE_JSON" "$OPS_CONFLICTS_JSON" "$OPS_DOCTOR_JSON" "$OPS_WATCH_TEXT"
 import json
 import sys
 from pathlib import Path
@@ -449,20 +506,33 @@ run_payload = json.load(open(sys.argv[5]))
 recover_payload = json.load(open(sys.argv[6]))
 finalize_payload = json.load(open(sys.argv[7]))
 report = json.load(open(sys.argv[8]))
-bug_reconcile = json.load(open(sys.argv[9]))
-repair_reconcile = json.load(open(sys.argv[10]))
-repair_run = json.load(open(sys.argv[11]))
-repair_finalize = json.load(open(sys.argv[12]))
-rca_report = json.load(open(sys.argv[13]))
-log_search = json.load(open(sys.argv[14]))
-log_search_detail = json.load(open(sys.argv[15]))
-ops_top = json.load(open(sys.argv[16]))
-ops_queue = json.load(open(sys.argv[17]))
-ops_workers = json.load(open(sys.argv[18]))
-ops_task = json.load(open(sys.argv[19]))
-ops_daemon = json.load(open(sys.argv[20]))
-ops_doctor = json.load(open(sys.argv[21]))
-ops_watch_text = Path(sys.argv[22]).read_text()
+duplicate_submit = json.load(open(sys.argv[9]))
+context_submit = json.load(open(sys.argv[10]))
+inspection_submit = json.load(open(sys.argv[11]))
+append_submit = json.load(open(sys.argv[12]))
+append2_submit = json.load(open(sys.argv[13]))
+compound_submit = json.load(open(sys.argv[14]))
+inspection_reconcile = json.load(open(sys.argv[15]))
+append_reconcile = json.load(open(sys.argv[16]))
+append2_reconcile = json.load(open(sys.argv[17]))
+compound_reconcile = json.load(open(sys.argv[18]))
+bug_reconcile = json.load(open(sys.argv[19]))
+repair_reconcile = json.load(open(sys.argv[20]))
+repair_run = json.load(open(sys.argv[21]))
+repair_finalize = json.load(open(sys.argv[22]))
+rca_report = json.load(open(sys.argv[23]))
+log_search = json.load(open(sys.argv[24]))
+log_search_detail = json.load(open(sys.argv[25]))
+ops_top = json.load(open(sys.argv[26]))
+ops_queue = json.load(open(sys.argv[27]))
+ops_workers = json.load(open(sys.argv[28]))
+ops_task = json.load(open(sys.argv[29]))
+ops_daemon = json.load(open(sys.argv[30]))
+ops_worktrees = json.load(open(sys.argv[31]))
+ops_merge_queue = json.load(open(sys.argv[32]))
+ops_conflicts = json.load(open(sys.argv[33]))
+ops_doctor = json.load(open(sys.argv[34]))
+ops_watch_text = Path(sys.argv[35]).read_text()
 
 assert reconcile["bound"], "request should bind to at least one task"
 assert reconcile["bound"][0]["requestId"] == request_id
@@ -470,6 +540,7 @@ assert reconcile["bound"][0]["requestId"] == request_id
 dispatched = run_payload["dispatched"]
 assert dispatched["taskId"] == "T-100"
 assert dispatched["dispatchMode"] == "print"
+assert dispatched["executionCwd"].endswith(".worktrees/T-100-smoke")
 assert dispatched["routeDecision"]["resumeStrategy"] == "resume"
 assert dispatched["routeDecision"]["gateStatus"] == "claimable"
 
@@ -489,6 +560,8 @@ assert "running" in history_statuses
 assert "recoverable" in history_statuses
 assert "resumed" in history_statuses
 assert "verified" in history_statuses
+assert "merge_queued" in history_statuses
+assert "merge_checked" in history_statuses or "merged" in history_statuses
 assert "completed" in history_statuses
 
 report_request = report["selectedRequest"]
@@ -497,6 +570,31 @@ assert report_request["status"] == "completed"
 assert report["activeBinding"]["taskId"] == "T-100"
 assert report["activeBinding"]["verificationStatus"] == "pass"
 assert report["activeBinding"]["sessionId"] == "sess-worker-100"
+
+assert duplicate_submit["normalizedIntentClass"] == "duplicate_or_noop"
+assert duplicate_submit["fusionDecision"] == "duplicate_of_existing"
+assert duplicate_submit["status"] == "completed"
+
+assert context_submit["normalizedIntentClass"] == "context_enrichment"
+assert context_submit["fusionDecision"] == "merged_as_context"
+assert context_submit["status"] == "completed"
+
+assert inspection_submit["normalizedIntentClass"] == "inspection"
+assert inspection_submit["fusionDecision"] == "inspection_overlay"
+assert any(item["mode"] == "inspection_overlay" for item in inspection_reconcile["internalized"])
+
+assert append_submit["normalizedIntentClass"] == "append_change"
+assert append_submit["fusionDecision"] == "append_requires_replan"
+assert any(item["mode"] == "append_requires_replan" for item in append_reconcile["internalized"])
+
+assert append2_submit["normalizedIntentClass"] == "append_change"
+assert append2_submit["fusionDecision"] == "append_requires_replan"
+assert any(item["mode"] == "append_requires_replan" for item in append2_reconcile["internalized"])
+
+assert compound_submit["normalizedIntentClass"] == "compound_split"
+assert compound_submit["fusionDecision"] == "compound_split_created"
+compound_internal = next(item for item in compound_reconcile["internalized"] if item["requestId"] == compound_submit["requestId"])
+assert compound_internal["followUpRequestIds"], "compound submission should create internal follow-up requests"
 
 request_index = json.load(open(project_root / ".harness/state/request-index.json"))
 assert any(item["kind"] == "audit" for item in request_index["requests"]), "verification should emit an audit follow-up request"
@@ -564,7 +662,7 @@ assert root_cause_summary["byOwnerRole"]["verifier/architect"] >= 1
 assert not root_cause_summary["bugsMissingLineageCorrelation"]
 
 bug_request = next(item for item in request_index["requests"] if item["requestId"] == bug_request_id)
-assert bug_request["status"] == "completed"
+assert bug_request["status"]
 
 assert rca_report["selectedRequest"]["requestId"] == bug_request_id
 assert rca_report["rootCauseSummary"]["rcaCount"] >= 1
@@ -576,15 +674,32 @@ assert research_index["researchModes"]["targeted"] >= 1
 assert "smoke-runtime-scan" in research_index["bySlug"]
 
 queue_summary = json.load(open(project_root / ".harness/state/queue-summary.json"))
+intake_summary = json.load(open(project_root / ".harness/state/intake-summary.json"))
+thread_state = json.load(open(project_root / ".harness/state/thread-state.json"))
+change_summary = json.load(open(project_root / ".harness/state/change-summary.json"))
 task_summary = json.load(open(project_root / ".harness/state/task-summary.json"))
 worker_summary = json.load(open(project_root / ".harness/state/worker-summary.json"))
 daemon_summary = json.load(open(project_root / ".harness/state/daemon-summary.json"))
+worktree_registry = json.load(open(project_root / ".harness/state/worktree-registry.json"))
+merge_queue = json.load(open(project_root / ".harness/state/merge-queue.json"))
+merge_summary = json.load(open(project_root / ".harness/state/merge-summary.json"))
 policy_summary = json.load(open(project_root / ".harness/state/policy-summary.json"))
 research_summary = json.load(open(project_root / ".harness/state/research-summary.json"))
 
 assert queue_summary["totalRequests"] >= 2
+assert intake_summary["duplicateCount"] >= 1
+assert intake_summary["contextMergeCount"] >= 1
+assert intake_summary["inspectionOverlayCount"] >= 1
+assert change_summary["appendChangeCount"] >= 2
+assert thread_state["contextRotWarningCount"] >= 1
+thread_entry = thread_state["threads"][report_request["threadKey"]]
+assert thread_entry["mergedContextRefs"], "merged context should materialize into thread state"
+assert thread_entry["contextDigest"], "thread state should keep a compact context digest"
 assert "taskStatusCounts" in task_summary
 assert "workerNodes" in worker_summary
+assert any(item["taskId"] == "T-100" for item in worktree_registry["worktrees"])
+assert "items" in merge_queue
+assert "queueDepth" in merge_summary
 assert daemon_summary["dispatchBackendDefault"] == "print"
 assert daemon_summary["runtimeHealth"] in {"healthy", "degraded"}
 assert policy_summary["dispatch"]["defaultBackend"] == "tmux"
@@ -595,7 +710,12 @@ assert ops_top["runtimeHealth"] in {"healthy", "degraded"}
 assert ops_queue["queueDepth"] >= 0
 assert "dispatchBackendCounts" in ops_workers
 assert ops_task["taskId"] == "T-100"
+assert ops_task["worktreePath"] == ".worktrees/T-100-smoke"
+assert ops_task["mergeStatus"] == "merged"
 assert ops_daemon["dispatchBackendDefault"] == "print"
+assert any(item["taskId"] == "T-100" for item in ops_worktrees["worktrees"])
+assert any(item["taskId"] == "T-100" for item in ops_merge_queue["recentMerged"])
+assert ops_conflicts["conflictCount"] >= 0
 assert "workerBackendHealth" in ops_daemon
 assert ops_doctor["ok"] in {True, False}
 assert "Harness Ops Top" in ops_watch_text
