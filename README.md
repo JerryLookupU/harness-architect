@@ -22,11 +22,11 @@ This repo ships three Codex skills:
 - `blueprint-architect` for decomposition, research, draft blueprinting, conflict review, and final blueprint handoff
 - `harness-log-search-cskill` for compact handoff log retrieval and targeted raw evidence windows
 
-## What It Is
+## At A Glance
 
-Klein-Harness is for projects that need more than a one-shot prompt.
+Klein-Harness is for repositories that need more than a one-shot prompt.
 
-It is designed for:
+Use it when you need:
 
 - long-running implementation work
 - multi-agent or multi-session handoff
@@ -34,15 +34,13 @@ It is designed for:
 - repo-local recovery after failure or interruption
 - operator-friendly status and reporting without re-opening model context
 
-The default split is:
+Default split:
 
 - `gpt-5.4` for orchestration fallback, routing judgment, prompt refinement, and replan
 - `gpt-5.3-codex` for worker execution
 - `codex exec` / `codex exec resume` for the actual run surface
 
 ## Why Klein
-
-The key idea is simple:
 
 There is no stable “inside the agent” vs “outside the agent”.
 Everything important must be able to leave the current run, land in the repo, and become the next run.
@@ -57,26 +55,26 @@ Klein-Harness does that with explicit dimensions instead of fuzzy prompts:
 
 That is how it avoids self-intersection, unsafe resume, and lost context.
 
+## What Makes It Different
+
+- request intake is append-only, but runtime state is still hot and queryable
+- worker evidence, compact handoff logs, verification, and RCA all stay repo-local
+- routing is explicit before dispatch; resume is not left to model guesswork
+- blueprint work can stop at repo-local scan, or escalate through `researchMode`
+- downstream workers default to hot state -> compact logs -> raw logs, not transcript flooding
+
 ## Quick Start
 
-Install the skills and global helper commands:
+Install the skills and helper commands:
 
 ```bash
 ./install.sh
 ```
 
-Installed skills:
+This installs:
 
-- `klein-harness`
-- `blueprint-architect`
-
-Installed helpers:
-
-- `harness-init`
-- `harness-bootstrap`
-- `harness-submit`
-- `harness-report`
-- `harness-kick`
+- skills: `klein-harness`, `blueprint-architect`, `harness-log-search-cskill`
+- helpers: `harness-init`, `harness-bootstrap`, `harness-submit`, `harness-report`, `harness-kick`
 
 Initialize a target project:
 
@@ -90,7 +88,8 @@ Bootstrap the first orchestration round:
 harness-bootstrap /path/to/project "根据 PRD 生成代码" "React + Vite" --context docs/prd.md
 ```
 
-By default, `harness-bootstrap` auto-starts the runner daemon after bootstrap completes. Use `--no-daemon` to keep the session fully manual.
+By default, `harness-bootstrap` auto-starts the runner daemon after bootstrap completes.
+Use `--no-daemon` when you want a fully manual session.
 
 Submit incremental work:
 
@@ -113,7 +112,7 @@ harness-report /path/to/project
 
 ## Runtime Loop
 
-The default closed loop is:
+Default loop:
 
 ```text
 submit
@@ -136,7 +135,7 @@ Core lifecycle states:
 - `queued -> cancelled`
 - `running -> recoverable -> resumed`
 
-## Shared Repo Surface
+## Shared Surface
 
 Primary hot state:
 
@@ -215,21 +214,34 @@ Notes:
 - use `--no-daemon` when you want a manual or fully operator-driven session
 - downstream workers should prefer hot state -> compact log md -> raw log
 
-## Compact Logs And Blueprint Research
+## Compact Logs
 
 Klein-Harness keeps raw runner logs as cold evidence and adds a compact cross-worker handoff layer:
 
-- raw evidence stays in `.harness/state/runner-logs/<taskId>.log`
-- compact handoff stays in `.harness/log-<taskId>.md`
-- hot log summary stays in `.harness/state/log-index.json`
-- targeted retrieval is available through `.harness/bin/harness-log-search`
+- raw evidence: `.harness/state/runner-logs/<taskId>.log`
+- compact handoff: `.harness/log-<taskId>.md`
+- hot log summary: `.harness/state/log-index.json`
+- targeted retrieval: `.harness/bin/harness-log-search`
 
-Blueprint work now includes a gated research stage:
+Default search stays summary-first.
+Use `--detail` only when you need raw evidence windows.
+
+## Blueprint Research Gate
+
+Blueprint work includes a gated research stage instead of forcing deep research on every design:
 
 - `researchMode: none | targeted | deep`
 - research memos live in `.harness/research/<slug>.md`
 - hot memo summary lives in `.harness/state/research-index.json`
 - blueprint generation should consume repo-local scan + research memo + conflict review
+
+Recommended triggers for `targeted` or `deep` research:
+
+- upstream behavior may have changed
+- repository context is insufficient
+- external framework or protocol behavior matters
+- architecture options need explicit comparison
+- migration or rollout risk is material
 
 ## Demo Flow
 
@@ -250,34 +262,36 @@ Release smoke:
 bash ./skills/klein-harness/examples/harness-release-smoke.example.sh
 ```
 
-## Repository Layout
+## Layout
 
-Skills:
+Primary skills:
 
 - `skills/klein-harness/SKILL.md`
 - `skills/blueprint-architect/SKILL.md`
 - `skills/harness-log-search-cskill/SKILL.md`
 
-References:
-
-- `skills/klein-harness/references/schema-contracts.md`
-- `skills/klein-harness/references/openclaw-dispatch.md`
-- `skills/klein-harness/references/model-routing.md`
-- `skills/klein-harness/references/git-worktree-playbook.md`
-- `skills/klein-harness/references/bash-python-toolkit.md`
-- `skills/blueprint-architect/references/blueprint-schema.md`
-- `skills/blueprint-architect/references/conflict-checklist.md`
-
-Examples:
-
-- `skills/klein-harness/examples/`
-
-Architecture docs:
+Primary docs:
 
 - `docs/runtime-request-spec.md`
 - `docs/klein-architecture.md`
 - `docs/log-search-architecture.md`
 - `docs/blueprint-research-stage.md`
+
+Primary references:
+
+- `skills/klein-harness/references/schema-contracts.md`
+- `skills/klein-harness/references/openclaw-dispatch.md`
+- `skills/klein-harness/references/model-routing.md`
+- `skills/blueprint-architect/references/blueprint-schema.md`
+- `skills/blueprint-architect/references/conflict-checklist.md`
+
+## More References
+
+Additional references and examples:
+
+- `skills/klein-harness/references/git-worktree-playbook.md`
+- `skills/klein-harness/references/bash-python-toolkit.md`
+- `skills/klein-harness/examples/`
 
 ## Recommended Reading
 
@@ -287,9 +301,11 @@ Read in this order:
 2. `skills/blueprint-architect/SKILL.md`
 3. `docs/runtime-request-spec.md`
 4. `docs/klein-architecture.md`
-4. `skills/klein-harness/references/schema-contracts.md`
-5. `skills/klein-harness/references/openclaw-dispatch.md`
-6. `skills/klein-harness/references/model-routing.md`
+5. `docs/log-search-architecture.md`
+6. `docs/blueprint-research-stage.md`
+7. `skills/klein-harness/references/schema-contracts.md`
+8. `skills/klein-harness/references/openclaw-dispatch.md`
+9. `skills/klein-harness/references/model-routing.md`
 
 ## Trial and Feedback
 
@@ -305,16 +321,6 @@ Good feedback topics:
 - where field names feel unclear
 - which script fails first in real use
 - where weaker worker models drift most often
-
-## English Summary
-
-Klein-Harness is a Codex-first closed-loop `.harness` runtime that keeps request intake, task binding, session routing, worktree isolation, verification, and follow-up requests inside the repo as machine-readable state.
-
-If you want the deeper protocol, read:
-
-- `docs/runtime-request-spec.md`
-- `docs/klein-architecture.md`
-- `skills/klein-harness/SKILL.md`
 
 ## License
 
