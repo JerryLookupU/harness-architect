@@ -8,6 +8,7 @@ from runtime_common import (
     TASK_ACTIVE_STATUSES,
     build_feedback_summary,
     build_lineage_index,
+    build_root_cause_summary,
     build_request_summary,
     ensure_runtime_scaffold,
     load_json,
@@ -41,6 +42,8 @@ def main():
     session_registry = load_json(files["session_registry_path"])
     feedback_entries = load_jsonl(files["feedback_log_path"])
     feedback_summary = build_feedback_summary(feedback_entries)
+    root_cause_entries = load_jsonl(files["root_cause_log_path"])
+    root_cause_summary = build_root_cause_summary(root_cause_entries)
     runner_state = load_json(files["runner_state_path"])
     request_index = load_json(files["request_index_path"])
     request_task_map = load_json(files["request_task_map_path"])
@@ -98,6 +101,11 @@ def main():
                 for entry in feedback_summary.get("recentFailures", [])
                 if entry.get("feedbackType") == "illegal_action" and entry.get("taskId")
             }
+        ),
+        "openRootCauseCount": root_cause_summary.get("openCount", 0),
+        "latestRootCauseDimension": next(
+            (item.get("primaryCauseDimension") for item in reversed(root_cause_summary.get("recentAllocations", [])) if item.get("primaryCauseDimension")),
+            None,
         ),
     }
 
@@ -160,6 +168,13 @@ def main():
         "activeLineageBindings": lineage_index.get("activeBindings", []),
         "lineageRequestCount": len(lineage_index.get("requests", {})),
         "requestBindings": request_summary.get("bindings", []),
+        "rootCauseCount": root_cause_summary.get("rcaCount", 0),
+        "openRootCauseCount": root_cause_summary.get("openCount", 0),
+        "underdeterminedRootCauseCount": root_cause_summary.get("underdeterminedCount", 0),
+        "rootCauseByDimension": root_cause_summary.get("byPrimaryCauseDimension", {}),
+        "rootCauseByOwner": root_cause_summary.get("byOwnerRole", {}),
+        "openRootCauseItems": root_cause_summary.get("openItems", []),
+        "bugsMissingLineageCorrelation": root_cause_summary.get("bugsMissingLineageCorrelation", []),
     }
 
     blocks = {}
@@ -191,6 +206,7 @@ def main():
     write_json(files["state_dir"] / "runtime.json", runtime_state)
     write_json(files["state_dir"] / "blueprint-index.json", blueprint_index)
     write_json(files["feedback_summary_path"], feedback_summary)
+    write_json(files["root_cause_summary_path"], root_cause_summary)
     write_json(files["request_summary_path"], request_summary)
     write_json(files["lineage_index_path"], lineage_index)
 

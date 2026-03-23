@@ -21,6 +21,8 @@ harness-init "$PROJECT_ROOT" >/dev/null
 
 mkdir -p "$PROJECT_ROOT/.harness/.worktrees/T-100-smoke"
 touch "$PROJECT_ROOT/.harness/.worktrees/T-100-smoke/smoke-pass.txt"
+mkdir -p "$PROJECT_ROOT/.harness/.worktrees/T-101-rca-repair"
+touch "$PROJECT_ROOT/.harness/.worktrees/T-101-rca-repair/smoke-rca-pass.txt"
 
 cat > "$PROJECT_ROOT/.harness/progress.md" <<'EOF'
 # Smoke Progress
@@ -91,6 +93,17 @@ cat > "$PROJECT_ROOT/.harness/work-items.json" <<'EOF'
       "kind": "feature",
       "title": "Apply smoke runtime patch",
       "summary": "Minimal work item for request binding and recovery.",
+      "status": "queued",
+      "priority": "P0",
+      "roleHint": "worker",
+      "featureIds": ["F-100"],
+      "dependsOn": []
+    },
+    {
+      "id": "WI-101",
+      "kind": "bugfix",
+      "title": "Repair smoke RCA follow-up",
+      "summary": "Minimal repair work item for RCA emission and prevention write-back.",
       "status": "queued",
       "priority": "P0",
       "roleHint": "worker",
@@ -175,6 +188,74 @@ cat > "$PROJECT_ROOT/.harness/task-pool.json" <<'EOF'
         "leasedAt": null,
         "leaseExpiresAt": null
       }
+    },
+    {
+      "taskId": "T-101",
+      "workItemId": "WI-101",
+      "blockId": "TB-100",
+      "kind": "bugfix",
+      "roleHint": "worker",
+      "title": "Repair smoke RCA follow-up",
+      "summary": "Repair request emitted from RCA allocation.",
+      "description": "Exercise bug intake -> RCA allocation -> repair request -> verify.",
+      "status": "queued",
+      "priority": "P0",
+      "dependsOn": [],
+      "planningStage": "execution-ready",
+      "lineagePath": ["F-100", "WI-101", "T-101"],
+      "baseRef": "refs/heads/orch/spec-S-100",
+      "branchName": "task/T-101-rca-repair",
+      "worktreePath": ".harness/.worktrees/T-101-rca-repair",
+      "diffBase": "refs/heads/orch/spec-S-100",
+      "diffSummary": "smoke rca repair diff",
+      "ownedPaths": ["smoke-rca-pass.txt"],
+      "verificationRuleIds": ["VR-101"],
+      "routingModel": "gpt-5.4",
+      "executionModel": "gpt-5.3-codex",
+      "resumeStrategy": "fresh",
+      "preferredResumeSessionId": null,
+      "candidateResumeSessionIds": [],
+      "lastKnownSessionId": null,
+      "sessionFamilyId": "SF-F100-WI101",
+      "cacheAffinityKey": "feature:F-100|parent:WI-101|role:worker",
+      "routingReason": "Queued repair lane for smoke RCA follow-up.",
+      "dispatch": {
+        "runner": "codex exec",
+        "targetKind": "worker-node",
+        "targetSelector": "tmux:worker-smoke",
+        "entryRole": "worker",
+        "taskContextId": "CTX-T-101",
+        "worktreePath": ".harness/.worktrees/T-101-rca-repair",
+        "branchName": "task/T-101-rca-repair",
+        "baseRef": "refs/heads/orch/spec-S-100",
+        "diffBase": "refs/heads/orch/spec-S-100",
+        "commandProfile": {
+          "standard": "codex exec --yolo -m gpt-5.3-codex",
+          "localCompat": "codex exec --yolo -m gpt-5.3-codex"
+        },
+        "logPath": ".harness/runtime/worker-smoke-rca.log",
+        "heartbeatPath": ".harness/runtime/worker-smoke-rca.heartbeat",
+        "maxParallelism": 1,
+        "cooldownSeconds": 5
+      },
+      "handoff": {
+        "nextSuggestedWorkItemIds": [],
+        "nextSuggestedTaskIds": [],
+        "replanOnFail": true,
+        "mergeRequired": false,
+        "returnToRole": "orchestrator"
+      },
+      "claim": {
+        "agentId": null,
+        "role": null,
+        "nodeId": null,
+        "boundSessionId": null,
+        "boundResumeStrategy": null,
+        "boundFromTaskId": null,
+        "boundAt": null,
+        "leasedAt": null,
+        "leaseExpiresAt": null
+      }
     }
   ]
 }
@@ -238,16 +319,29 @@ cat > "$PROJECT_ROOT/.harness/verification-rules/manifest.json" <<'EOF'
       "costTier": "cheap",
       "readOnlySafe": true,
       "exec": "test -f smoke-pass.txt"
+    },
+    {
+      "id": "VR-101",
+      "title": "Smoke RCA repair verification rule",
+      "type": "shell",
+      "costTier": "cheap",
+      "readOnlySafe": true,
+      "exec": "test -f smoke-rca-pass.txt"
     }
   ]
 }
 EOF
 
 SUBMIT_JSON="$TMP_ROOT/submit.json"
+BUG_SUBMIT_JSON="$TMP_ROOT/bug-submit.json"
 RECONCILE_JSON="$TMP_ROOT/reconcile.json"
+BUG_RECONCILE_JSON="$TMP_ROOT/bug-reconcile.json"
+REPAIR_RECONCILE_JSON="$TMP_ROOT/repair-reconcile.json"
 RUN_JSON="$TMP_ROOT/run.json"
 RECOVER_JSON="$TMP_ROOT/recover.json"
 REPORT_JSON="$TMP_ROOT/report.json"
+RCA_REPORT_JSON="$TMP_ROOT/rca-report.json"
+REPAIR_RUN_JSON="$TMP_ROOT/repair-run.json"
 
 harness-submit "$PROJECT_ROOT" --kind implementation --goal "Apply smoke runtime patch" --source smoke > "$SUBMIT_JSON"
 REQUEST_ID="$(python3 - <<'PY' "$SUBMIT_JSON"
@@ -267,17 +361,42 @@ python3 "$PROJECT_ROOT/.harness/scripts/runner.py" heartbeat "$PROJECT_ROOT" T-1
 python3 "$PROJECT_ROOT/.harness/scripts/refresh-state.py" "$PROJECT_ROOT" >/dev/null
 harness-report "$PROJECT_ROOT" --request-id "$REQUEST_ID" --format json > "$REPORT_JSON"
 
-python3 - <<'PY' "$PROJECT_ROOT" "$REQUEST_ID" "$RECONCILE_JSON" "$RUN_JSON" "$RECOVER_JSON" "$REPORT_JSON"
+cat >> "$PROJECT_ROOT/.harness/feedback-log.jsonl" <<'EOF'
+{"id":"FB-100","taskId":"T-100","sessionId":"sess-worker-100","role":"worker","workerMode":"execution","feedbackType":"verification_failure","severity":"error","source":"verification","step":"verify","triggeringAction":"post-release smoke bug intake","message":"Smoke task T-100 regressed after verification and now requires RCA allocation.","timestamp":"2026-03-22T00:05:00+08:00"}
+EOF
+
+harness-submit "$PROJECT_ROOT" --kind bug --goal "Bug on T-100 after verification failure in smoke runtime patch" --source smoke > "$BUG_SUBMIT_JSON"
+BUG_REQUEST_ID="$(python3 - <<'PY' "$BUG_SUBMIT_JSON"
+import json
+import sys
+print(json.load(open(sys.argv[1]))["requestId"])
+PY
+)"
+
+python3 "$PROJECT_ROOT/.harness/scripts/request.py" reconcile --root "$PROJECT_ROOT" > "$BUG_RECONCILE_JSON"
+python3 "$PROJECT_ROOT/.harness/scripts/request.py" reconcile --root "$PROJECT_ROOT" > "$REPAIR_RECONCILE_JSON"
+python3 "$PROJECT_ROOT/.harness/scripts/route-session.py" --root "$PROJECT_ROOT" --task-id T-101 --write-back >/dev/null
+"$PROJECT_ROOT/.harness/bin/harness-runner" run T-101 "$PROJECT_ROOT" --dispatch-mode print > "$REPAIR_RUN_JSON"
+"$PROJECT_ROOT/.harness/bin/harness-verify-task" T-101 "$PROJECT_ROOT" --write-back >/dev/null
+python3 "$PROJECT_ROOT/.harness/scripts/refresh-state.py" "$PROJECT_ROOT" >/dev/null
+harness-report "$PROJECT_ROOT" --request-id "$BUG_REQUEST_ID" --format json > "$RCA_REPORT_JSON"
+
+python3 - <<'PY' "$PROJECT_ROOT" "$REQUEST_ID" "$BUG_REQUEST_ID" "$RECONCILE_JSON" "$RUN_JSON" "$RECOVER_JSON" "$REPORT_JSON" "$BUG_RECONCILE_JSON" "$REPAIR_RECONCILE_JSON" "$REPAIR_RUN_JSON" "$RCA_REPORT_JSON"
 import json
 import sys
 from pathlib import Path
 
 project_root = Path(sys.argv[1])
 request_id = sys.argv[2]
-reconcile = json.load(open(sys.argv[3]))
-run_payload = json.load(open(sys.argv[4]))
-recover_payload = json.load(open(sys.argv[5]))
-report = json.load(open(sys.argv[6]))
+bug_request_id = sys.argv[3]
+reconcile = json.load(open(sys.argv[4]))
+run_payload = json.load(open(sys.argv[5]))
+recover_payload = json.load(open(sys.argv[6]))
+report = json.load(open(sys.argv[7]))
+bug_reconcile = json.load(open(sys.argv[8]))
+repair_reconcile = json.load(open(sys.argv[9]))
+repair_run = json.load(open(sys.argv[10]))
+rca_report = json.load(open(sys.argv[11]))
 
 assert reconcile["bound"], "request should bind to at least one task"
 assert reconcile["bound"][0]["requestId"] == request_id
@@ -316,6 +435,48 @@ assert any(item["kind"] == "audit" for item in request_index["requests"]), "veri
 lineage_index = json.load(open(project_root / ".harness/state/lineage-index.json"))
 assert lineage_index["eventCount"] > 0
 assert request_id in lineage_index["requests"]
+
+assert any(item["requestId"] == bug_request_id and item["rcaId"] for item in bug_reconcile["bound"]), "bug request should allocate RCA"
+repair_request = next(
+    item for item in request_index["requests"]
+    if item.get("parentRequestId") == bug_request_id and item.get("source") == "runtime:rca"
+)
+assert repair_request["kind"] == "implementation"
+
+repair_bound = next(item for item in repair_reconcile["bound"] if item["requestId"] == repair_request["requestId"])
+assert repair_bound["taskId"] == "T-101"
+
+repair_dispatched = repair_run["dispatched"]
+assert repair_dispatched["taskId"] == "T-101"
+assert repair_dispatched["dispatchMode"] == "print"
+
+root_cause_log = [json.loads(line) for line in open(project_root / ".harness/root-cause-log.jsonl") if line.strip()]
+latest_by_rca = {}
+for entry in root_cause_log:
+    latest_by_rca[entry["rcaId"]] = entry
+latest_records = list(latest_by_rca.values())
+assert latest_records, "root cause log should contain RCA records"
+latest_rca = latest_records[-1]
+assert latest_rca["primaryCauseDimension"] == "verification_guardrail"
+assert latest_rca["ownerRole"] == "verifier/architect"
+assert latest_rca["repairMode"] == "test-fix"
+assert latest_rca["status"] == "repaired"
+assert latest_rca["repairRequestId"] == repair_request["requestId"]
+assert latest_rca["preventionAction"]
+
+root_cause_summary = json.load(open(project_root / ".harness/state/root-cause-summary.json"))
+assert root_cause_summary["rcaCount"] >= 1
+assert root_cause_summary["openCount"] == 0
+assert root_cause_summary["byPrimaryCauseDimension"]["verification_guardrail"] >= 1
+assert root_cause_summary["byOwnerRole"]["verifier/architect"] >= 1
+assert not root_cause_summary["bugsMissingLineageCorrelation"]
+
+bug_request = next(item for item in request_index["requests"] if item["requestId"] == bug_request_id)
+assert bug_request["status"] == "completed"
+
+assert rca_report["selectedRequest"]["requestId"] == bug_request_id
+assert rca_report["rootCauseSummary"]["rcaCount"] >= 1
+assert rca_report["rootCauseSummary"]["openCount"] == 0
 PY
 
 echo "release smoke passed"

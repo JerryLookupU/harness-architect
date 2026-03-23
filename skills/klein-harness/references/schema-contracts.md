@@ -12,8 +12,8 @@
 
 - 快照型 JSON 产物使用 `schemaVersion`
 - 快照型结构化产物带 `generator` 和 `generatedAt`
-- `lineage.jsonl` 与 `drift-log/*.jsonl` 属于 append-only 事件日志；它们按事件记录 `timestamp` 和 `generator`，不要求文件级 `schemaVersion` / `generatedAt`
-- `lineage.jsonl` 与 `drift-log/*.jsonl` 只追加，不覆盖
+- `lineage.jsonl`、`feedback-log.jsonl`、`root-cause-log.jsonl` 与 `drift-log/*.jsonl` 属于 append-only 事件日志；它们按事件记录 `timestamp` 和 `generator`，不要求文件级 `schemaVersion` / `generatedAt`
+- `lineage.jsonl`、`feedback-log.jsonl`、`root-cause-log.jsonl` 与 `drift-log/*.jsonl` 只追加，不覆盖
 - ID 一经分配不要重写
 
 如果项目根存在 `AGENTS.md`，把它视作 harness 的相邻控制面文件，而不是可忽略的额外文档。
@@ -43,6 +43,7 @@
 - `state/runtime.json`
 - `state/blueprint-index.json`
 - `state/feedback-summary.json`
+- `state/root-cause-summary.json`
 
 推荐规则：
 
@@ -103,6 +104,7 @@
 - `lineage.jsonl` -> `examples/lineage.example.jsonl`
 - `drift-log/*.jsonl` -> `examples/drift-log.example.jsonl`
 - `feedback-log.jsonl` -> `examples/feedback-log.example.jsonl`
+- `root-cause-log.jsonl` -> `append-only RCA log`
 - `tooling-manifest.json` -> `examples/tooling-manifest.example.json`
 - `session-init.sh` -> `examples/session-init.example.sh`
 - `audit-report.md` -> `examples/audit-report.example.md`
@@ -111,6 +113,7 @@
 - `state/runtime.json` -> `examples/runtime-state.example.json`
 - `state/blueprint-index.json` -> `examples/blueprint-index.example.json`
 - `state/feedback-summary.json` -> `examples/feedback-summary.example.json`
+- `state/root-cause-summary.json` -> `hot-state RCA summary`
 
 如果项目准备把 CLI 模板复制到 `.harness/bin` / `.harness/scripts`，推荐再维护：
 
@@ -162,6 +165,53 @@
 - 非法越权动作不要混成普通 execution failure
 - worker / audit 失败时先写结构化 feedback，再写长文本总结
 - `feedback-log.jsonl` 保留完整历史，供 audit 和回放使用
+- 不要把 RCA 结论写回 `feedback-log.jsonl`
+
+## `root-cause-log.jsonl`
+
+如果项目需要让 bug / feedback 进入显式根因分配闭环，建议额外维护：
+
+- `.harness/root-cause-log.jsonl`
+
+这是 append-only RCA 决策流，不要覆盖旧结论。
+
+每条记录推荐至少包含：
+
+- `rcaId`
+- `bugId` 或 `sourceRequestId`
+- `requestId`
+- `taskId`
+- `sessionId`
+- `worktreePath`
+- `symptomFeedbackIds`
+- `primaryCauseDimension`
+- `contributingCauseDimensions`
+- `ownerRole`
+- `repairMode`
+- `confidence`
+- `status`
+- `evidenceRefs`
+- `allocatedAt`
+- `preventionTarget`
+- `preventionAction`
+
+固定 taxonomy：
+
+- `spec_acceptance`
+- `blueprint_decomposition`
+- `routing_session`
+- `execution_change`
+- `verification_guardrail`
+- `runtime_tooling`
+- `environment_dependency`
+- `merge_handoff`
+- `underdetermined`
+
+推荐规则：
+
+- `feedback-log.jsonl` 记录症状；`root-cause-log.jsonl` 记录结论，不要混写
+- RCA 更新也走 append-only，按 `rcaId` 追加新状态，再由 summary 归并 latest
+- 如果 lineage 证据不足，先记 `underdetermined`，再发 `audit` / `research`
 
 ## `state/feedback-summary.json`
 
@@ -191,6 +241,35 @@
 - `taskFeedbackSummary[taskId].recentFailures` 默认只保留最近 3 条
 - orchestrator / worker prompt 默认优先读 `feedback-summary.json`，不要先扫全文 `feedback-log.jsonl`
 - 如果最近失败窗口命中 `illegal_action` / `path_conflict` / `session_conflict`，默认优先停下而不是盲目续跑
+
+## `state/root-cause-summary.json`
+
+如果 report / dashboard / operator 需要热路径读取 RCA 概览，建议额外维护：
+
+- `.harness/state/root-cause-summary.json`
+
+推荐字段：
+
+- `schemaVersion`
+- `generator`
+- `generatedAt`
+- `rootCauseLogPath`
+- `rcaCount`
+- `openCount`
+- `underdeterminedCount`
+- `byPrimaryCauseDimension`
+- `byOwnerRole`
+- `openItems`
+- `recurringRootCauses`
+- `bugsMissingLineageCorrelation`
+- `recentAllocations`
+
+推荐规则：
+
+- summary 只读 latest RCA state，不改写 append-only log
+- `openItems` 默认展示当前未关闭 RCA
+- `bugsMissingLineageCorrelation` 专门暴露 correlation 弱的 case
+- operator / report 优先读 `root-cause-summary.json`，不要全文扫 `root-cause-log.jsonl`
 
 ## `work-items.json`
 

@@ -11,6 +11,52 @@ REQUEST_TERMINAL_STATUSES = {"completed", "cancelled"}
 TASK_ACTIVE_STATUSES = {"active", "claimed", "in_progress", "dispatched", "running", "resumed"}
 TASK_COMPLETED_STATUSES = {"completed", "validated", "done", "pass", "verified"}
 SEVERE_ROUTE_FAILURES = {"illegal_action", "path_conflict", "session_conflict", "replan_required"}
+REQUEST_SNAPSHOT_KINDS = {"audit", "replan", "stop", "bug", "feedback", "rca"}
+RCA_TERMINAL_STATUSES = {"repaired", "closed"}
+RCA_DIMENSIONS = {
+    "spec_acceptance",
+    "blueprint_decomposition",
+    "routing_session",
+    "execution_change",
+    "verification_guardrail",
+    "runtime_tooling",
+    "environment_dependency",
+    "merge_handoff",
+    "underdetermined",
+}
+CAUSE_OWNER_ROLE = {
+    "spec_acceptance": "architect/product",
+    "blueprint_decomposition": "orchestrator/blueprint-architect",
+    "routing_session": "runtime/orchestrator",
+    "execution_change": "worker",
+    "verification_guardrail": "verifier/architect",
+    "runtime_tooling": "runtime-maintainer",
+    "environment_dependency": "operator/external",
+    "merge_handoff": "audit/orchestrator",
+    "underdetermined": "architect/orchestrator",
+}
+CAUSE_REPAIR_MODE = {
+    "spec_acceptance": "replan/clarification",
+    "blueprint_decomposition": "replan",
+    "routing_session": "stop/route-fix",
+    "execution_change": "bugfix",
+    "verification_guardrail": "test-fix",
+    "runtime_tooling": "harness-fix",
+    "environment_dependency": "ops-fix",
+    "merge_handoff": "audit/merge-fix",
+    "underdetermined": "audit/research",
+}
+CAUSE_PREVENTION_TARGET = {
+    "spec_acceptance": ".harness/spec.json",
+    "blueprint_decomposition": ".harness/work-items.json",
+    "routing_session": ".harness/session-registry.json",
+    "execution_change": ".harness/standards.md",
+    "verification_guardrail": ".harness/verification-rules/manifest.json",
+    "runtime_tooling": ".harness/templates/AGENTS.template.md",
+    "environment_dependency": ".harness/notes/environment.md",
+    "merge_handoff": ".harness/audit-report.md",
+    "underdetermined": ".harness/audit-report.md",
+}
 
 
 def now_iso():
@@ -81,7 +127,8 @@ def ensure_runtime_scaffold(root: Path, generator: str = "harness-runtime"):
     queue_path = requests_dir / "queue.jsonl"
     feedback_log_path = harness / "feedback-log.jsonl"
     lineage_path = harness / "lineage.jsonl"
-    for log_path in (queue_path, feedback_log_path, lineage_path):
+    root_cause_log_path = harness / "root-cause-log.jsonl"
+    for log_path in (queue_path, feedback_log_path, lineage_path, root_cause_log_path):
         log_path.touch(exist_ok=True)
 
     timestamp = now_iso()
@@ -179,6 +226,24 @@ def ensure_runtime_scaffold(root: Path, generator: str = "harness-runtime"):
             "taskFeedbackSummary": {},
         })
 
+    root_cause_summary_path = state_dir / "root-cause-summary.json"
+    if not root_cause_summary_path.exists():
+        write_json(root_cause_summary_path, {
+            "schemaVersion": SCHEMA_VERSION,
+            "generator": generator,
+            "generatedAt": timestamp,
+            "rootCauseLogPath": ".harness/root-cause-log.jsonl",
+            "rcaCount": 0,
+            "openCount": 0,
+            "underdeterminedCount": 0,
+            "byPrimaryCauseDimension": {},
+            "byOwnerRole": {},
+            "openItems": [],
+            "recurringRootCauses": [],
+            "bugsMissingLineageCorrelation": [],
+            "recentAllocations": [],
+        })
+
     for path_name in ("current.json", "runtime.json", "blueprint-index.json", "request-summary.json", "lineage-index.json"):
         path = state_dir / path_name
         if not path.exists():
@@ -188,7 +253,14 @@ def ensure_runtime_scaffold(root: Path, generator: str = "harness-runtime"):
                 "generatedAt": timestamp,
             })
 
-    for snapshot_name in ("audit-requests.json", "replan-requests.json", "stop-requests.json"):
+    for snapshot_name in (
+        "audit-requests.json",
+        "replan-requests.json",
+        "stop-requests.json",
+        "bug-requests.json",
+        "feedback-requests.json",
+        "rca-requests.json",
+    ):
         snapshot_path = harness / snapshot_name
         if not snapshot_path.exists():
             write_json(snapshot_path, {
@@ -210,6 +282,8 @@ def ensure_runtime_scaffold(root: Path, generator: str = "harness-runtime"):
         "project_meta_path": project_meta_path,
         "feedback_log_path": feedback_log_path,
         "feedback_summary_path": feedback_summary_path,
+        "root_cause_log_path": root_cause_log_path,
+        "root_cause_summary_path": root_cause_summary_path,
         "lineage_path": lineage_path,
         "lineage_index_path": state_dir / "lineage-index.json",
         "request_summary_path": state_dir / "request-summary.json",
@@ -226,6 +300,46 @@ def build_request_id(seq: int) -> str:
 
 def build_binding_id(seq: int) -> str:
     return f"RB-{seq:04d}"
+
+
+def build_rca_id(seq: int) -> str:
+    return f"RCA-{seq:04d}"
+
+
+def request_snapshot_path(files: dict, kind: str) -> Path | None:
+    if kind not in REQUEST_SNAPSHOT_KINDS:
+        return None
+    return files["harness"] / f"{kind}-requests.json"
+
+
+def update_request_snapshot(files: dict, request: dict, *, generator: str):
+    snapshot_path = request_snapshot_path(files, request.get("kind") or "")
+    if snapshot_path is None:
+        return None
+    snapshot = load_optional_json(snapshot_path, {
+        "schemaVersion": SCHEMA_VERSION,
+        "generator": generator,
+        "generatedAt": now_iso(),
+        "requests": [],
+    })
+    requests = [item for item in snapshot.get("requests", []) if item.get("requestId") != request.get("requestId")]
+    requests.append({
+        "requestId": request.get("requestId"),
+        "kind": request.get("kind"),
+        "goal": request.get("goal"),
+        "source": request.get("source"),
+        "status": request.get("status"),
+        "parentRequestId": request.get("parentRequestId"),
+        "originTaskId": request.get("originTaskId"),
+        "originSessionId": request.get("originSessionId"),
+        "createdAt": request.get("createdAt"),
+        "updatedAt": request.get("updatedAt"),
+    })
+    snapshot["requests"] = requests[-50:]
+    snapshot["generatedAt"] = now_iso()
+    snapshot["generator"] = generator
+    write_json(snapshot_path, snapshot)
+    return snapshot
 
 
 def normalize_context_paths(root: Path, values: list[str]) -> list[str]:
@@ -785,26 +899,7 @@ def emit_follow_up_request(
     index["generator"] = generator
     index.setdefault("requests", []).append(request)
     write_json(files["request_index_path"], index)
-
-    if kind in {"audit", "replan", "stop"}:
-        snapshot_path = files["harness"] / f"{kind}-requests.json"
-        snapshot = load_optional_json(snapshot_path, {
-            "schemaVersion": SCHEMA_VERSION,
-            "generator": generator,
-            "generatedAt": now_iso(),
-            "requests": [],
-        })
-        snapshot.setdefault("requests", []).append({
-            "requestId": request_id,
-            "goal": goal,
-            "source": source,
-            "originTaskId": origin_task_id,
-            "originSessionId": origin_session_id,
-            "createdAt": request["createdAt"],
-        })
-        snapshot["generatedAt"] = now_iso()
-        snapshot["generator"] = generator
-        write_json(snapshot_path, snapshot)
+    update_request_snapshot(files, request, generator=generator)
 
     lineage_event(
         root,
@@ -823,6 +918,599 @@ def emit_follow_up_request(
     return request
 
 
+def explicit_ids_from_text(text: str, pattern: str) -> list[str]:
+    if not text:
+        return []
+    return list(dict.fromkeys(re.findall(pattern, text)))
+
+
+def read_verification_report(root: Path, verification_result_path: str | None):
+    if not verification_result_path:
+        return None
+    path = (root / verification_result_path).resolve()
+    if not path.exists():
+        return None
+    return load_json(path)
+
+
+def recent_feedback_for_task(entries: list[dict], task_id: str | None, *, limit: int = 5):
+    if not task_id:
+        return []
+    related = [entry for entry in entries if entry.get("taskId") == task_id]
+    related.sort(key=lambda item: (item.get("timestamp") or "", item.get("id") or ""))
+    return related[-limit:]
+
+
+def binding_for_request(index: dict, task_map: dict, request_id: str | None):
+    if not request_id:
+        return None
+    for binding in reversed(task_map.get("bindings", [])):
+        if binding.get("requestId") == request_id:
+            return binding
+    request = next((item for item in index.get("requests", []) if item.get("requestId") == request_id), None)
+    if not request:
+        return None
+    task_id = request.get("activeTaskId")
+    if not task_id:
+        return None
+    return find_binding(task_map.get("bindings", []), request_id, task_id)
+
+
+def correlate_root_cause_request(
+    root: Path,
+    request: dict,
+    *,
+    index: dict,
+    task_map: dict,
+    task_pool: dict | None,
+    session_registry: dict | None,
+    feedback_entries: list[dict],
+):
+    tasks = (task_pool or {}).get("tasks", [])
+    tasks_by_id = {task.get("taskId"): task for task in tasks if task.get("taskId")}
+    text = " ".join(filter(None, [request.get("goal"), request.get("statusReason") or ""]))
+    explicit_task_ids = explicit_ids_from_text(text, r"\bT-\d+\b")
+    explicit_request_ids = explicit_ids_from_text(text, r"\bR-\d+\b")
+    explicit_session_ids = explicit_ids_from_text(text, r"\b(?:sess|orch)[A-Za-z0-9:_-]*\b")
+
+    task_id = next((task_id for task_id in explicit_task_ids if task_id in tasks_by_id), None)
+    correlated_request_id = None
+    confidence = 0.35
+    evidence_refs = []
+
+    if task_id:
+        confidence = 0.95
+        evidence_refs.append(f"task:{task_id}")
+
+    binding = None
+    if explicit_request_ids:
+        for candidate_request_id in explicit_request_ids:
+            binding = binding_for_request(index, task_map, candidate_request_id)
+            if binding is not None:
+                correlated_request_id = candidate_request_id
+                task_id = task_id or binding.get("taskId")
+                confidence = max(confidence, 0.9)
+                evidence_refs.append(f"request:{candidate_request_id}")
+                break
+
+    if binding is None and task_id:
+        binding = next(
+            (
+                item for item in reversed(task_map.get("bindings", []))
+                if item.get("taskId") == task_id
+            ),
+            None,
+        )
+        if binding is not None:
+            correlated_request_id = binding.get("requestId")
+
+    if task_id is None:
+        severe_feedback = [
+            entry for entry in feedback_entries
+            if entry.get("severity") in {"error", "critical"} and entry.get("taskId")
+        ]
+        unique_task_ids = list(dict.fromkeys(entry.get("taskId") for entry in severe_feedback))
+        if len(unique_task_ids) == 1:
+            task_id = unique_task_ids[0]
+            binding = next(
+                (
+                    item for item in reversed(task_map.get("bindings", []))
+                    if item.get("taskId") == task_id
+                ),
+                None,
+            )
+            correlated_request_id = binding.get("requestId") if binding else None
+            confidence = max(confidence, 0.62)
+            evidence_refs.append(f"feedback-task:{task_id}")
+
+    task = tasks_by_id.get(task_id) if task_id else None
+    lineage = (binding or {}).get("lineage", {})
+    feedback_refs = recent_feedback_for_task(feedback_entries, task_id)
+    symptom_feedback_ids = [entry.get("id") for entry in feedback_refs if entry.get("id")]
+    evidence_refs.extend(f"feedback:{item}" for item in symptom_feedback_ids)
+
+    session_id = (
+        next((item for item in explicit_session_ids if item), None)
+        or lineage.get("sessionId")
+        or (task or {}).get("claim", {}).get("boundSessionId")
+        or (task or {}).get("preferredResumeSessionId")
+    )
+    if session_id:
+        evidence_refs.append(f"session:{session_id}")
+
+    verification_result_path = (
+        lineage.get("verificationResultPath")
+        or (task or {}).get("verificationResultPath")
+    )
+    if verification_result_path:
+        evidence_refs.append(f"verification:{verification_result_path}")
+
+    return {
+        "correlatedRequestId": correlated_request_id,
+        "taskId": task_id,
+        "sessionId": session_id,
+        "worktreePath": lineage.get("worktreePath") or (task or {}).get("worktreePath"),
+        "verificationResultPath": verification_result_path,
+        "diffBase": lineage.get("diffBase") or (task or {}).get("diffBase") or (task or {}).get("dispatch", {}).get("diffBase"),
+        "bindingId": (binding or {}).get("bindingId"),
+        "ownedPaths": (task or {}).get("ownedPaths", []),
+        "forbiddenPaths": (task or {}).get("forbiddenPaths", []),
+        "taskKind": (task or {}).get("kind"),
+        "taskStatus": (task or {}).get("status"),
+        "taskTitle": (task or {}).get("title"),
+        "auditVerdict": (task or {}).get("auditVerdict"),
+        "verificationStatus": lineage.get("verificationStatus") or (task or {}).get("verificationStatus"),
+        "symptomFeedbackIds": symptom_feedback_ids,
+        "evidenceRefs": evidence_refs,
+        "correlationConfidence": round(confidence, 2),
+        "correlationStrength": "strong" if confidence >= 0.85 else "moderate" if confidence >= 0.6 else "weak",
+    }
+
+
+def classify_root_cause_dimension(request: dict, correlation: dict, verification_report: dict | None, symptom_entries: list[dict]):
+    text = " ".join(
+        filter(
+            None,
+            [
+                request.get("goal"),
+                request.get("statusReason"),
+                " ".join(entry.get("message") or "" for entry in symptom_entries),
+            ],
+        )
+    ).lower()
+    explicit_dimension = next((dimension for dimension in RCA_DIMENSIONS if dimension in text), None)
+    if explicit_dimension:
+        return explicit_dimension
+    if correlation.get("correlationStrength") == "weak" or not correlation.get("taskId"):
+        return "underdetermined"
+    feedback_types = {entry.get("feedbackType") for entry in symptom_entries}
+    source_values = {entry.get("source") for entry in symptom_entries}
+    steps = {entry.get("step") for entry in symptom_entries}
+    audit_verdict = correlation.get("auditVerdict")
+    verification_status = (verification_report or {}).get("overallStatus") or correlation.get("verificationStatus")
+
+    if "merge" in text or audit_verdict in {"warn", "fail"}:
+        return "merge_handoff"
+    if verification_status == "fail" or feedback_types & {"verification_failure", "missing_rule", "test_failure"}:
+        return "verification_guardrail"
+    if feedback_types & {"path_conflict", "session_conflict", "replan_required"}:
+        return "routing_session"
+    if (
+        "ownedpaths" in text
+        or "forbiddenpath" in text
+        or "forbidden path" in text
+        or "session reuse" in text
+        or steps & {"route", "resume"}
+    ):
+        return "routing_session"
+    if "acceptance" in text or "prd" in text or "spec" in text or "expected behavior" in text:
+        return "spec_acceptance"
+    if "blueprint" in text or "decomposition" in text or "task boundary" in text or "work item" in text:
+        return "blueprint_decomposition"
+    if (
+        "dependency" in text
+        or "network" in text
+        or "module not found" in text
+        or "command not found" in text
+        or source_values & {"operator", "environment", "dependency"}
+    ):
+        return "environment_dependency"
+    if (
+        "harness" in text
+        or "runner" in text
+        or "tmux" in text
+        or "install" in text
+        or source_values & {"runtime", "runner", "session-init"}
+    ):
+        return "runtime_tooling"
+    return "execution_change"
+
+
+def contributing_dimensions(primary_dimension: str, correlation: dict, verification_report: dict | None, symptom_entries: list[dict]):
+    contributing = []
+    text = " ".join(entry.get("message") or "" for entry in symptom_entries).lower()
+    if primary_dimension != "verification_guardrail" and ((verification_report or {}).get("overallStatus") == "fail"):
+        contributing.append("verification_guardrail")
+    if primary_dimension != "routing_session" and ("path conflict" in text or "session conflict" in text):
+        contributing.append("routing_session")
+    if primary_dimension != "execution_change" and correlation.get("taskId"):
+        contributing.append("execution_change")
+    return list(dict.fromkeys(item for item in contributing if item in RCA_DIMENSIONS and item != primary_dimension))
+
+
+def allocate_root_cause_record(
+    root: Path,
+    request: dict,
+    *,
+    generator: str,
+    correlation: dict,
+    feedback_entries: list[dict],
+):
+    files = ensure_runtime_scaffold(root, generator=generator)
+    existing = load_jsonl(files["root_cause_log_path"])
+    next_seq = max((int(item.get("rcaId", "RCA-0000").split("-")[-1]) for item in existing if item.get("rcaId")), default=0) + 1
+    verification_report = read_verification_report(root, correlation.get("verificationResultPath"))
+    symptom_entries = [
+        entry for entry in feedback_entries
+        if entry.get("id") in set(correlation.get("symptomFeedbackIds", []))
+    ]
+    primary_dimension = classify_root_cause_dimension(request, correlation, verification_report, symptom_entries)
+    repair_mode = CAUSE_REPAIR_MODE.get(primary_dimension, "audit/research")
+    status = "underdetermined" if primary_dimension == "underdetermined" else "allocated"
+    task_id = correlation.get("taskId")
+    prevention_target = CAUSE_PREVENTION_TARGET.get(primary_dimension)
+    prevention_action = (
+        f"write prevention signal to {prevention_target}"
+        if prevention_target
+        else "record prevention note in root-cause summary"
+    )
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "generator": generator,
+        "generatedAt": now_iso(),
+        "rcaId": build_rca_id(next_seq),
+        "bugId": request.get("requestId") if request.get("kind") == "bug" else None,
+        "sourceRequestId": request.get("requestId"),
+        "requestId": request.get("requestId"),
+        "repairRequestId": None,
+        "taskId": task_id,
+        "sessionId": correlation.get("sessionId"),
+        "worktreePath": correlation.get("worktreePath"),
+        "verificationResultPath": correlation.get("verificationResultPath"),
+        "symptomFeedbackIds": correlation.get("symptomFeedbackIds", []),
+        "primaryCauseDimension": primary_dimension,
+        "contributingCauseDimensions": contributing_dimensions(primary_dimension, correlation, verification_report, symptom_entries),
+        "ownerRole": CAUSE_OWNER_ROLE.get(primary_dimension, "architect/orchestrator"),
+        "repairMode": repair_mode,
+        "confidence": correlation.get("correlationConfidence", 0.0),
+        "status": status,
+        "evidenceRefs": list(dict.fromkeys(correlation.get("evidenceRefs", []))),
+        "allocatedAt": now_iso(),
+        "preventionTarget": prevention_target,
+        "preventionAction": prevention_action,
+        "correlationStrength": correlation.get("correlationStrength"),
+        "correlatedRequestId": correlation.get("correlatedRequestId"),
+        "bindingId": correlation.get("bindingId"),
+        "diffBase": correlation.get("diffBase"),
+    }
+
+
+def append_root_cause_record(root: Path, record: dict, *, generator: str):
+    files = ensure_runtime_scaffold(root, generator=generator)
+    payload = {**record, "generatedAt": now_iso(), "generator": generator}
+    append_jsonl(files["root_cause_log_path"], payload)
+    lineage_event(
+        root,
+        "rca.recorded",
+        generator,
+        request_id=payload.get("sourceRequestId"),
+        task_id=payload.get("taskId"),
+        session_id=payload.get("sessionId"),
+        worktree_path=payload.get("worktreePath"),
+        detail=payload.get("primaryCauseDimension"),
+        reason=payload.get("status"),
+        context={"rcaId": payload.get("rcaId"), "ownerRole": payload.get("ownerRole"), "repairMode": payload.get("repairMode")},
+    )
+    return payload
+
+
+def latest_root_cause_records(entries: list[dict]):
+    latest = {}
+    for entry in entries:
+        rca_id = entry.get("rcaId")
+        if rca_id:
+            latest[rca_id] = entry
+    return latest
+
+
+def build_root_cause_summary(entries: list[dict]):
+    latest = latest_root_cause_records(entries)
+    records = sorted(
+        latest.values(),
+        key=lambda item: (item.get("allocatedAt") or "", item.get("generatedAt") or "", item.get("rcaId") or ""),
+    )
+    by_dimension = Counter(record.get("primaryCauseDimension", "underdetermined") for record in records)
+    by_owner = Counter(record.get("ownerRole", "unknown") for record in records)
+    open_records = [record for record in records if record.get("status") not in RCA_TERMINAL_STATUSES]
+    recurring = [
+        {"primaryCauseDimension": dimension, "count": count}
+        for dimension, count in sorted(by_dimension.items(), key=lambda item: (-item[1], item[0]))
+        if count > 1
+    ]
+    missing_correlation = [
+        {
+            "rcaId": record.get("rcaId"),
+            "bugId": record.get("bugId"),
+            "sourceRequestId": record.get("sourceRequestId"),
+            "taskId": record.get("taskId"),
+            "confidence": record.get("confidence"),
+            "status": record.get("status"),
+        }
+        for record in open_records
+        if record.get("primaryCauseDimension") == "underdetermined" or record.get("confidence", 0) < 0.6
+    ]
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "generator": "klein-harness",
+        "generatedAt": now_iso(),
+        "rootCauseLogPath": ".harness/root-cause-log.jsonl",
+        "rcaCount": len(records),
+        "openCount": len(open_records),
+        "underdeterminedCount": sum(1 for record in records if record.get("primaryCauseDimension") == "underdetermined"),
+        "byPrimaryCauseDimension": dict(by_dimension),
+        "byOwnerRole": dict(by_owner),
+        "openItems": [
+            {
+                "rcaId": record.get("rcaId"),
+                "sourceRequestId": record.get("sourceRequestId"),
+                "repairRequestId": record.get("repairRequestId"),
+                "taskId": record.get("taskId"),
+                "primaryCauseDimension": record.get("primaryCauseDimension"),
+                "ownerRole": record.get("ownerRole"),
+                "repairMode": record.get("repairMode"),
+                "status": record.get("status"),
+                "confidence": record.get("confidence"),
+                "preventionAction": record.get("preventionAction"),
+            }
+            for record in open_records[-10:]
+        ],
+        "recurringRootCauses": recurring,
+        "bugsMissingLineageCorrelation": missing_correlation[-10:],
+        "recentAllocations": [
+            {
+                "rcaId": record.get("rcaId"),
+                "primaryCauseDimension": record.get("primaryCauseDimension"),
+                "ownerRole": record.get("ownerRole"),
+                "status": record.get("status"),
+                "allocatedAt": record.get("allocatedAt"),
+            }
+            for record in records[-10:]
+        ],
+    }
+
+
+def write_root_cause_summary(root: Path, *, generator: str):
+    files = ensure_runtime_scaffold(root, generator=generator)
+    summary = build_root_cause_summary(load_jsonl(files["root_cause_log_path"]))
+    summary["generator"] = generator
+    summary["generatedAt"] = now_iso()
+    write_json(files["root_cause_summary_path"], summary)
+    return summary
+
+
+def emit_repair_request_for_rca(root: Path, record: dict, *, generator: str):
+    task_label = record.get("taskId") or "unbound lineage"
+    kind = "analysis"
+    goal = f"Research RCA {record['rcaId']} because lineage correlation is underdetermined"
+    reason = f"RCA {record['rcaId']} allocated to {record['primaryCauseDimension']}"
+    repair_mode = record.get("repairMode")
+    if repair_mode == "replan/clarification":
+        kind = "replan"
+        goal = f"Clarify acceptance and replan {task_label} for RCA {record['rcaId']}"
+    elif repair_mode == "replan":
+        kind = "replan"
+        goal = f"Replan blueprint/task decomposition for {task_label} from RCA {record['rcaId']}"
+    elif repair_mode == "stop/route-fix":
+        kind = "stop"
+        goal = f"Stop conflicting route and apply route fix for {task_label} from RCA {record['rcaId']}"
+    elif repair_mode in {"bugfix", "test-fix", "harness-fix", "audit/merge-fix"}:
+        kind = "implementation"
+        goal = f"Repair {task_label} via {repair_mode} from RCA {record['rcaId']}"
+    elif repair_mode == "ops-fix":
+        kind = "research"
+        goal = f"Investigate external dependency and ops fix for RCA {record['rcaId']}"
+    elif repair_mode == "audit/research":
+        kind = "audit"
+        goal = f"Audit and gather evidence for RCA {record['rcaId']} before repair"
+
+    return emit_follow_up_request(
+        root,
+        kind=kind,
+        goal=goal,
+        source="runtime:rca",
+        generator=generator,
+        parent_request_id=record.get("sourceRequestId"),
+        origin_task_id=record.get("taskId"),
+        origin_session_id=record.get("sessionId"),
+        reason=reason,
+        dedupe_key=f"rca:{record['rcaId']}:{repair_mode}:{kind}",
+    )
+
+
+def process_root_cause_request(root: Path, request: dict, *, generator: str):
+    files = ensure_runtime_scaffold(root, generator=generator)
+    index = load_json(files["request_index_path"])
+    task_map = load_json(files["request_task_map_path"])
+    task_pool = read_task_pool(files["harness"])
+    session_registry = load_optional_json(files["session_registry_path"], {})
+    feedback_entries = load_jsonl(files["feedback_log_path"])
+
+    correlation = correlate_root_cause_request(
+        root,
+        request,
+        index=index,
+        task_map=task_map,
+        task_pool=task_pool,
+        session_registry=session_registry,
+        feedback_entries=feedback_entries,
+    )
+    if correlation.get("taskId") and find_binding(task_map.get("bindings", []), request.get("requestId"), correlation.get("taskId")) is None:
+        task = find_task((task_pool or {}).get("tasks", []), correlation.get("taskId"))
+        ensure_binding(
+            root,
+            request.get("requestId"),
+            task,
+            status="bound",
+            reason=f"RCA correlated to {correlation.get('taskId')}",
+            generator=generator,
+        )
+
+    record = allocate_root_cause_record(root, request, generator=generator, correlation=correlation, feedback_entries=feedback_entries)
+    follow_up = emit_repair_request_for_rca(root, record, generator=generator)
+    if follow_up:
+        record["repairRequestId"] = follow_up.get("requestId")
+        if record.get("status") != "underdetermined":
+            record["status"] = "repair_emitted"
+    saved = append_root_cause_record(root, record, generator=generator)
+
+    request_status = "blocked" if saved.get("status") == "underdetermined" else "completed"
+    status_reason = (
+        f"RCA {saved['rcaId']} underdetermined; emitted {follow_up.get('kind') if follow_up else 'research'} follow-up"
+        if saved.get("status") == "underdetermined"
+        else f"RCA {saved['rcaId']} allocated to {saved['primaryCauseDimension']} and emitted repair request"
+    )
+    if correlation.get("taskId"):
+        update_binding_state(
+            root,
+            request.get("requestId"),
+            correlation.get("taskId"),
+            request_status,
+            reason=status_reason,
+            generator=generator,
+            session_id=correlation.get("sessionId"),
+            worktree_path=correlation.get("worktreePath"),
+            diff_summary=saved.get("primaryCauseDimension"),
+            outcome={
+                "status": "repair_request_emitted" if request_status == "completed" else "underdetermined",
+                "repairRequestId": saved.get("repairRequestId"),
+                "rcaId": saved.get("rcaId"),
+            },
+        )
+        refreshed_index = load_json(files["request_index_path"])
+        update_request_status(
+            refreshed_index,
+            request.get("requestId"),
+            request_status,
+            reason=status_reason,
+            extra={
+                "rcaId": saved.get("rcaId"),
+                "repairRequestId": saved.get("repairRequestId"),
+                "primaryCauseDimension": saved.get("primaryCauseDimension"),
+                "ownerRole": saved.get("ownerRole"),
+                "repairMode": saved.get("repairMode"),
+            },
+        )
+        refreshed_index["generatedAt"] = now_iso()
+        refreshed_index["generator"] = generator
+        write_json(files["request_index_path"], refreshed_index)
+    else:
+        latest_request = update_request_status(
+            index,
+            request.get("requestId"),
+            request_status,
+            reason=status_reason,
+            extra={
+                "rcaId": saved.get("rcaId"),
+                "repairRequestId": saved.get("repairRequestId"),
+                "primaryCauseDimension": saved.get("primaryCauseDimension"),
+                "ownerRole": saved.get("ownerRole"),
+                "repairMode": saved.get("repairMode"),
+            },
+        )
+        index["generatedAt"] = now_iso()
+        index["generator"] = generator
+        write_json(files["request_index_path"], index)
+        update_request_snapshot(files, latest_request, generator=generator)
+        write_json(files["request_summary_path"], build_request_summary(index, load_json(files["request_task_map_path"]), task_pool))
+        lineage_event(
+            root,
+            "request.completed" if request_status == "completed" else "request.blocked",
+            generator,
+            request_id=request.get("requestId"),
+            detail=status_reason,
+            reason=saved.get("primaryCauseDimension"),
+            context={"rcaId": saved.get("rcaId"), "repairRequestId": saved.get("repairRequestId")},
+        )
+        latest_request["updatedAt"] = now_iso()
+
+    refreshed_index = load_json(files["request_index_path"])
+    latest_request = next(
+        (item for item in refreshed_index.get("requests", []) if item.get("requestId") == request.get("requestId")),
+        None,
+    )
+    if latest_request is not None:
+        update_request_snapshot(files, latest_request, generator=generator)
+    summary = write_root_cause_summary(root, generator=generator)
+    return {
+        "requestId": request.get("requestId"),
+        "rcaId": saved.get("rcaId"),
+        "taskId": correlation.get("taskId"),
+        "primaryCauseDimension": saved.get("primaryCauseDimension"),
+        "ownerRole": saved.get("ownerRole"),
+        "repairMode": saved.get("repairMode"),
+        "repairRequestId": saved.get("repairRequestId"),
+        "status": saved.get("status"),
+        "correlationStrength": saved.get("correlationStrength"),
+        "summaryOpenCount": summary.get("openCount"),
+    }
+
+
+def close_root_causes_for_repair_request(
+    root: Path,
+    *,
+    request_id: str,
+    task: dict,
+    verification_result_path: str | None,
+    generator: str,
+):
+    files = ensure_runtime_scaffold(root, generator=generator)
+    entries = load_jsonl(files["root_cause_log_path"])
+    latest = latest_root_cause_records(entries)
+    updated = []
+    for record in latest.values():
+        if record.get("repairRequestId") != request_id:
+            continue
+        if record.get("status") in RCA_TERMINAL_STATUSES:
+            continue
+        next_record = {
+            **record,
+            "generatedAt": now_iso(),
+            "generator": generator,
+            "status": "repaired",
+            "taskId": record.get("taskId") or task.get("taskId"),
+            "worktreePath": record.get("worktreePath") or task.get("worktreePath"),
+            "verificationResultPath": verification_result_path or record.get("verificationResultPath"),
+            "preventionAction": record.get("preventionAction") or f"record prevention note for {task.get('taskId')}",
+        }
+        append_jsonl(files["root_cause_log_path"], next_record)
+        updated.append(next_record)
+        lineage_event(
+            root,
+            "rca.repaired",
+            generator,
+            request_id=record.get("sourceRequestId"),
+            task_id=task.get("taskId"),
+            session_id=record.get("sessionId"),
+            worktree_path=task.get("worktreePath"),
+            verification={"verificationResultPath": verification_result_path, "overallStatus": "pass"},
+            detail=record.get("rcaId"),
+            reason=record.get("preventionAction"),
+        )
+    if updated:
+        write_root_cause_summary(root, generator=generator)
+    return updated
+
+
 def reconcile_requests(root: Path, *, generator: str = "harness-reconcile"):
     files = ensure_runtime_scaffold(root, generator=generator)
     index = load_json(files["request_index_path"])
@@ -834,6 +1522,17 @@ def reconcile_requests(root: Path, *, generator: str = "harness-reconcile"):
 
     for request in index.get("requests", []):
         if request.get("status") in REQUEST_TERMINAL_STATUSES:
+            continue
+        if (request.get("kind") or "").lower() in {"bug", "feedback", "rca"}:
+            if request.get("primaryCauseDimension") or request.get("rcaId"):
+                continue
+            outcome = process_root_cause_request(root, request, generator=generator)
+            bound.append({
+                "requestId": request.get("requestId"),
+                "taskId": outcome.get("taskId"),
+                "rcaId": outcome.get("rcaId"),
+                "kind": request.get("kind"),
+            })
             continue
         if request_bindings_for_request(task_map, request.get("requestId")):
             continue

@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from runtime_common import (
+    close_root_causes_for_repair_request,
     emit_follow_up_request,
     ensure_runtime_scaffold,
     find_task,
@@ -16,6 +17,7 @@ from runtime_common import (
     now_iso,
     request_bindings_for_task,
     update_binding_state,
+    write_root_cause_summary,
     write_json,
 )
 
@@ -165,6 +167,13 @@ def main():
                 "verificationResultPath": task["verificationResultPath"],
             }
             if overall_status in {"pass", "skipped"}:
+                close_root_causes_for_repair_request(
+                    root,
+                    request_id=binding.get("requestId"),
+                    task=task,
+                    verification_result_path=task["verificationResultPath"],
+                    generator="harness-verify-task",
+                )
                 update_binding_state(
                     root,
                     binding.get("requestId"),
@@ -217,6 +226,7 @@ def main():
                     reason="verification failed",
                     dedupe_key=f"replan:{args.task_id}:{task.get('verificationSummary')}",
                 )
+        write_root_cause_summary(root, generator="harness-verify-task")
 
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if overall_status in {"pass", "skipped"} else 1

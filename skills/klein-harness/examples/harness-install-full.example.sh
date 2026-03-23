@@ -14,6 +14,9 @@ STATE_DIR="$HARNESS_DIR/state"
 TEMPLATES_DIR="$HARNESS_DIR/templates"
 REQUESTS=(
   "$HARNESS_DIR/audit-requests.json"
+  "$HARNESS_DIR/bug-requests.json"
+  "$HARNESS_DIR/feedback-requests.json"
+  "$HARNESS_DIR/rca-requests.json"
   "$HARNESS_DIR/replan-requests.json"
   "$HARNESS_DIR/stop-requests.json"
 )
@@ -26,7 +29,9 @@ REQUEST_TASK_MAP_PATH="$STATE_DIR/request-task-map.json"
 PROJECT_META_PATH="$HARNESS_DIR/project-meta.json"
 FEEDBACK_LOG_PATH="$HARNESS_DIR/feedback-log.jsonl"
 LINEAGE_PATH="$HARNESS_DIR/lineage.jsonl"
+ROOT_CAUSE_LOG_PATH="$HARNESS_DIR/root-cause-log.jsonl"
 FEEDBACK_SUMMARY_PATH="$STATE_DIR/feedback-summary.json"
+ROOT_CAUSE_SUMMARY_PATH="$STATE_DIR/root-cause-summary.json"
 RUNNER_STATE_PATH="$STATE_DIR/runner-state.json"
 RUNNER_HEARTBEATS_PATH="$STATE_DIR/runner-heartbeats.json"
 REQUEST_SUMMARY_PATH="$STATE_DIR/request-summary.json"
@@ -99,6 +104,10 @@ fi
 
 if [ ! -f "$LINEAGE_PATH" ]; then
   : > "$LINEAGE_PATH"
+fi
+
+if [ ! -f "$ROOT_CAUSE_LOG_PATH" ]; then
+  : > "$ROOT_CAUSE_LOG_PATH"
 fi
 
 python3 - <<'PY' "$ROOT" "$SCRIPTS_DIR/runtime_common.py"

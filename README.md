@@ -13,6 +13,7 @@ Klein-Harness turns a repository into a re-entrant control surface:
 - requests stay append-only and machine-readable
 - runtime binds requests to tasks explicitly
 - session / worktree / verification lineage stays repo-local
+- symptom evidence stays separate from RCA allocation
 - reports, failures, audits, and replans can re-enter as the next request
 
 This repo ships two Codex skills:
@@ -96,6 +97,13 @@ Submit incremental work:
 harness-submit /path/to/project --kind implementation --goal "根据 PRD 落一个增量改动" --context docs/prd.md
 ```
 
+Bug / feedback intake uses the same request surface:
+
+```bash
+harness-submit /path/to/project --kind bug --goal "T-042 在 verify 后回归"
+harness-submit /path/to/project --kind feedback --goal "当前 session handoff 存在歧义"
+```
+
 Read the current runtime state:
 
 ```bash
@@ -114,9 +122,10 @@ submit
   -> route-session
   -> runner dispatch / recover / resume
   -> verify-task
+  -> root-cause allocation / repair emission
   -> refresh-state
   -> report
-  -> runtime follow-up request (audit / replan / stop)
+  -> runtime follow-up request (audit / replan / stop / repair)
 ```
 
 Core lifecycle states:
@@ -134,6 +143,7 @@ Primary hot state:
 - `.harness/state/runtime.json`
 - `.harness/state/blueprint-index.json`
 - `.harness/state/feedback-summary.json`
+- `.harness/state/root-cause-summary.json`
 - `.harness/state/request-summary.json`
 - `.harness/state/lineage-index.json`
 
@@ -142,12 +152,18 @@ Primary append-only logs:
 - `.harness/requests/queue.jsonl`
 - `.harness/lineage.jsonl`
 - `.harness/feedback-log.jsonl`
+- `.harness/root-cause-log.jsonl`
 
 Primary mutable ledgers:
 
 - `.harness/state/request-index.json`
 - `.harness/state/request-task-map.json`
 - `.harness/session-registry.json`
+
+Evidence and RCA are intentionally split:
+
+- `feedback-log.jsonl` stores symptom evidence and runtime events
+- `root-cause-log.jsonl` stores RCA decisions, owner allocation, repair mode, and prevention write-back
 
 ## Command Surface
 

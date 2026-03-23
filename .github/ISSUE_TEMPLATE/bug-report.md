@@ -25,6 +25,18 @@ assignees: ""
 - Model:
 - 是否使用并发：
 
+## Lineage / RCA
+
+- requestId:
+- taskId:
+- sessionId:
+- worktreePath:
+- diffBase:
+- verificationResultPath:
+- suspectedCauseDimension:
+- firstSeenAt:
+- impact:
+
 ## 附加信息
 
 - 相关命令：

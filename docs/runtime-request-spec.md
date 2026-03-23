@@ -10,7 +10,7 @@ Unify all upstream entry points into one repo-local runtime:
 - future external callers
 
 All of them submit requests.
-Only the project runtime decides binding, routing, dispatch, recovery, verification, follow-up requests, and reporting.
+Only the project runtime decides binding, routing, dispatch, recovery, verification, RCA allocation, follow-up requests, and reporting.
 
 ## Entry Model
 
@@ -76,6 +76,7 @@ Creates at least:
 - `.harness/state/request-task-map.json`
 - `.harness/state/request-summary.json`
 - `.harness/state/lineage-index.json`
+- `.harness/state/root-cause-summary.json`
 - `.harness/lineage.jsonl`
 - `.harness/session-registry.json`
 - `.harness/project-meta.json`
@@ -91,6 +92,7 @@ All append-only event logs follow append-only semantics:
 - `.harness/requests/queue.jsonl`
 - `.harness/lineage.jsonl`
 - `.harness/feedback-log.jsonl`
+- `.harness/root-cause-log.jsonl`
 
 ## Binding
 
@@ -121,6 +123,46 @@ Each binding records at least:
 - `lineage.verificationResultPath`
 - `history[]`
 
+## RCA Allocation
+
+Bug and feedback handling keeps symptom evidence and RCA decisions separate:
+
+- `.harness/feedback-log.jsonl` stores symptoms / events
+- `.harness/root-cause-log.jsonl` stores RCA decisions
+
+Supported request kinds now include:
+
+- `implementation`
+- `analysis`
+- `research`
+- `status`
+- `audit`
+- `replan`
+- `stop`
+- `bug`
+- `feedback`
+- `rca`
+
+RCA uses a fixed taxonomy:
+
+- `spec_acceptance`
+- `blueprint_decomposition`
+- `routing_session`
+- `execution_change`
+- `verification_guardrail`
+- `runtime_tooling`
+- `environment_dependency`
+- `merge_handoff`
+- `underdetermined`
+
+Before emitting repair, runtime correlates bug / feedback to:
+
+```text
+requestId -> taskId -> sessionId -> worktreePath -> verificationResultPath
+```
+
+If correlation is weak, RCA stays `underdetermined` and runtime emits `audit` / `research` instead of blind repair.
+
 ## Route First, Dispatch Second
 
 `harness-route-session` is the pre-worker gate.
@@ -150,6 +192,7 @@ Primary machine-readable hot path:
 - `.harness/state/runtime.json`
 - `.harness/state/blueprint-index.json`
 - `.harness/state/feedback-summary.json`
+- `.harness/state/root-cause-summary.json`
 - `.harness/state/request-summary.json`
 - `.harness/state/lineage-index.json`
 
@@ -160,6 +203,7 @@ Primary machine-readable hot path:
 - session registry
 - runner state + heartbeat
 - feedback log
+- root-cause log
 - lineage log
 
 Operator tools should prefer hot state first and degrade gracefully to the source ledgers.
@@ -173,6 +217,7 @@ Current minimal mechanism:
 - verification failure emits `replan`
 - blocked session/path conflicts emit `replan` or `stop`
 - verified merge-required work can emit `audit`
+- RCA allocation can emit repair work such as `implementation`, `replan`, `stop`, `audit`, or `research`
 
 These follow-up requests:
 
@@ -192,6 +237,7 @@ These follow-up requests:
 - bound session
 - worktree path
 - verification summary
+- root-cause summary
 - current runtime focus
 - active / recoverable / stale runners
 - lineage event count
@@ -208,7 +254,10 @@ The release smoke proves:
 6. runner print dispatch evidence
 7. recover / resume
 8. verify
-9. refresh-state
-10. report
+9. bug / feedback intake
+10. RCA allocate -> repair emit
+11. verify repair
+12. refresh-state
+13. report
 
-The smoke also checks that follow-up requests and lineage summaries are written.
+The smoke also checks that follow-up requests, RCA summaries, and lineage summaries are written.

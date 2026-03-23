@@ -24,6 +24,18 @@ assignees: ""
 - 预期是什么：
 - 实际发生了什么：
 
+## Lineage / RCA
+
+- requestId:
+- taskId:
+- sessionId:
+- worktreePath:
+- diffBase:
+- verificationResultPath:
+- suspectedCauseDimension:
+- firstSeenAt:
+- impact:
+
 ## 建议
 
 - 可以删掉的内容：

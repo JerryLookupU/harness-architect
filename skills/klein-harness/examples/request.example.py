@@ -6,16 +6,19 @@ from collections import Counter
 from pathlib import Path
 
 from runtime_common import (
+    build_root_cause_summary,
     build_request_id,
     build_request_summary,
     ensure_runtime_scaffold,
     find_request,
     lineage_event,
     load_json,
+    load_jsonl,
     load_optional_json,
     now_iso,
     normalize_context_paths,
     reconcile_requests,
+    update_request_snapshot,
     upsert_request_record,
     update_request_status,
     write_json,
@@ -61,6 +64,7 @@ def cmd_submit(args):
     index["generator"] = "harness-request"
     upsert_request_record(index, summary)
     write_json(files["request_index_path"], index)
+    update_request_snapshot(files, summary, generator="harness-request")
     write_json(files["request_summary_path"], build_request_summary(index, load_json(files["request_task_map_path"]), None))
 
     lineage_event(
@@ -89,6 +93,7 @@ def build_report_payload(root: Path, request_id: str | None):
     runtime = load_optional_json(files["state_dir"] / "runtime.json", {})
     request_summary = load_optional_json(files["request_summary_path"]) or build_request_summary(index, task_map, None)
     lineage_index = load_optional_json(files["lineage_index_path"], {})
+    root_cause_summary = load_optional_json(files["root_cause_summary_path"]) or build_root_cause_summary(load_jsonl(files["root_cause_log_path"]))
     session_registry = load_optional_json(files["session_registry_path"], {})
     project_meta = load_optional_json(files["project_meta_path"], {})
     requests = index.get("requests", [])
@@ -131,6 +136,9 @@ def build_report_payload(root: Path, request_id: str | None):
         "orchestrationSessionId": runtime.get("orchestrationSessionId") or session_registry.get("orchestrationSessionId"),
         "lineageEventCount": lineage_index.get("eventCount", 0),
         "lineage": lineage_index.get("requests", {}).get(active_request.get("requestId")) if active_request else None,
+        "rootCauseSummary": root_cause_summary,
+        "openRootCauseItems": root_cause_summary.get("openItems", []),
+        "bugsMissingLineageCorrelation": root_cause_summary.get("bugsMissingLineageCorrelation", []),
     }
 
 
@@ -152,6 +160,8 @@ def format_report_text(payload: dict):
         f"verifiedTaskCount: {payload.get('verifiedTaskCount')}",
         f"failingVerificationCount: {payload.get('failingVerificationCount')}",
         f"lineageEventCount: {payload.get('lineageEventCount')}",
+        f"rootCauseCount: {payload.get('rootCauseSummary', {}).get('rcaCount', 0)}",
+        f"openRootCauseCount: {payload.get('rootCauseSummary', {}).get('openCount', 0)}",
     ]
     active_request = payload.get("selectedRequest") or payload.get("activeRequest")
     if active_request:
@@ -162,6 +172,9 @@ def format_report_text(payload: dict):
             f"requestStatus: {active_request.get('status')}",
             f"requestGoal: {active_request.get('goal')}",
         ])
+        if active_request.get("rcaId"):
+            lines.append(f"rcaId: {active_request.get('rcaId')}")
+            lines.append(f"primaryCauseDimension: {active_request.get('primaryCauseDimension')}")
         active_binding = payload.get("activeBinding")
         if active_binding:
             lines.extend([
@@ -173,6 +186,12 @@ def format_report_text(payload: dict):
                 f"verificationResultPath: {active_binding.get('verificationResultPath')}",
                 f"diffSummary: {active_binding.get('diffSummary')}",
             ])
+    if payload.get("openRootCauseItems"):
+        lines.extend(["", "openRootCauseItems:"])
+        for item in payload["openRootCauseItems"][:5]:
+            lines.append(
+                f"- {item.get('rcaId')} {item.get('primaryCauseDimension')} owner={item.get('ownerRole')} status={item.get('status')}"
+            )
     elif payload.get("recentRequests"):
         lines.append("")
         lines.append("recentRequests:")
@@ -211,6 +230,7 @@ def cmd_cancel(args):
     index["generatedAt"] = now_iso()
     index["generator"] = "harness-request"
     write_json(files["request_index_path"], index)
+    update_request_snapshot(files, find_request(index.get("requests", []), args.request_id), generator="harness-request")
     write_json(files["request_summary_path"], build_request_summary(index, load_json(files["request_task_map_path"]), load_optional_json(files["harness"] / "task-pool.json")))
     lineage_event(
         root,

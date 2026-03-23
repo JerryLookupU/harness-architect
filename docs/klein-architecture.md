@@ -18,6 +18,7 @@ Lifecycle is closed over repo-local snapshots and event logs:
 - `.harness/state/request-index.json`
 - `.harness/state/request-task-map.json`
 - `.harness/lineage.jsonl`
+- `.harness/root-cause-log.jsonl`
 
 Current request runtime states:
 
@@ -38,6 +39,9 @@ Typical loop:
 submit
 -> reconcile
 -> bind request to task
+-> correlate bug / feedback when needed
+-> allocate root cause
+-> emit repair / audit / research
 -> route session
 -> dispatch
 -> running heartbeat
@@ -68,6 +72,8 @@ Repo-local artifacts:
 - `.harness/session-registry.json`
 - `.harness/lineage.jsonl`
 - `.harness/state/lineage-index.json`
+- `.harness/root-cause-log.jsonl`
+- `.harness/state/root-cause-summary.json`
 
 Why the extra dimensions matter:
 
@@ -76,6 +82,7 @@ Why the extra dimensions matter:
 - `session lineage` says which context can safely resume
 - `worktree lineage` says where code isolation lives
 - `verification lineage` says whether the outcome was checked
+- `root-cause lineage` says why the runtime believes the failure happened and who owns the repair
 
 ## Anti-Self-Intersection Rules
 
@@ -99,6 +106,7 @@ The single shared surface for human, operator, agent, and runtime is the hot-sta
 - `.harness/state/runtime.json`
 - `.harness/state/blueprint-index.json`
 - `.harness/state/feedback-summary.json`
+- `.harness/state/root-cause-summary.json`
 - `.harness/state/request-summary.json`
 - `.harness/state/lineage-index.json`
 
@@ -118,16 +126,30 @@ Current minimal re-entry paths:
 - verification failure emits a `replan` request
 - blocked route with session/path conflict emits `replan` or `stop`
 - verified merge-required work can emit an `audit` request
+- bug / feedback intake can allocate RCA and emit a repair request
 
 Those follow-ups are:
 
 - appended to `.harness/requests/queue.jsonl`
 - indexed in `.harness/state/request-index.json`
 - mirrored into `{kind}-requests.json` snapshots such as `audit-requests.json`, `replan-requests.json`, and `stop-requests.json`
+- mirrored into request snapshots such as `bug-requests.json`, `feedback-requests.json`, and `rca-requests.json`
 - visible in `.harness/state/request-summary.json`
 - connected through `.harness/lineage.jsonl`
 
 That makes the output of one runtime pass a valid input to the next pass without leaving the repo.
+
+## Symptom vs RCA
+
+Klein-Harness keeps these two ledgers distinct:
+
+- `feedback-log.jsonl`
+  Symptom evidence, runtime failures, operator observations, and verification events.
+- `root-cause-log.jsonl`
+  RCA allocations, owner mapping, repair mode selection, and prevention write-back.
+
+The runtime must not overwrite symptom evidence with RCA conclusions.
+Hot state can summarize both, but the source ledgers remain separate.
 
 ## Compatibility
 
