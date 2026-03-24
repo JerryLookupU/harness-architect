@@ -42,6 +42,7 @@ from runtime_common import (
     process_merge_queue,
     reconcile_requests,
     request_bindings_for_task,
+    stable_short_hash,
     task_requires_dedicated_worktree,
     update_binding_state,
     update_session_binding,
@@ -472,7 +473,7 @@ def prompt_lines(task: dict, route_decision: dict, project_root: str, execution_
         "禁止读取当前正在运行 task 的 .harness/state/runner-logs/<taskId>.log；它包含你自己的 prompt 和执行回显，会造成自回环。",
         "检索顺序默认是：current/runtime/progress/todo-summary/completion-gate/guard-state/request-summary/lineage-index -> task/worker/log summaries -> compact log md -> 前序 task raw runner log。",
         f"找到任务 {task.get('taskId')}，按其 ownedPaths 和 verificationRuleIds 执行。",
-        "执行完成后回写 task-pool.json、state/progress.json、lineage.jsonl、session-registry.json。",
+        "执行完成后优先把结果写入 artifactDir 下的 worker-result.json、verify.json、handoff.md，由 runtime 负责 ingest 与全局状态收敛。",
         "progress.md 是由 JSON 派生的人类视图，不要把 Markdown 当机器状态源。",
         "最后额外输出一个很小的 fenced JSON block，格式如下：",
         "```KLEIN_HANDOFF_JSON",
@@ -513,6 +514,130 @@ def prompt_lines(task: dict, route_decision: dict, project_root: str, execution_
     return lines
 
 
+def task_artifact_dir(state_dir: Path, task_id: str) -> Path:
+    return state_dir / "task-artifacts" / task_id
+
+
+def verification_commands_for_task(root: Path, task: dict) -> list[dict]:
+    manifest = load_optional_json(root / ".harness" / "verification-rules" / "manifest.json", {"rules": []}) or {"rules": []}
+    rules_by_id = {
+        rule.get("id"): rule
+        for rule in manifest.get("rules", [])
+        if rule.get("id")
+    }
+    commands = []
+    for rule_id in task.get("verificationRuleIds") or []:
+        rule = rules_by_id.get(rule_id)
+        if not rule:
+            continue
+        commands.append(
+            {
+                "ruleId": rule_id,
+                "title": rule.get("title"),
+                "exec": rule.get("exec"),
+                "timeout": rule.get("timeout"),
+                "readOnlySafe": rule.get("readOnlySafe"),
+            }
+        )
+    return commands
+
+
+def task_write_globs(task: dict) -> tuple[list[str], list[str]]:
+    allowed = list(dict.fromkeys(task.get("ownedPaths") or []))
+    blocked = list(dict.fromkeys(task.get("forbiddenPaths") or []))
+    if task.get("kind") == "audit":
+        allowed = []
+    return allowed, blocked
+
+
+def build_dispatch_manifest(
+    root: Path,
+    task: dict,
+    route_decision: dict,
+    *,
+    dispatch_backend: str,
+    tmux_session: str,
+    session_id: str | None,
+    execution_cwd: Path,
+    prompt_path: Path,
+    runner_script: Path,
+    log_path: Path,
+    state_dir: Path,
+) -> dict:
+    project_meta = load_optional_json(root / ".harness" / "project-meta.json", {}) or {}
+    artifact_dir = task_artifact_dir(state_dir, task.get("taskId"))
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    allowed_write_globs, blocked_write_globs = task_write_globs(task)
+    verify_commands = verification_commands_for_task(root, task)
+    dispatch_id = f"dispatch:{task.get('taskId')}:{task.get('planEpoch')}:{stable_short_hash(task.get('taskId') or '', route_decision.get('routingMode') or '', route_decision.get('resumeStrategy') or 'fresh')[:10]}"
+    lease_id = f"lease:{task.get('taskId')}:{stable_short_hash(dispatch_id, tmux_session or '', session_id or 'fresh')[:10]}"
+    intent_fingerprint = stable_short_hash(
+        task.get("taskId") or "",
+        str(task.get("planEpoch") or ""),
+        task.get("title") or "",
+        task.get("summary") or "",
+        json.dumps(task.get("ownedPaths") or [], ensure_ascii=False),
+        json.dumps(task.get("verificationRuleIds") or [], ensure_ascii=False),
+    )
+    manifest = {
+        "schemaVersion": "kh.dispatch-manifest.v1",
+        "generator": "harness-runner",
+        "generatedAt": now_iso(),
+        "dispatchId": dispatch_id,
+        "leaseId": lease_id,
+        "taskId": task.get("taskId"),
+        "threadKey": task.get("threadKey"),
+        "planEpoch": task.get("planEpoch"),
+        "intentFingerprint": intent_fingerprint,
+        "taskKind": task.get("kind"),
+        "workerMode": task.get("workerMode"),
+        "roleHint": task.get("roleHint"),
+        "repoRole": project_meta.get("repoRole", "target_repo"),
+        "directTargetEditAllowed": project_meta.get("directTargetEditAllowed", True),
+        "projectRoot": str(root),
+        "executionCwd": str(execution_cwd),
+        "worktreePath": task.get("worktreePath"),
+        "branchName": task.get("branchName"),
+        "diffBase": task.get("diffBase") or task.get("dispatch", {}).get("diffBase"),
+        "dispatchBackend": dispatch_backend,
+        "dispatchSession": tmux_session,
+        "resumeStrategy": route_decision.get("resumeStrategy", "fresh"),
+        "sessionId": session_id,
+        "routeDecision": {
+            "routingMode": route_decision.get("routingMode"),
+            "gateStatus": route_decision.get("gateStatus"),
+            "gateReason": route_decision.get("gateReason"),
+            "promptStages": route_decision.get("promptStages", []),
+            "contextRot": route_decision.get("contextRot"),
+        },
+        "allowedWriteGlobs": allowed_write_globs,
+        "blockedWriteGlobs": blocked_write_globs,
+        "artifactDir": str(artifact_dir),
+        "artifacts": {
+            "workerResult": str(artifact_dir / "worker-result.json"),
+            "verify": str(artifact_dir / "verify.json"),
+            "handoff": str(artifact_dir / "handoff.md"),
+        },
+        "verification": {
+            "ruleIds": task.get("verificationRuleIds") or [],
+            "commands": verify_commands,
+        },
+        "runtimeRefs": {
+            "promptPath": str(prompt_path),
+            "runnerScriptPath": str(runner_script),
+            "logPath": str(log_path),
+            "compactLogPath": f".harness/log-{task.get('taskId')}.md",
+        },
+    }
+    manifest_path = state_dir / f"dispatch-manifest-{task.get('taskId')}.json"
+    write_json(manifest_path, manifest)
+    return {
+        "manifest": manifest,
+        "manifestPath": str(manifest_path),
+        "artifactDir": str(artifact_dir),
+    }
+
+
 def dispatch_task(root: Path, task: dict, route_decision: dict, project_name: str, state_dir: Path, log_dir: Path, dispatch_mode: str) -> dict:
     task_id = task["taskId"]
     prepare_py = state_dir.parent / "scripts" / "prepare-worktree.py"
@@ -527,8 +652,6 @@ def dispatch_task(root: Path, task: dict, route_decision: dict, project_name: st
     prompt_path = state_dir / f"runner-prompt-{task_id}.md"
     runner_script = state_dir / f"runner-exec-{task_id}.sh"
     execution_cwd = execution_cwd_for_task(root, task)
-    prompt_path.write_text("\n".join(prompt_lines(task, route_decision, str(root), str(execution_cwd))) + "\n")
-
     codex_cmd = build_codex_command(task, session_id, str(execution_cwd))
     runner_py = Path(__file__).resolve()
     refresh_state_py = state_dir.parent / "scripts" / "refresh-state.py"
@@ -552,6 +675,47 @@ def dispatch_task(root: Path, task: dict, route_decision: dict, project_name: st
             )
     runner_preamble.append(
         f'echo "[runner] integrationBranch={task.get("integrationBranch") or task.get("dispatch", {}).get("integrationBranch") or "-"}"'
+    )
+    manifest_bundle = build_dispatch_manifest(
+        root,
+        task,
+        route_decision,
+        dispatch_backend=dispatch_backend,
+        tmux_session=tmux_name,
+        session_id=session_id,
+        execution_cwd=execution_cwd,
+        prompt_path=prompt_path,
+        runner_script=runner_script,
+        log_path=log_path,
+        state_dir=state_dir,
+    )
+    manifest_path = manifest_bundle["manifestPath"]
+    artifact_dir = manifest_bundle["artifactDir"]
+    prompt_path.write_text(
+        "\n".join(
+            [
+                "使用 klein-harness skill。",
+                f"先读取 dispatch manifest：{manifest_path}",
+                "读取顺序：",
+                "1. 先读 dispatch manifest。",
+                "2. 如果 task-local artifacts 已存在，再读 worker-result.json / verify.json / handoff.md / referenced compact handoff logs。",
+                "3. 只在 manifest 明确引用后再扩展读取范围。",
+                f"artifactDir: {artifact_dir}",
+                "",
+                *prompt_lines(task, route_decision, str(root), str(execution_cwd)),
+                "",
+                "Worker contract：",
+                "- 只拥有当前 dispatch lease、当前 bound worktree、以及 artifactDir 下的 task-local artifacts。",
+                "- 不要创建或修改 threadKey/requestId/taskId/planEpoch/lease/global .harness state ledger。",
+                "- 不要编辑 executionCwd 之外的路径。",
+                "- 只允许写 allowedWriteGlobs；禁止写 blockedWriteGlobs。",
+                "- 不要 merge/rebase/push/archive/delete branch/delete worktree。",
+                "- 不要宣称全局完成，只能输出本次 worker run 的 terminal outcome。",
+                "- terminal outcome 只能是 completed / noop_verified / recoverable / blocked。",
+                "- 离开前必须产出 artifactDir/worker-result.json、artifactDir/verify.json、artifactDir/handoff.md。",
+            ]
+        )
+        + "\n"
     )
 
     runner_script.write_text(
@@ -615,6 +779,8 @@ def dispatch_task(root: Path, task: dict, route_decision: dict, project_name: st
         "executionCwd": str(execution_cwd),
         "logPath": str(log_path),
         "promptPath": str(prompt_path),
+        "manifestPath": manifest_path,
+        "artifactDir": artifact_dir,
         "runnerScriptPath": str(runner_script),
         "dispatchedAt": now_iso(),
         "gateReason": route_decision.get("gateReason"),
