@@ -165,6 +165,8 @@ func run(request Request, resume bool) (Result, error) {
 		TaskID:                    task.TaskID,
 		RoleHint:                  task.RoleHint,
 		Kind:                      task.Kind,
+		Title:                     task.Title,
+		Summary:                   task.Summary + "\n" + task.Description,
 		WorkerMode:                task.WorkerMode,
 		PlanEpoch:                 task.PlanEpoch,
 		LatestPlanEpoch:           latestPlanEpoch,

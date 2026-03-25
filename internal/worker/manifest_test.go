@@ -67,13 +67,20 @@ func TestPrepareWritesDispatchTicketWorkerSpecAndPrompt(t *testing.T) {
 	}
 
 	bundle, err := Prepare(root, dispatch.Ticket{
-		DispatchID:      "dispatch_T-1_3_1",
-		IdempotencyKey:  "dispatch:T-1:epoch_3:attempt_1",
-		TaskID:          "T-1",
-		ThreadKey:       "thread-1",
-		PlanEpoch:       3,
-		Attempt:         1,
-		PromptRef:       "prompts/worker-burst.md",
+		DispatchID:     "dispatch_T-1_3_1",
+		IdempotencyKey: "dispatch:T-1:epoch_3:attempt_1",
+		TaskID:         "T-1",
+		ThreadKey:      "thread-1",
+		PlanEpoch:      3,
+		Attempt:        1,
+		PromptRef:      "prompts/worker-burst.md",
+		ReasonCodes: []string{
+			"dispatch_ready",
+			"policy_bug_rca_first",
+			"policy_resume_state_first",
+			"policy_verify_evidence_required",
+			"policy_review_if_multi_file_or_high_risk",
+		},
 		ResumeSessionID: "sess-1",
 	}, "lease-1")
 	if err != nil {
@@ -81,15 +88,17 @@ func TestPrepareWritesDispatchTicketWorkerSpecAndPrompt(t *testing.T) {
 	}
 
 	var ticket struct {
-		SchemaVersion           string `json:"schemaVersion"`
-		DispatchID              string `json:"dispatchId"`
-		IdempotencyKey          string `json:"idempotencyKey"`
-		LeaseID                 string `json:"leaseId"`
-		TaskID                  string `json:"taskId"`
-		RepoRole                string `json:"repoRole"`
-		DirectTargetEditAllowed bool   `json:"directTargetEditAllowed"`
-		ArtifactDir             string `json:"artifactDir"`
-		WorkerSpecPath          string `json:"workerSpecPath"`
+		SchemaVersion           string   `json:"schemaVersion"`
+		DispatchID              string   `json:"dispatchId"`
+		IdempotencyKey          string   `json:"idempotencyKey"`
+		LeaseID                 string   `json:"leaseId"`
+		TaskID                  string   `json:"taskId"`
+		RepoRole                string   `json:"repoRole"`
+		DirectTargetEditAllowed bool     `json:"directTargetEditAllowed"`
+		ArtifactDir             string   `json:"artifactDir"`
+		WorkerSpecPath          string   `json:"workerSpecPath"`
+		ReasonCodes             []string `json:"reasonCodes"`
+		PolicyTags              []string `json:"policyTags"`
 		PacketSynthesis         struct {
 			PlannerCount int `json:"plannerCount"`
 			Judge        struct {
@@ -127,6 +136,9 @@ func TestPrepareWritesDispatchTicketWorkerSpecAndPrompt(t *testing.T) {
 	}
 	if len(ticket.Verification.Commands) != 1 {
 		t.Fatalf("expected one verification command, got %d", len(ticket.Verification.Commands))
+	}
+	if len(ticket.ReasonCodes) == 0 || len(ticket.PolicyTags) == 0 {
+		t.Fatalf("expected route reason codes and policy tags in ticket: %+v", ticket)
 	}
 	if ticket.PacketSynthesis.PlannerCount != 3 || ticket.PacketSynthesis.Judge.ID != "packet-judge" {
 		t.Fatalf("packet synthesis contract missing: %+v", ticket.PacketSynthesis)
@@ -177,6 +189,18 @@ func TestPrepareWritesDispatchTicketWorkerSpecAndPrompt(t *testing.T) {
 	}
 	if !strings.Contains(promptText, "task-local: 3 candidate worker-spec refinements, 1 judge") {
 		t.Fatalf("prompt missing task-local b3e guidance")
+	}
+	if !strings.Contains(promptText, "Policy guardrails from route reasonCodes:") {
+		t.Fatalf("prompt missing policy guardrail section")
+	}
+	if !strings.Contains(promptText, "Bug / failure flow: reproduce or capture concrete failure evidence before editing.") {
+		t.Fatalf("prompt missing bug guardrail guidance")
+	}
+	if !strings.Contains(promptText, ".harness/state/current.json") {
+		t.Fatalf("prompt missing resume state guidance")
+	}
+	if !strings.Contains(promptText, filepath.Join("prompts", "spec", "tasks.md")) {
+		t.Fatalf("prompt missing tasks guide path")
 	}
 	if !strings.Contains(promptText, filepath.Join("prompts", "spec", "orchestrator.md")) {
 		t.Fatalf("prompt missing orchestrator path")

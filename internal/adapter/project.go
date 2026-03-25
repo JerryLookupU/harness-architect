@@ -18,6 +18,8 @@ type Paths struct {
 	LeaseSummaryPath      string
 	DispatchSummaryPath   string
 	CheckpointSummaryPath string
+	CompletionGatePath    string
+	GuardStatePath        string
 	TaskPoolPath          string
 	SessionRegistryPath   string
 	RuntimePath           string
@@ -58,6 +60,8 @@ type Task struct {
 	OwnedPaths                []string        `json:"ownedPaths"`
 	ForbiddenPaths            []string        `json:"forbiddenPaths"`
 	VerificationRuleIDs       []string        `json:"verificationRuleIds"`
+	ReviewRequired            bool            `json:"reviewRequired,omitempty"`
+	ReviewEvidencePath        string          `json:"reviewEvidencePath,omitempty"`
 	ResumeStrategy            string          `json:"resumeStrategy"`
 	PreferredResumeSessionID  string          `json:"preferredResumeSessionId"`
 	CandidateResumeSessionIDs []string        `json:"candidateResumeSessionIds"`
@@ -157,6 +161,8 @@ func Resolve(root string) (Paths, error) {
 		LeaseSummaryPath:      filepath.Join(stateDir, "lease-summary.json"),
 		DispatchSummaryPath:   filepath.Join(stateDir, "dispatch-summary.json"),
 		CheckpointSummaryPath: filepath.Join(stateDir, "checkpoint-summary.json"),
+		CompletionGatePath:    filepath.Join(stateDir, "completion-gate.json"),
+		GuardStatePath:        filepath.Join(stateDir, "guard-state.json"),
 		TaskPoolPath:          filepath.Join(harnessDir, "task-pool.json"),
 		SessionRegistryPath:   filepath.Join(harnessDir, "session-registry.json"),
 		RuntimePath:           filepath.Join(stateDir, "runtime.json"),

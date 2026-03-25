@@ -18,11 +18,14 @@ Klein-Harness turns a repository into a re-entrant control surface:
 - code workers default to isolated task worktrees with local merge integration
 - reports, failures, audits, and replans can re-enter as the next request
 
-This repo ships three Codex skills:
+This repo ships six Codex skills:
 
 - `klein-harness` for runtime, routing, dispatch, verification, and operator control
 - `blueprint-architect` for decomposition, research, draft blueprinting, conflict review, and final blueprint handoff
+- `systematic-debugging` for RCA-first debugging, reproduction discipline, and minimal-fix confirmation
 - `harness-log-search-cskill` for compact handoff log retrieval and targeted raw evidence windows
+- `markdown-fetch` for Bash-first URL -> markdown retrieval and repo-local research memo seeding
+- `generate-contributor-guide` for codebase convention analysis that can feed `.harness/research`, `.harness/standards.md`, and project `AGENTS.md`
 
 Phase-1 body-vs-target loop:
 
@@ -81,9 +84,16 @@ Install the skills and canonical wrappers:
 
 This installs:
 
-- skills: `klein-harness`, `blueprint-architect`, `harness-log-search-cskill`
+- skills: `klein-harness`, `blueprint-architect`, `systematic-debugging`, `harness-log-search-cskill`, `markdown-fetch`, `generate-contributor-guide`
 - primary commands: `harness-submit`, `harness-tasks`, `harness-task`, `harness-control`
+- a managed global instructions block in `$CODEX_HOME/AGENTS.md`
+- a managed Codex profiles block in `$CODEX_HOME/config.toml`
 - compatibility shims also remain installed, but they are no longer the canonical UX
+
+Additional utility skills:
+
+- `markdown-fetch` turns public URLs into cleaner markdown through `curl` + `markdown.new`, with repo-local memo guidance for `.harness/research/<slug>.md`
+- `generate-contributor-guide` analyzes repo conventions and writes either a full guide to `.harness/research/contributor-guide.md` or `docs/contributor-guide.md`, with optional distilled rules for `.harness/standards.md` or project `AGENTS.md`
 
 Canonical 4-command surface:
 
@@ -126,6 +136,103 @@ harness-task /path/to/project T-001 logs --detail
 harness-control /path/to/project daemon restart
 harness-control /path/to/project task T-001 restart-from-stage queued --reason "clean retry"
 harness-control /path/to/project project archive --reason "loop retired"
+```
+
+## Global Preferences
+
+Klein installs portable global preferences through Codex-native surfaces instead of Claude-specific ones.
+
+Managed global instructions go into `$CODEX_HOME/AGENTS.md` as a marked block that can be re-run safely:
+
+- re-running `./install.sh` replaces only the Klein-managed block
+- any user-written content outside that block stays untouched
+- if you need a stronger machine-local override, add `$CODEX_HOME/AGENTS.override.md` yourself; Klein does not create it by default
+
+The managed block carries portable preferences from the dotfiles workflow:
+
+- prefer `jq` for JSON and `yq` for YAML
+- prefer `fd` for file discovery, `tree` for directory overview, `delta` for diff review, and `rg` for complex text search
+- do not guess URLs, filenames, command syntax, or config keys
+- when uncertain, prefer repository facts or documentation over inference
+
+## Why AGENTS, Not CLAUDE
+
+Klein already has a Codex instruction-discovery layer in `internal/instructions/discovery.go`.
+That layer looks for global `AGENTS.override.md` / `AGENTS.md`, then walks from repo root to the current directory.
+
+Using global `AGENTS.md` means:
+
+- the installer writes into the same instruction chain Codex already consumes
+- global, project, and nested instructions compose deterministically
+- we do not need to introduce a second global prompt mechanism just to imitate Claude Code
+
+`CLAUDE.md` stays a Claude-specific convention. In Klein it would only create a parallel surface that Codex does not natively discover.
+
+## Why Profiles, Not Claude Settings
+
+Klein already loads Codex policy from `$CODEX_HOME/config.toml` through `internal/codexconfig/config.go`.
+That loader understands the existing Codex fields:
+
+- `model`
+- `approval_policy`
+- `sandbox_mode`
+
+So the installer manages named profiles directly in `config.toml`:
+
+- `klein-orchestrator`
+- `klein-worker`
+- `klein-research`
+
+This keeps one config schema and one runtime meaning. We do not ship Claude `settings.json` plugin config, and we do not add a second plugin-oriented abstraction for Codex.
+
+## Dotfiles Compatibility Mapping
+
+Klein does not clone Hookify or add a parallel behavior-hook runtime.
+Instead, the same guardrail intent is mapped onto Klein's existing prompt, routing, dispatch, verification, and skill surfaces.
+
+| claude-dotfiles / Hookify intent | Klein mapping |
+| --- | --- |
+| `use-debugging-skill` | `policy_bug_rca_first` reason code + debugging-first rules in `prompts/spec/orchestrator.md` and `prompts/spec/tasks.md` + `skills/systematic-debugging/SKILL.md` |
+| `use-brainstorming` | `policy_options_before_plan` + `skills/blueprint-architect/SKILL.md` rule to present 2-3 options with trade-offs before blueprint |
+| `require-skills-on-session-continue` | `policy_resume_state_first` + AGENTS / hot-state / compact-log-first resume flow in `prompts/spec/orchestrator.md` and worker prompts |
+| `verify-before-stop` | explicit evidence requirements in `prompts/spec/tasks.md`, `prompts/spec/verify.md`, worker prompts, task-local `verify.json`, and runtime completion-gate enforcement before `task.completed` / archive |
+| `require-review-before-done` | conditional review dimension in `prompts/spec/tasks.md`, `prompts/spec/verify.md`, and `prompts/spec/judge.md`, plus runtime review-evidence gating for explicitly review-required tasks |
+
+Compatibility rules:
+
+- canonical UX stays the same; users still enter through `harness-submit`, `harness-tasks`, `harness-task`, and `harness-control`
+- policy intent travels through existing `reasonCodes`, dispatch tickets, worker specs, and prompt refs
+- runtime completion still requires evidence-backed `completion-gate.json`; a passed verify status alone does not retire work
+- no Hookify runtime, no extra stop-hook subsystem, and no second outer orchestrator is introduced
+
+## Verify Managed Install
+
+Check that the managed AGENTS block exists:
+
+```bash
+rg -n 'klein-harness managed global instructions' "${CODEX_HOME:-$HOME/.codex}/AGENTS.md"
+```
+
+Check that the managed profiles exist without deleting your own config:
+
+```bash
+rg -n 'klein-harness managed codex profiles|profiles\."klein-(orchestrator|worker|research)"' "${CODEX_HOME:-$HOME/.codex}/config.toml"
+```
+
+Run the installer smoke check:
+
+```bash
+bash ./skills/klein-harness/examples/install-managed-home-smoke.example.sh
+go test ./internal/codexconfig
+```
+
+Check that the new skills are installed and discoverable:
+
+```bash
+test -f "${CODEX_HOME:-$HOME/.codex}/skills/markdown-fetch/SKILL.md"
+test -f "${CODEX_HOME:-$HOME/.codex}/skills/systematic-debugging/SKILL.md"
+test -f "${CODEX_HOME:-$HOME/.codex}/skills/generate-contributor-guide/SKILL.md"
+test -f "${CODEX_HOME:-$HOME/.codex}/skills/generate-contributor-guide/references/analysis-checklist.md"
 ```
 
 ## Runtime Loop
@@ -234,6 +341,8 @@ The guard loop stays repo-local and deterministic:
 - the guard decides whether execution is safe
 - daily todo is derived from current facts, not manually maintained
 - completion gate is separate from blueprint source docs and separate from daily todo
+- passed-like verification results only become `task.completed` when completion-gate evidence checks are satisfied
+- explicitly review-required tasks also need review evidence before completion or archive
 - only managed dirty state is checkpoint-eligible; unknown dirty worktrees block automation
 
 Progressive execution is thread-aware:
@@ -344,6 +453,7 @@ harness-control /path/to/project project archive --reason "loop retired"
 Release smoke:
 
 ```bash
+bash ./skills/klein-harness/examples/install-managed-home-smoke.example.sh
 bash ./skills/klein-harness/examples/harness-release-smoke.example.sh
 bash ./skills/klein-harness/examples/worktree-merge-smoke.example.sh
 ```
@@ -354,7 +464,10 @@ Primary skills:
 
 - `skills/klein-harness/SKILL.md`
 - `skills/blueprint-architect/SKILL.md`
+- `skills/systematic-debugging/SKILL.md`
 - `skills/harness-log-search-cskill/SKILL.md`
+- `skills/markdown-fetch/SKILL.md`
+- `skills/generate-contributor-guide/SKILL.md`
 
 Primary docs:
 
@@ -398,22 +511,23 @@ Read in this order:
 
 1. `skills/klein-harness/SKILL.md`
 2. `skills/blueprint-architect/SKILL.md`
-3. `docs/runtime-request-spec.md`
-4. `docs/klein-architecture.md`
-5. `docs/control-plane-state.md`
-6. `docs/operator-cli.md`
-7. `docs/worktree-first-execution.md`
-8. `docs/local-merge-queue.md`
-9. `docs/merge-conflict-as-runtime-signal.md`
-10. `docs/four-command-surface.md`
-11. `docs/guard-loop.md`
-12. `docs/daily-todo-and-completion-gate.md`
-13. `docs/checkpoint-provenance.md`
-14. `docs/log-search-architecture.md`
-15. `docs/blueprint-research-gate.md`
-16. `skills/klein-harness/references/schema-contracts.md`
-17. `skills/klein-harness/references/openclaw-dispatch.md`
-18. `skills/klein-harness/references/model-routing.md`
+3. `skills/systematic-debugging/SKILL.md`
+4. `docs/runtime-request-spec.md`
+5. `docs/klein-architecture.md`
+6. `docs/control-plane-state.md`
+7. `docs/operator-cli.md`
+8. `docs/worktree-first-execution.md`
+9. `docs/local-merge-queue.md`
+10. `docs/merge-conflict-as-runtime-signal.md`
+11. `docs/four-command-surface.md`
+12. `docs/guard-loop.md`
+13. `docs/daily-todo-and-completion-gate.md`
+14. `docs/checkpoint-provenance.md`
+15. `docs/log-search-architecture.md`
+16. `docs/blueprint-research-gate.md`
+17. `skills/klein-harness/references/schema-contracts.md`
+18. `skills/klein-harness/references/openclaw-dispatch.md`
+19. `skills/klein-harness/references/model-routing.md`
 
 ## Trial and Feedback
 

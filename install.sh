@@ -6,11 +6,17 @@ SKILLS_DIR="${SCRIPT_DIR}/skills"
 CODEX_BASE="${CODEX_HOME:-$HOME/.codex}"
 DEST_DIR="${CODEX_BASE}/skills"
 BIN_DIR="${CODEX_BASE}/bin"
+GLOBAL_AGENTS_FILE=""
+CONFIG_FILE=""
 FORCE=0
 UPDATE_SHELL_RC=1
 PATH_RC_ACTION="unchanged"
 HELPERS_INSTALLED=0
 HELPER_NAMES=()
+MANAGED_GLOBAL_AGENTS_START="<!-- klein-harness managed global instructions:start -->"
+MANAGED_GLOBAL_AGENTS_END="<!-- klein-harness managed global instructions:end -->"
+MANAGED_PROFILES_START="# >>> klein-harness managed codex profiles >>>"
+MANAGED_PROFILES_END="# <<< klein-harness managed codex profiles <<<"
 
 shopt -s nullglob
 
@@ -109,6 +115,127 @@ install_helper_scripts() {
   done
 }
 
+managed_global_agents_content() {
+  cat <<EOF
+${MANAGED_GLOBAL_AGENTS_START}
+## Klein-Harness Managed Global Preferences
+
+- Prefer \`jq\` for JSON work and \`yq\` for YAML work when those tools are available.
+- Prefer \`fd\` for file discovery, \`tree\` for directory overviews, \`delta\` for diff review, and \`rg\` for non-trivial text or code search.
+- Check whether a preferred tool exists before you suggest or invoke it. If it is unavailable, say so and choose the closest verified fallback.
+- Do not guess URLs, filenames, command syntax, flags, API shapes, or config keys. Verify them from repo facts, \`--help\`, or the relevant documentation first.
+- When uncertain, prefer reading documentation or repository evidence over inference.
+
+${MANAGED_GLOBAL_AGENTS_END}
+EOF
+}
+
+managed_profiles_content() {
+  cat <<EOF
+${MANAGED_PROFILES_START}
+# Managed by klein-harness install.sh.
+# These profile names are updated in place on re-install.
+
+[profiles."klein-orchestrator"]
+model = "gpt-5.4"
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+
+[profiles."klein-worker"]
+model = "gpt-5.3-codex"
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+
+[profiles."klein-research"]
+model = "gpt-5.4"
+approval_policy = "on-request"
+sandbox_mode = "read-only"
+${MANAGED_PROFILES_END}
+EOF
+}
+
+upsert_managed_block() {
+  local path="$1"
+  local start_marker="$2"
+  local end_marker="$3"
+  local content="$4"
+  local label="$5"
+  local has_start=0
+  local has_end=0
+  local tmp_path="${path}.tmp"
+  local content_tmp=""
+
+  mkdir -p "$(dirname "$path")"
+
+  if [[ ! -f "$path" ]]; then
+    printf '%s\n' "$content" > "$path"
+    echo "Created ${label}:"
+    echo "  - ${path}"
+    return 0
+  fi
+
+  if grep -Fqs "$start_marker" "$path"; then
+    has_start=1
+  fi
+  if grep -Fqs "$end_marker" "$path"; then
+    has_end=1
+  fi
+
+  if [[ "$has_start" -eq 1 && "$has_end" -eq 1 ]]; then
+    content_tmp="$(mktemp)"
+    printf '%s\n' "$content" > "$content_tmp"
+    awk -v start="$start_marker" -v end="$end_marker" -v content_path="$content_tmp" '
+      function print_content(    line) {
+        while ((getline line < content_path) > 0) {
+          print line
+        }
+        close(content_path)
+      }
+      $0 == start { print_content(); skip=1; next }
+      $0 == end { skip=0; next }
+      !skip { print }
+    ' "$path" > "$tmp_path"
+    rm -f "$content_tmp"
+    mv "$tmp_path" "$path"
+    echo "Updated ${label}:"
+    echo "  - ${path}"
+    return 0
+  fi
+
+  if [[ "$has_start" -eq 1 || "$has_end" -eq 1 ]]; then
+    echo "Warning: partial managed block detected in ${path}; appending a fresh managed block." >&2
+  fi
+
+  if [[ -s "$path" ]]; then
+    printf '\n' >> "$path"
+  fi
+  printf '%s\n' "$content" >> "$path"
+  echo "Appended ${label}:"
+  echo "  - ${path}"
+}
+
+install_managed_global_instructions() {
+  local content
+  content="$(managed_global_agents_content)"
+  upsert_managed_block \
+    "$GLOBAL_AGENTS_FILE" \
+    "$MANAGED_GLOBAL_AGENTS_START" \
+    "$MANAGED_GLOBAL_AGENTS_END" \
+    "$content" \
+    "managed global AGENTS block"
+}
+
+install_managed_codex_profiles() {
+  local content
+  content="$(managed_profiles_content)"
+  upsert_managed_block \
+    "$CONFIG_FILE" \
+    "$MANAGED_PROFILES_START" \
+    "$MANAGED_PROFILES_END" \
+    "$content" \
+    "managed Codex profiles"
+}
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -123,6 +250,8 @@ Notes:
   - No skill name means install all skills under ./skills/.
   - Default destination is $CODEX_HOME/skills (or ~/.codex/skills if CODEX_HOME is not set).
   - Helper commands are installed into the matching bin directory (default: $CODEX_HOME/bin).
+  - Managed global preferences are written to $CODEX_HOME/AGENTS.md.
+  - Managed Codex profiles are written to $CODEX_HOME/config.toml.
 EOF
 }
 
@@ -173,6 +302,12 @@ done
 
 DEST_DIR="${DEST_DIR/#\~/$HOME}"
 BIN_DIR="${BIN_DIR/#\~/$HOME}"
+if [[ "$(basename "$DEST_DIR")" == "skills" ]]; then
+  CODEX_BASE="$(dirname "$DEST_DIR")"
+fi
+CODEX_BASE="${CODEX_BASE/#\~/$HOME}"
+GLOBAL_AGENTS_FILE="${CODEX_BASE}/AGENTS.md"
+CONFIG_FILE="${CODEX_BASE}/config.toml"
 
 if [[ ! -d "$SKILLS_DIR" ]]; then
   echo "Error: skills directory not found: $SKILLS_DIR" >&2
@@ -255,6 +390,9 @@ if [[ ${#installed[@]} -eq 0 && ${#existing[@]} -eq 0 ]]; then
   exit 1
 fi
 
+install_managed_global_instructions
+install_managed_codex_profiles
+
 if printf '%s\n%s\n' "${installed[*]:-}" "${existing[*]:-}" | tr ' ' '\n' | grep -qx 'klein-harness'; then
   install_helper_scripts
 
@@ -310,4 +448,16 @@ if [[ "$HELPERS_INSTALLED" -eq 1 ]]; then
   echo "Compatibility shims are still installed, but the canonical UX is the 4 commands above."
 fi
 
+echo "Managed verification hints:"
+echo "  - rg -n 'klein-harness managed' \"${GLOBAL_AGENTS_FILE}\""
+echo "  - rg -n 'klein-harness managed|profiles\\.\"klein-(orchestrator|worker|research)\"' \"${CONFIG_FILE}\""
+echo "Skill verification hints:"
+for skill in markdown-fetch generate-contributor-guide; do
+  if [[ -f "${DEST_DIR}/${skill}/SKILL.md" ]]; then
+    echo "  - test -f \"${DEST_DIR}/${skill}/SKILL.md\""
+  fi
+done
+if [[ -f "${DEST_DIR}/generate-contributor-guide/references/analysis-checklist.md" ]]; then
+  echo "  - test -f \"${DEST_DIR}/generate-contributor-guide/references/analysis-checklist.md\""
+fi
 echo "Restart Codex to pick up new skills."

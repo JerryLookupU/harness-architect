@@ -84,6 +84,8 @@ func Prepare(root string, ticket dispatch.Ticket, leaseID string) (DispatchBundl
 		"threadKey":         task.ThreadKey,
 		"planEpoch":         task.PlanEpoch,
 		"attempt":           ticket.Attempt,
+		"reasonCodes":       unique(ticket.ReasonCodes),
+		"policyTags":        policyTags(ticket.ReasonCodes),
 		"objective":         coalesce(task.Summary, task.Title),
 		"selectedPlan":      coalesce(task.Description, task.Summary, task.Title),
 		"constraints":       taskConstraints(task),
@@ -139,6 +141,8 @@ func Prepare(root string, ticket dispatch.Ticket, leaseID string) (DispatchBundl
 		"executionModel":          task.ExecutionModel,
 		"orchestrationSessionId":  task.OrchestrationSessionID,
 		"promptStages":            unique(task.PromptStages),
+		"reasonCodes":             unique(ticket.ReasonCodes),
+		"policyTags":              policyTags(ticket.ReasonCodes),
 		"allowedWriteGlobs":       unique(task.OwnedPaths),
 		"blockedWriteGlobs":       unique(task.ForbiddenPaths),
 		"artifactDir":             artifactDir,
@@ -225,6 +229,7 @@ func verificationCommands(path string, ruleIDs []string) ([]map[string]any, erro
 }
 
 func buildPrompt(ticketPath, workerSpecPath, artifactDir string, task adapter.Task, ticket dispatch.Ticket) string {
+	routePolicyTags := policyTags(ticket.ReasonCodes)
 	lines := []string{
 		"You are the Klein worker for exactly one bound task inside a repo-local closed-loop runtime.",
 		"",
@@ -253,11 +258,43 @@ func buildPrompt(ticketPath, workerSpecPath, artifactDir string, task adapter.Ta
 		"- The outer runtime already owns submit -> route -> dispatch. Do not recreate a second outer orchestrator inside this task.",
 		"- If bounded packet synthesis is required inside this task, keep it task-local: 3 candidate worker-spec refinements, 1 judge, no new global task set.",
 		"",
+	}
+	if len(routePolicyTags) > 0 {
+		lines = append(lines,
+			"Policy guardrails from route reasonCodes:",
+			fmt.Sprintf("- reasonCodes: %s", strings.Join(unique(ticket.ReasonCodes), ", ")),
+			fmt.Sprintf("- policyTags: %s", strings.Join(routePolicyTags, ", ")),
+		)
+		if contains(routePolicyTags, "policy_bug_rca_first") {
+			lines = append(lines,
+				"- Bug / failure flow: reproduce or capture concrete failure evidence before editing.",
+				"- Keep one active hypothesis at a time and test it with the smallest discriminating step.",
+				"- Do not apply or suggest quick fixes before the evidence supports a root cause.",
+				"- After confirmation, prefer one minimal change tied to the confirmed cause.",
+			)
+		}
+		if contains(routePolicyTags, "policy_options_before_plan") {
+			lines = append(lines,
+				"- Recommendation / compare flow: write 2 to 3 viable options with trade-offs first.",
+				"- Make one recommendation before expanding into blueprint or implementation work.",
+			)
+		}
+		if contains(routePolicyTags, "policy_resume_state_first") {
+			lines = append(lines,
+				"- Resume flow: read `AGENTS.md`, `.harness/state/current.json`, `.harness/state/runtime.json`, `.harness/state/request-summary.json`, `.harness/task-pool.json`, `.harness/session-registry.json`, and the relevant compact log before coding.",
+				"- If active task state or prior handoff is unclear, stop and record that ambiguity instead of guessing.",
+			)
+		}
+		lines = append(lines, "")
+	}
+	lines = append(lines,
 		"Verification:",
 		"- Run verify commands from the dispatch ticket in order.",
 		"- Start with the narrowest relevant validation, then broader checks when required.",
 		"- Record each command, exit code, and output path in verify.json.",
 		"- A noop completion is valid only when acceptance is already satisfied and verify.json records concrete evidence for that claim.",
+		"- Do not claim completion without command or file evidence that supports the claim.",
+		"- When the run changes multiple files or touches high-risk control-plane surfaces, perform a short review pass and record the findings in verify.json or handoff.md.",
 		"",
 		"Required artifacts before exit:",
 		fmt.Sprintf("- %s", workerSpecPath),
@@ -280,12 +317,15 @@ func buildPrompt(ticketPath, workerSpecPath, artifactDir string, task adapter.Ta
 		fmt.Sprintf("- description: %s", task.Description),
 		fmt.Sprintf("- ownedPaths: %s", strings.Join(task.OwnedPaths, ", ")),
 		fmt.Sprintf("- verificationRuleIds: %s", strings.Join(task.VerificationRuleIDs, ", ")),
+		fmt.Sprintf("- reasonCodes: %s", strings.Join(unique(ticket.ReasonCodes), ", ")),
+		fmt.Sprintf("- policyTags: %s", strings.Join(routePolicyTags, ", ")),
 		fmt.Sprintf("- promptRef: %s", ticket.PromptRef),
 		fmt.Sprintf("- promptDir: %s", filepath.Join("prompts", "spec")),
 		fmt.Sprintf("- runtimeReadme: %s", filepath.Join("prompts", "spec", "README.md")),
 		fmt.Sprintf("- orchestratorPrompt: %s", filepath.Join("prompts", "spec", "orchestrator.md")),
 		fmt.Sprintf("- packetWorkflow: %s", filepath.Join("prompts", "spec", "propose.md")),
 		fmt.Sprintf("- orchestrationPacketGuide: %s", filepath.Join("prompts", "spec", "packet.md")),
+		fmt.Sprintf("- tasksGuide: %s", filepath.Join("prompts", "spec", "tasks.md")),
 		fmt.Sprintf("- workerSpecGuide: %s", filepath.Join("prompts", "spec", "worker-spec.md")),
 		fmt.Sprintf("- dispatchTicketGuide: %s", filepath.Join("prompts", "spec", "dispatch-ticket.md")),
 		fmt.Sprintf("- workerResultGuide: %s", filepath.Join("prompts", "spec", "worker-result.md")),
@@ -301,7 +341,7 @@ func buildPrompt(ticketPath, workerSpecPath, artifactDir string, task adapter.Ta
 		"- Be brief.",
 		"- Report only the terminal worker outcome and the key artifact path(s).",
 		"- Do not claim global completion.",
-	}
+	)
 	return strings.Join(lines, "\n") + "\n"
 }
 
@@ -324,6 +364,25 @@ func unique(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func policyTags(reasonCodes []string) []string {
+	tags := make([]string, 0, len(reasonCodes))
+	for _, code := range reasonCodes {
+		if strings.HasPrefix(code, "policy_") {
+			tags = append(tags, code)
+		}
+	}
+	return unique(tags)
+}
+
+func contains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func taskConstraints(task adapter.Task) []string {

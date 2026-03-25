@@ -40,3 +40,28 @@ func TestEffectiveDefaultsToGpt54(t *testing.T) {
 		t.Fatalf("unexpected defaults: %+v", effective)
 	}
 }
+
+func TestLoadQuotedHyphenatedProfiles(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(`
+[profiles."klein-worker"]
+model = "gpt-5.3-codex"
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	config, err := Load(home)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	profile, ok := config.Profiles["klein-worker"]
+	if !ok {
+		t.Fatalf("expected quoted profile to load: %+v", config.Profiles)
+	}
+	if profile.Model != "gpt-5.3-codex" || profile.ApprovalPolicy != "never" || profile.SandboxMode != "workspace-write" {
+		t.Fatalf("unexpected quoted profile: %+v", profile)
+	}
+}

@@ -1,23 +1,29 @@
 package route
 
-import "klein-harness/internal/worktree"
+import (
+	"strings"
+
+	"klein-harness/internal/worktree"
+)
 
 type Input struct {
-	TaskID                   string
-	RoleHint                 string
-	Kind                     string
-	WorkerMode               string
-	PlanEpoch                int
-	LatestPlanEpoch          int
-	ResumeStrategy           string
-	PreferredResumeSessionID string
+	TaskID                    string
+	RoleHint                  string
+	Kind                      string
+	Title                     string
+	Summary                   string
+	WorkerMode                string
+	PlanEpoch                 int
+	LatestPlanEpoch           int
+	ResumeStrategy            string
+	PreferredResumeSessionID  string
 	CandidateResumeSessionIDs []string
-	SessionContested         bool
-	CheckpointRequired       bool
-	CheckpointFresh          bool
-	WorktreePath             string
-	OwnedPaths               []string
-	RequiredSummaryVersion   string
+	SessionContested          bool
+	CheckpointRequired        bool
+	CheckpointFresh           bool
+	WorktreePath              string
+	OwnedPaths                []string
+	RequiredSummaryVersion    string
 }
 
 type Decision struct {
@@ -31,12 +37,13 @@ type Decision struct {
 }
 
 func Evaluate(input Input) Decision {
+	policyTags := policyReasonCodes(input)
 	reasons := make([]string, 0)
 	if input.LatestPlanEpoch > 0 && input.PlanEpoch > 0 && input.PlanEpoch < input.LatestPlanEpoch {
 		return Decision{
 			Route:                  "replan",
 			DispatchReady:          false,
-			ReasonCodes:            []string{"plan_epoch_stale"},
+			ReasonCodes:            append([]string{"plan_epoch_stale"}, policyTags...),
 			RequiredSummaryVersion: input.RequiredSummaryVersion,
 			WorktreePath:           input.WorktreePath,
 			OwnedPaths:             input.OwnedPaths,
@@ -46,7 +53,7 @@ func Evaluate(input Input) Decision {
 		return Decision{
 			Route:                  "block",
 			DispatchReady:          false,
-			ReasonCodes:            []string{"checkpoint_required"},
+			ReasonCodes:            append([]string{"checkpoint_required"}, policyTags...),
 			RequiredSummaryVersion: input.RequiredSummaryVersion,
 			WorktreePath:           input.WorktreePath,
 			OwnedPaths:             input.OwnedPaths,
@@ -57,7 +64,7 @@ func Evaluate(input Input) Decision {
 			return Decision{
 				Route:                  "block",
 				DispatchReady:          false,
-				ReasonCodes:            []string{"worktree_missing"},
+				ReasonCodes:            append([]string{"worktree_missing"}, policyTags...),
 				RequiredSummaryVersion: input.RequiredSummaryVersion,
 			}
 		}
@@ -65,7 +72,7 @@ func Evaluate(input Input) Decision {
 			return Decision{
 				Route:                  "block",
 				DispatchReady:          false,
-				ReasonCodes:            []string{"owned_paths_missing"},
+				ReasonCodes:            append([]string{"owned_paths_missing"}, policyTags...),
 				RequiredSummaryVersion: input.RequiredSummaryVersion,
 				WorktreePath:           input.WorktreePath,
 			}
@@ -77,7 +84,7 @@ func Evaluate(input Input) Decision {
 			return Decision{
 				Route:                  "block",
 				DispatchReady:          false,
-				ReasonCodes:            []string{"resume_session_contested"},
+				ReasonCodes:            append([]string{"resume_session_contested"}, policyTags...),
 				RequiredSummaryVersion: input.RequiredSummaryVersion,
 				WorktreePath:           input.WorktreePath,
 				OwnedPaths:             input.OwnedPaths,
@@ -87,7 +94,7 @@ func Evaluate(input Input) Decision {
 			return Decision{
 				Route:                  "resume",
 				DispatchReady:          true,
-				ReasonCodes:            []string{"checkpoint_fresh", "owned_paths_valid"},
+				ReasonCodes:            append([]string{"checkpoint_fresh", "owned_paths_valid"}, policyTags...),
 				RequiredSummaryVersion: input.RequiredSummaryVersion,
 				ResumeSessionID:        input.PreferredResumeSessionID,
 				WorktreePath:           input.WorktreePath,
@@ -100,12 +107,68 @@ func Evaluate(input Input) Decision {
 	if len(reasons) == 0 {
 		reasons = append(reasons, "dispatch_ready")
 	}
+	reasons = append(reasons, policyTags...)
 	return Decision{
 		Route:                  "dispatch",
 		DispatchReady:          true,
-		ReasonCodes:            reasons,
+		ReasonCodes:            uniqueReasonCodes(reasons),
 		RequiredSummaryVersion: input.RequiredSummaryVersion,
 		WorktreePath:           input.WorktreePath,
 		OwnedPaths:             input.OwnedPaths,
 	}
+}
+
+func policyReasonCodes(input Input) []string {
+	tags := []string{
+		"policy_verify_evidence_required",
+		"policy_review_if_multi_file_or_high_risk",
+	}
+	signal := strings.ToLower(strings.TrimSpace(strings.Join([]string{
+		input.Kind,
+		input.Title,
+		input.Summary,
+	}, " ")))
+	if matchesSignal(signal,
+		"bug", "failure", "failing", "error", "regression", "broken", "not working",
+		"unexpected", "crash", "traceback", "exception", "debug", "investigate", "wrong",
+	) {
+		tags = append(tags, "policy_bug_rca_first")
+	}
+	if matchesSignal(signal,
+		"recommend", "comparison", "compare", "trade-off", "tradeoff", "choose",
+		"best way", "best approach", "which one", "which option", "pros and cons",
+		"how should", "help me choose", "help me decide",
+	) {
+		tags = append(tags, "policy_options_before_plan")
+	}
+	if input.ResumeStrategy == "resume" || input.PreferredResumeSessionID != "" || len(input.CandidateResumeSessionIDs) > 0 ||
+		matchesSignal(signal, "continue", "resume", "pick up", "keep going", "continue from", "continued from") {
+		tags = append(tags, "policy_resume_state_first")
+	}
+	return uniqueReasonCodes(tags)
+}
+
+func matchesSignal(signal string, needles ...string) bool {
+	for _, needle := range needles {
+		if strings.Contains(signal, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func uniqueReasonCodes(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }

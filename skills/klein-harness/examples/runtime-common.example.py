@@ -2153,6 +2153,22 @@ def completion_check(name: str, ok: bool, detail: str) -> dict:
     return {"name": name, "ok": ok, "detail": detail}
 
 
+def task_needs_completion_evidence(task: dict) -> bool:
+    status = task.get("status")
+    verification_status = task.get("verificationStatus")
+    if status in {"verified", "completed", "merge_queued", "merge_checked", "merged"}:
+        return True
+    return verification_status in {"pass", "done", "verified", "skipped"}
+
+
+def task_review_required(task: dict) -> bool:
+    return bool(task.get("reviewRequired"))
+
+
+def task_has_review_evidence(task: dict) -> bool:
+    return bool(task.get("reviewEvidencePath"))
+
+
 def build_completion_gate(
     spec: dict | None,
     features: dict | None,
@@ -2174,6 +2190,16 @@ def build_completion_gate(
         if task.get("status") not in TASK_COMPLETED_STATUSES | TASK_SUPERSEDED_STATUSES | {"merged"}
     )
     failing_task_ids = [task.get("taskId") for task in tasks if task.get("verificationStatus") == "fail"]
+    missing_verification_evidence = [
+        task.get("taskId")
+        for task in tasks
+        if task_needs_completion_evidence(task) and not task.get("verificationResultPath")
+    ]
+    missing_review_evidence = [
+        task.get("taskId")
+        for task in tasks
+        if task_review_required(task) and task_needs_completion_evidence(task) and not task_has_review_evidence(task)
+    ]
     feature_failures = [
         item.get("id")
         for item in feature_items
@@ -2192,6 +2218,16 @@ def build_completion_gate(
             "verificationHealthy",
             not feature_failures and not failing_task_ids,
             f"featureFailures={feature_failures} failingTaskIds={failing_task_ids}",
+        ),
+        "verificationEvidencePresent": completion_check(
+            "verificationEvidencePresent",
+            not missing_verification_evidence,
+            f"missingVerificationEvidenceTaskIds={missing_verification_evidence}",
+        ),
+        "reviewEvidencePresent": completion_check(
+            "reviewEvidencePresent",
+            not missing_review_evidence,
+            f"missingReviewEvidenceTaskIds={missing_review_evidence}",
         ),
         "mergeSettled": completion_check(
             "mergeSettled",

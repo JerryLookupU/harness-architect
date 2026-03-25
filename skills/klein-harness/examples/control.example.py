@@ -388,6 +388,7 @@ def cmd_task(args) -> int:
     files = ensure_runtime_scaffold(root, generator="harness-control")
     task_pool = load_json(files["harness"] / "task-pool.json")
     task = find_task(task_pool.get("tasks", []), args.task_id)
+    completion_gate = load_optional_json(files["completion_gate_path"], {})
 
     if args.action == "checkpoint":
         task["checkpointRequired"] = True
@@ -401,6 +402,17 @@ def cmd_task(args) -> int:
         return 0
 
     if args.action == "archive":
+        if not completion_gate.get("satisfied"):
+            raise ValueError(
+                "completion gate not satisfied for archive: "
+                + ", ".join(
+                    f"{item.get('name')}={item.get('detail')}"
+                    for item in completion_gate.get("remainingChecks", [])
+                )
+            )
+        gate_task_id = completion_gate.get("taskId")
+        if gate_task_id and gate_task_id != args.task_id:
+            raise ValueError(f"completion gate is satisfied for {gate_task_id}, not {args.task_id}")
         task["cleanupStatus"] = "archived"
         task["archivedAt"] = now_iso()
         task["updatedAt"] = now_iso()
@@ -495,8 +507,17 @@ def cmd_project(args) -> int:
     root = Path(args.root).resolve()
     files = ensure_runtime_scaffold(root, generator="harness-control")
     project_meta = load_json(files["project_meta_path"])
+    completion_gate = load_optional_json(files["completion_gate_path"], {})
 
     if args.action == "archive":
+        if not completion_gate.get("satisfied") and not completion_gate.get("retireEligible"):
+            raise ValueError(
+                "completion gate not satisfied for project archive: "
+                + ", ".join(
+                    f"{item.get('name')}={item.get('detail')}"
+                    for item in completion_gate.get("remainingChecks", [])
+                )
+            )
         project_meta["lifecycle"] = "archived"
         project_meta["archivedAt"] = now_iso()
         project_meta["archiveReason"] = args.reason or "archived by harness-control"

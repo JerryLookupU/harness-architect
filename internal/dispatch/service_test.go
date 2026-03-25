@@ -14,6 +14,7 @@ func TestIssueDedupesAndClaims(t *testing.T) {
 		Attempt:        1,
 		IdempotencyKey: "dispatch:T-1:2:1",
 		CausationID:    "route-1",
+		ReasonCodes:    []string{"dispatch_ready", "policy_bug_rca_first"},
 		WorkerClass:    "codex-go",
 		Cwd:            root,
 		Command:        "printf test",
@@ -25,6 +26,9 @@ func TestIssueDedupesAndClaims(t *testing.T) {
 	if duplicate {
 		t.Fatalf("expected fresh issue")
 	}
+	if len(ticket.ReasonCodes) != 2 || ticket.ReasonCodes[1] != "policy_bug_rca_first" {
+		t.Fatalf("reason codes not preserved on ticket: %+v", ticket)
+	}
 	second, duplicate, err := Issue(IssueRequest{
 		Root:           root,
 		TaskID:         "T-1",
@@ -33,6 +37,7 @@ func TestIssueDedupesAndClaims(t *testing.T) {
 		Attempt:        1,
 		IdempotencyKey: "dispatch:T-1:2:1",
 		CausationID:    "route-1",
+		ReasonCodes:    []string{"dispatch_ready", "policy_bug_rca_first"},
 		WorkerClass:    "codex-go",
 		Cwd:            root,
 		Command:        "printf test",

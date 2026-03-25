@@ -15,6 +15,7 @@ allowed-tools: ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch"]
 - 大改造前的设计收敛
 - 需求模糊、边界不清、需要先定位约束
 - 多方案对比和冲突分析
+- recommendation / compare / choose / best-way 类问题
 - 需要先出 draft blueprint，再 review，再定稿
 - 需要先决定是否要做 targeted / deep research，再进入 blueprint
 
@@ -31,6 +32,7 @@ allowed-tools: ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch"]
 - 在仓库内定位相关代码、接口、配置、测试、扩展点
 - 需要时查外部资料、官方文档、上游实现
 - 提炼约束、风险、依赖、兼容性要求
+- 对 recommendation / compare 请求先给 2 到 3 个方案与 trade-offs，再收敛成推荐方案
 - 在需要时先形成 research memo，再把 memo 消化进 blueprint
 - 生成草稿蓝图
 - 做蓝图检查
@@ -131,6 +133,18 @@ allowed-tools: ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch"]
 # 工作顺序
 
 按这个顺序做。不要上来就写“最终方案”。
+
+## recommendation / compare 请求的前置规则
+
+如果用户是在问“推荐哪个”“怎么选”“best way”“trade-off”：
+
+- 先做 repo-local 定位，确认真实约束
+- 先给 2 到 3 个可行方案
+- 每个方案都要写明 trade-offs
+- 明确给出推荐方案和理由
+- 只有在推荐方案已经成立后，才进入 blueprint / plan
+
+不要直接跳成单一路线计划，更不要直接进入实现。
 
 ## 1. 先把目标改写成设计问题
 

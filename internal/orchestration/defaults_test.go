@@ -34,6 +34,7 @@ func TestDefaultTopLevelPromptLoadsPromptDirectory(t *testing.T) {
 	for _, want := range []string{
 		"Spec orchestrator base prompt.",
 		"prompts/spec/packet.md",
+		"prompts/spec/tasks.md",
 		"prompts/spec/worker-spec.md",
 		"prompts/spec/judge.md",
 		"executionTasks",

@@ -26,6 +26,8 @@ submit
 - execution is blocked when the control plane is unsure
 - summary state is the default operator surface
 - semantic success requires gate-aligned evidence, not only exit code
+- `verification.completed` is not terminal by itself; runtime only emits `task.completed` after completion-gate checks pass
+- review-required work may verify successfully and still remain open until review evidence exists
 - orchestration packet meaning is runtime-owned; workers only operate on task-local worker-specs and dispatch tickets
 
 ## Safety Boundary
@@ -77,3 +79,23 @@ See:
 - `.harness/state/todo-summary.json`
 - `.harness/state/completion-gate.json`
 - `.harness/state/runtime.json`
+
+## Runtime Completion Gate
+
+The hard gate stays inside the existing runtime surfaces.
+
+- verification writes `verification.completed` first, then refreshes `completion-gate.json` and `guard-state.json`
+- passed-like verification statuses do not imply completion on their own
+- runtime requires a coherent evidence bundle before emitting `task.completed`
+- the minimum acceptable bundle is:
+  - a non-empty completion summary
+  - a valid verification evidence path with meaningful content
+  - required task artifacts that match the dispatch outcome when available
+- when a task is explicitly marked `reviewRequired`, runtime also requires review evidence before completion
+- archive / retire actions must respect the current completion gate instead of bypassing it
+
+Blocked and failed flows keep their existing branches:
+
+- `blocked` still emits `task.blocked`
+- failed verification can still allocate RCA or emit replan follow-up
+- the gate only prevents false completion / archive; it does not collapse failure handling into one path

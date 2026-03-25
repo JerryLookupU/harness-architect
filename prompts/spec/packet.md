@@ -6,6 +6,8 @@ Purpose:
 Required fields:
 - objective
 - constraints
+- flowSelection
+- policyTagsApplied
 - selectedPlan
 - rejectedAlternatives
 - executionTasks

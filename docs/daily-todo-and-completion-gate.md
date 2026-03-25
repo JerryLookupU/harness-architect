@@ -33,8 +33,17 @@ It checks:
 - actionable todo drained
 - merge state coherent
 - verification state coherent
+- completion evidence present for passed-like verification results
+- review evidence present when a task is explicitly marked `reviewRequired`
 
 Completion is not decided by optimistic checkboxes or exit code alone.
+`verification.completed` may exist while completion-gate is still open.
+
+Runtime now treats this as a hard gate:
+
+- `passed` / `succeeded` / `verified` do not auto-complete without evidence
+- `reviewRequired` tasks do not complete without review evidence
+- the same gate is what archive / retire paths must respect
 
 ## Archive / Retire
 
@@ -43,3 +52,5 @@ When the completion gate is truly satisfied:
 - the loop becomes retire-eligible
 - the operator can archive it through `harness-control ... project archive`
 - runtime state then reports the loop as archived / retired instead of indefinitely spinning
+
+If the gate is still open, archive must refuse instead of silently retiring the loop.

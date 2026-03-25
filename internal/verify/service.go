@@ -11,6 +11,9 @@ import (
 )
 
 var ErrNoopWithoutEvidence = errors.New("noop completion requires verified acceptance evidence")
+var ErrCompletionGateOpen = errors.New("completion gate is not satisfied")
+var ErrVerifiedWithoutEvidence = errors.New("verified completion requires evidence")
+var ErrReviewEvidenceRequired = errors.New("review-required task is missing review evidence")
 
 type Request struct {
 	Root                   string
@@ -37,11 +40,17 @@ func Ingest(request Request) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	var ticket dispatch.Ticket
+	ticketFound := false
 	if request.DispatchID != "" {
-		if _, err := dispatch.EnsureCurrent(request.Root, request.DispatchID, request.TaskID, request.PlanEpoch); err != nil {
+		ticket, err = dispatch.EnsureCurrent(request.Root, request.DispatchID, request.TaskID, request.PlanEpoch)
+		if err != nil {
 			return Result{}, err
 		}
+		ticketFound = true
 	}
+	task, taskErr := adapter.LoadTask(request.Root, request.TaskID)
+	taskFound := taskErr == nil
 	payload, err := a2a.NewPayload(map[string]any{
 		"status":                 request.Status,
 		"summary":                request.Summary,
@@ -69,13 +78,19 @@ func Ingest(request Request) (Result, error) {
 		return Result{}, err
 	}
 	result := Result{VerificationEvent: verificationResult.Event.Kind}
+	gate, err := updateCompletionState(paths, request, task, taskFound, ticket, ticketFound)
+	if err != nil {
+		return Result{}, err
+	}
 	switch request.Status {
 	case "passed", "succeeded", "verified", "already_satisfied", "noop_verified":
-		if (request.Status == "already_satisfied" || request.Status == "noop_verified") && request.VerificationResultPath == "" {
-			return Result{}, ErrNoopWithoutEvidence
+		if request.DispatchID != "" {
+			if _, err := dispatch.UpdateStatus(request.Root, request.DispatchID, "verified", "kh-orchestrator"); err != nil {
+				return Result{}, err
+			}
 		}
-		if _, err := dispatch.UpdateStatus(request.Root, request.DispatchID, "verified", "kh-orchestrator"); err != nil {
-			return Result{}, err
+		if !gate.Satisfied {
+			return Result{}, completionGateError(request, gate)
 		}
 		completionMode := "verified"
 		if request.Status == "already_satisfied" || request.Status == "noop_verified" {
