@@ -1,16 +1,9 @@
-Artifact: proposal
+Legacy mapping shim: proposal
 
-Purpose:
-- explain why the change exists and what capability surface it touches
+The old `proposal` artifact is now internalized into orchestration packet fields:
+- `objective`
+- `constraints`
+- `decisionRationale`
 
-Required sections:
-- Why
-- What Changes
-- Capabilities
-- Impact
-
-Writing rules:
-- stay on why and scope, not implementation mechanics
-- list new or modified capabilities explicitly
-- call out breaking changes clearly
-- keep the proposal short enough to review quickly
+Use this file only when translating an older mental model.
+Do not treat `proposal` as a separate outer runtime stage.

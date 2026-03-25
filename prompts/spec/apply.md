@@ -1,16 +1,15 @@
-Workflow: apply tasks from a prepared spec package.
+Workflow: execute one bound task from a prepared dispatch ticket and worker-spec.
 
 Steps:
-1. poll for the next active task from the prepared orchestration package or task set
-2. read proposal, specs, design, tasks, and current verification context before editing
-3. show current progress and remaining work
-4. implement one pending task at a time in OpenSpec task order
-5. mark completion immediately after each finished task
-6. run the relevant verification step before advancing
-7. pause only for blockers, design drift, or missing clarification
+1. read the dispatch ticket, worker-spec, and current verification context before editing
+2. show current progress and remaining task-local work
+3. implement one bound task-local slice at a time
+4. keep task-local outputs in `worker-result.json`, `verify.json`, and `handoff.md`
+5. run the relevant verification step before advancing
+6. pause only for blockers, packet drift, or missing clarification
 
 Guardrails:
-- keep edits minimal and scoped to the active task
-- if implementation contradicts the current artifacts, surface the drift instead of silently freelancing
-- treat execution as a polling loop over executable tasks, not as a second planning pass
+- keep edits minimal and scoped to the bound task
+- if implementation contradicts the current packet or worker-spec, surface the drift instead of silently freelancing
+- treat execution as bounded task-local work, not as a second outer planning pass
 - stop with a clear status summary when blocked or complete

@@ -9,6 +9,7 @@ func TestIssueDedupesAndClaims(t *testing.T) {
 	ticket, duplicate, err := Issue(IssueRequest{
 		Root:           root,
 		TaskID:         "T-1",
+		ThreadKey:      "thread-1",
 		PlanEpoch:      2,
 		Attempt:        1,
 		IdempotencyKey: "dispatch:T-1:2:1",
@@ -27,6 +28,7 @@ func TestIssueDedupesAndClaims(t *testing.T) {
 	second, duplicate, err := Issue(IssueRequest{
 		Root:           root,
 		TaskID:         "T-1",
+		ThreadKey:      "thread-1",
 		PlanEpoch:      2,
 		Attempt:        1,
 		IdempotencyKey: "dispatch:T-1:2:1",
@@ -55,5 +57,43 @@ func TestIssueDedupesAndClaims(t *testing.T) {
 	}
 	if claimed.Status != "claimed" {
 		t.Fatalf("expected claimed status, got %s", claimed.Status)
+	}
+}
+
+func TestEnsureCurrentRejectsSupersededDispatch(t *testing.T) {
+	root := t.TempDir()
+	first, _, err := Issue(IssueRequest{
+		Root:           root,
+		TaskID:         "T-1",
+		ThreadKey:      "thread-1",
+		PlanEpoch:      2,
+		Attempt:        1,
+		IdempotencyKey: "dispatch:T-1:2:1",
+		CausationID:    "route-1",
+		WorkerClass:    "codex-go",
+		Cwd:            root,
+		Command:        "printf one",
+		PromptRef:      "prompts/worker-burst.md",
+	})
+	if err != nil {
+		t.Fatalf("issue first dispatch: %v", err)
+	}
+	if _, _, err := Issue(IssueRequest{
+		Root:           root,
+		TaskID:         "T-1",
+		ThreadKey:      "thread-1",
+		PlanEpoch:      2,
+		Attempt:        2,
+		IdempotencyKey: "dispatch:T-1:2:2",
+		CausationID:    "route-2",
+		WorkerClass:    "codex-go",
+		Cwd:            root,
+		Command:        "printf two",
+		PromptRef:      "prompts/worker-burst.md",
+	}); err != nil {
+		t.Fatalf("issue second dispatch: %v", err)
+	}
+	if _, err := EnsureCurrent(root, first.DispatchID, first.TaskID, first.PlanEpoch); err == nil {
+		t.Fatalf("expected superseded dispatch to be rejected")
 	}
 }

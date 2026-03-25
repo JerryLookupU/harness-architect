@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"errors"
 	"fmt"
 
 	"klein-harness/internal/a2a"
@@ -9,19 +10,21 @@ import (
 	"klein-harness/internal/rca"
 )
 
+var ErrNoopWithoutEvidence = errors.New("noop completion requires verified acceptance evidence")
+
 type Request struct {
-	Root                 string
-	RequestID            string
-	TaskID               string
-	DispatchID           string
-	PlanEpoch            int
-	Attempt              int
-	CausationID          string
-	ReasonCodes          []string
-	Status               string
-	Summary              string
+	Root                   string
+	RequestID              string
+	TaskID                 string
+	DispatchID             string
+	PlanEpoch              int
+	Attempt                int
+	CausationID            string
+	ReasonCodes            []string
+	Status                 string
+	Summary                string
 	VerificationResultPath string
-	FollowUp             string
+	FollowUp               string
 }
 
 type Result struct {
@@ -33,6 +36,11 @@ func Ingest(request Request) (Result, error) {
 	paths, err := adapter.Resolve(request.Root)
 	if err != nil {
 		return Result{}, err
+	}
+	if request.DispatchID != "" {
+		if _, err := dispatch.EnsureCurrent(request.Root, request.DispatchID, request.TaskID, request.PlanEpoch); err != nil {
+			return Result{}, err
+		}
 	}
 	payload, err := a2a.NewPayload(map[string]any{
 		"status":                 request.Status,
@@ -62,11 +70,22 @@ func Ingest(request Request) (Result, error) {
 	}
 	result := Result{VerificationEvent: verificationResult.Event.Kind}
 	switch request.Status {
-	case "passed", "succeeded", "verified":
+	case "passed", "succeeded", "verified", "already_satisfied", "noop_verified":
+		if (request.Status == "already_satisfied" || request.Status == "noop_verified") && request.VerificationResultPath == "" {
+			return Result{}, ErrNoopWithoutEvidence
+		}
 		if _, err := dispatch.UpdateStatus(request.Root, request.DispatchID, "verified", "kh-orchestrator"); err != nil {
 			return Result{}, err
 		}
-		completePayload, err := a2a.NewPayload(map[string]any{"status": "completed", "summary": request.Summary})
+		completionMode := "verified"
+		if request.Status == "already_satisfied" || request.Status == "noop_verified" {
+			completionMode = "noop_verified"
+		}
+		completePayload, err := a2a.NewPayload(map[string]any{
+			"status":         "completed",
+			"summary":        request.Summary,
+			"completionMode": completionMode,
+		})
 		if err != nil {
 			return Result{}, err
 		}

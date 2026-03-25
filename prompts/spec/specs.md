@@ -1,21 +1,9 @@
-Artifact: specs
+Legacy mapping shim: specs
 
-Purpose:
-- define what the system must do in a testable, requirement-shaped form
+The old `specs` meaning is now internalized into runtime-owned packet fields:
+- `verificationPlan`
+- `acceptanceMarkers`
+- `constraints`
 
-Structure rules:
-- one spec file per capability
-- each requirement uses `### Requirement: <name>`
-- each requirement has at least one scenario
-- each scenario uses `#### Scenario: <name>`
-- use SHALL or MUST for normative behavior
-
-Delta rules:
-- ADDED for new requirements
-- MODIFIED for changed behavior and include the full updated requirement
-- REMOVED only with reason and migration guidance
-- RENAMED only for name changes
-
-Quality bar:
-- requirements should be independently testable
-- scenarios should be concrete enough to become verification cases
+Use this file only to map older prompts into the packet model.
+Do not treat `specs` as a separate outer runtime stage.

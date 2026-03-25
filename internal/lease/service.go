@@ -1,6 +1,7 @@
 package lease
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -9,35 +10,40 @@ import (
 	"klein-harness/internal/state"
 )
 
+var ErrLeaseNotFound = errors.New("lease not found")
+var ErrLeaseNotActive = errors.New("lease is not active")
+var ErrLeaseStale = errors.New("lease is stale for current execution")
+
 type Record struct {
-	LeaseID      string   `json:"leaseId"`
-	TaskID       string   `json:"taskId"`
-	DispatchID   string   `json:"dispatchId"`
-	WorkerID     string   `json:"workerId"`
-	Status       string   `json:"status"`
-	ReasonCodes  []string `json:"reasonCodes,omitempty"`
-	CausationID  string   `json:"causationId"`
-	AcquiredAt   string   `json:"acquiredAt"`
-	ExpiresAt    string   `json:"expiresAt"`
-	RenewedAt    string   `json:"renewedAt,omitempty"`
-	ReleasedAt   string   `json:"releasedAt,omitempty"`
+	LeaseID     string   `json:"leaseId"`
+	TaskID      string   `json:"taskId"`
+	DispatchID  string   `json:"dispatchId"`
+	WorkerID    string   `json:"workerId"`
+	Status      string   `json:"status"`
+	ReasonCodes []string `json:"reasonCodes,omitempty"`
+	CausationID string   `json:"causationId"`
+	AcquiredAt  string   `json:"acquiredAt"`
+	ExpiresAt   string   `json:"expiresAt"`
+	RenewedAt   string   `json:"renewedAt,omitempty"`
+	ReleasedAt  string   `json:"releasedAt,omitempty"`
 }
 
 type Summary struct {
 	state.Metadata
-	Leases      map[string]Record `json:"leases"`
-	ByTask      map[string]string `json:"byTask"`
+	Leases     map[string]Record `json:"leases"`
+	ByTask     map[string]string `json:"byTask"`
+	ByDispatch map[string]string `json:"byDispatch"`
 }
 
 type AcquireRequest struct {
-	Root         string
-	TaskID       string
-	DispatchID   string
-	WorkerID     string
-	LeaseID      string
-	TTLSeconds   int
-	CausationID  string
-	ReasonCodes  []string
+	Root        string
+	TaskID      string
+	DispatchID  string
+	WorkerID    string
+	LeaseID     string
+	TTLSeconds  int
+	CausationID string
+	ReasonCodes []string
 }
 
 func Acquire(request AcquireRequest) (Record, error) {
@@ -78,6 +84,7 @@ func Acquire(request AcquireRequest) (Record, error) {
 	}
 	summary.Leases[record.LeaseID] = record
 	summary.ByTask[record.TaskID] = record.LeaseID
+	summary.ByDispatch[record.DispatchID] = record.LeaseID
 	if _, err := state.WriteSnapshot(paths.LeaseSummaryPath, &summary, "kh-worker-supervisor", summary.Revision); err != nil {
 		return Record{}, err
 	}
@@ -145,6 +152,7 @@ func Release(root, leaseID, causationID string, reasonCodes []string) (Record, e
 	record.ReasonCodes = reasonCodes
 	summary.Leases[leaseID] = record
 	delete(summary.ByTask, record.TaskID)
+	delete(summary.ByDispatch, record.DispatchID)
 	if _, err := state.WriteSnapshot(paths.LeaseSummaryPath, &summary, "kh-worker-supervisor", summary.Revision); err != nil {
 		return Record{}, err
 	}
@@ -175,6 +183,7 @@ func RecoverStale(root, causationID string) ([]Record, error) {
 		record.ReasonCodes = []string{"stale_lease"}
 		summary.Leases[leaseID] = record
 		delete(summary.ByTask, record.TaskID)
+		delete(summary.ByDispatch, record.DispatchID)
 		recovered = append(recovered, record)
 		payload, err := a2a.NewPayload(map[string]any{
 			"status":  "stale_lease_recovered",
@@ -207,10 +216,47 @@ func RecoverStale(root, causationID string) ([]Record, error) {
 	return recovered, nil
 }
 
+func ValidateCurrent(root, leaseID, taskID, dispatchID string) (Record, error) {
+	paths, err := adapter.Resolve(root)
+	if err != nil {
+		return Record{}, err
+	}
+	summary, err := loadSummary(paths.LeaseSummaryPath)
+	if err != nil {
+		return Record{}, err
+	}
+	record, ok := summary.Leases[leaseID]
+	if !ok {
+		return Record{}, ErrLeaseNotFound
+	}
+	if taskID != "" && record.TaskID != taskID {
+		return Record{}, fmt.Errorf("%w: task mismatch %s != %s", ErrLeaseStale, record.TaskID, taskID)
+	}
+	if dispatchID != "" && record.DispatchID != dispatchID {
+		return Record{}, fmt.Errorf("%w: dispatch mismatch %s != %s", ErrLeaseStale, record.DispatchID, dispatchID)
+	}
+	if record.Status != "active" {
+		return Record{}, fmt.Errorf("%w: %s", ErrLeaseNotActive, record.Status)
+	}
+	now := time.Now().UTC()
+	expiresAt, err := time.Parse(time.RFC3339, record.ExpiresAt)
+	if err == nil && expiresAt.Before(now) {
+		return Record{}, fmt.Errorf("%w: expired at %s", ErrLeaseStale, record.ExpiresAt)
+	}
+	if current := summary.ByTask[record.TaskID]; current != "" && current != leaseID {
+		return Record{}, fmt.Errorf("%w: task %s is now owned by %s", ErrLeaseStale, record.TaskID, current)
+	}
+	if current := summary.ByDispatch[record.DispatchID]; current != "" && current != leaseID {
+		return Record{}, fmt.Errorf("%w: dispatch %s is now owned by %s", ErrLeaseStale, record.DispatchID, current)
+	}
+	return record, nil
+}
+
 func loadSummary(path string) (Summary, error) {
 	summary := Summary{
-		Leases: map[string]Record{},
-		ByTask: map[string]string{},
+		Leases:     map[string]Record{},
+		ByTask:     map[string]string{},
+		ByDispatch: map[string]string{},
 	}
 	if _, err := state.LoadJSONIfExists(path, &summary); err != nil {
 		return Summary{}, err
@@ -220,6 +266,20 @@ func loadSummary(path string) (Summary, error) {
 	}
 	if summary.ByTask == nil {
 		summary.ByTask = map[string]string{}
+	}
+	if summary.ByDispatch == nil {
+		summary.ByDispatch = map[string]string{}
+	}
+	if len(summary.ByDispatch) == 0 {
+		for leaseID, record := range summary.Leases {
+			if record.DispatchID == "" {
+				continue
+			}
+			if record.Status != "active" {
+				continue
+			}
+			summary.ByDispatch[record.DispatchID] = leaseID
+		}
 	}
 	return summary, nil
 }

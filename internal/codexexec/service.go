@@ -244,6 +244,7 @@ func run(request Request, resume bool) (Result, error) {
 		Root:                   root,
 		RequestID:              session.ID,
 		TaskID:                 task.TaskID,
+		ThreadKey:              task.ThreadKey,
 		PlanEpoch:              task.PlanEpoch,
 		Attempt:                attempt + 1,
 		IdempotencyKey:         fmt.Sprintf("dispatch:%s:epoch_%d:attempt_%d", task.TaskID, task.PlanEpoch, attempt+1),
@@ -308,7 +309,8 @@ func run(request Request, resume bool) (Result, error) {
 		CheckpointPath: checkpointPath,
 		OutcomePath:    outcomePath,
 		Artifacts: []string{
-			bundle.ManifestPath,
+			bundle.TicketPath,
+			bundle.WorkerSpecPath,
 			bundle.PromptPath,
 			filepath.Join(bundle.ArtifactDir, "worker-result.json"),
 			filepath.Join(bundle.ArtifactDir, "verify.json"),
@@ -327,6 +329,8 @@ func run(request Request, resume bool) (Result, error) {
 		Attempt:       ticket.Attempt,
 		CausationID:   causationID,
 		ReasonCodes:   []string{"kh_codex_checkpoint"},
+		ThreadKey:     task.ThreadKey,
+		LeaseID:       leaseRecord.LeaseID,
 		CheckpointRef: checkpointPath,
 		Status:        "checkpointed",
 		Summary:       "kh-codex bounded burst checkpoint persisted",
@@ -347,6 +351,7 @@ func run(request Request, resume bool) (Result, error) {
 		WorkerID:      "kh-codex",
 		LeaseID:       leaseRecord.LeaseID,
 		ReasonCodes:   []string{"kh_codex_finished"},
+		ThreadKey:     task.ThreadKey,
 		Status:        burst.Status,
 		Summary:       burst.Summary,
 		CheckpointRef: checkpointPath,
@@ -483,7 +488,7 @@ func buildTask(root string, request Request, session sessionRecord, orchestrator
 		commandProfile.Standard = buildCommandProfile(true, request, profile)
 		commandProfile.LocalCompat = commandProfile.Standard
 	}
-	summary := "Claude-style orchestration loop over Codex exec protocol"
+	summary := "Runtime packet synthesis over Codex exec protocol"
 	if len(instructionFiles) > 0 {
 		summary = fmt.Sprintf("%s (%d instruction files loaded)", summary, len(instructionFiles))
 	}

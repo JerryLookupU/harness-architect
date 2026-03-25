@@ -1,21 +1,10 @@
-Artifact: design
+Legacy mapping shim: design
 
-Purpose:
-- explain how the change should be implemented when architecture or risk justifies a design layer
+The old `design` meaning is now internalized into packet and worker-spec fields:
+- `selectedPlan`
+- `rejectedAlternatives`
+- `decisionRationale`
+- `rollbackHints`
 
-Include design when:
-- the change crosses modules or services
-- a new dependency or data model shift appears
-- security, performance, migration, or rollback risk is non-trivial
-
-Suggested sections:
-- Context
-- Goals / Non-Goals
-- Decisions
-- Risks / Trade-offs
-- Migration Plan
-- Open Questions
-
-Writing rules:
-- document why a technical choice was made, not just what was chosen
-- keep detailed line-by-line implementation out of this artifact
+Use this file only when translating older prompt stacks.
+Do not treat `design` as a separate outer runtime stage.

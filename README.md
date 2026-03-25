@@ -12,6 +12,7 @@ Klein-Harness turns a repository into a re-entrant control surface:
 
 - requests stay append-only and machine-readable
 - runtime binds requests to tasks explicitly
+- orchestration meaning is internalized into packets, worker-specs, dispatch tickets, and worker results
 - session / worktree / verification lineage stays repo-local
 - symptom evidence stays separate from RCA allocation
 - code workers default to isolated task worktrees with local merge integration
@@ -26,6 +27,7 @@ This repo ships three Codex skills:
 Phase-1 body-vs-target loop:
 
 - see [docs/phase1-validation-loop.md](docs/phase1-validation-loop.md)
+- internalized spec runtime: [docs/internalized-spec-runtime.md](docs/internalized-spec-runtime.md)
 
 ## At A Glance
 
@@ -135,12 +137,13 @@ submit
   -> .harness/requests/queue.jsonl
   -> intake classification + request fusion
   -> thread correlation + inflight impact analysis
-  -> selective replan / inspection overlay when needed
+  -> selective packet synth / inspection overlay when needed
   -> request reconcile
   -> request-task binding
   -> worktree prepare
   -> route-session
-  -> runner dispatch / recover / resume
+  -> issue dispatch ticket / recover / resume
+  -> worker-result ingest
   -> verify-task
   -> local merge queue / merge preview / conflict follow-up
   -> root-cause allocation / repair emission
@@ -182,6 +185,9 @@ Primary hot state:
 - `.harness/state/todo-summary.json`
 - `.harness/state/completion-gate.json`
 - `.harness/state/guard-state.json`
+- `.harness/state/lease-summary.json`
+- `.harness/state/dispatch-summary.json`
+- `.harness/state/checkpoint-summary.json`
 - `.harness/state/lineage-index.json`
 - `.harness/state/log-index.json`
 - `.harness/state/research-index.json`
@@ -202,11 +208,25 @@ Primary mutable ledgers:
 - `.harness/state/worktree-registry.json`
 - `.harness/state/merge-queue.json`
 
+Primary task-local runtime artifacts:
+
+- `.harness/state/artifacts/<taskId>/<dispatchId>/worker-spec.json`
+- `.harness/state/artifacts/<taskId>/<dispatchId>/worker-result.json`
+- `.harness/state/artifacts/<taskId>/<dispatchId>/verify.json`
+- `.harness/state/artifacts/<taskId>/<dispatchId>/handoff.md`
+
 The control plane stays explicit in three layers:
 
 - cold evidence: append-only logs and raw runner output
 - runtime ledgers: mutable request/task/session truth
 - hot summaries: bounded JSON snapshots for operator and worker reads
+
+The old visible spec-tree model is now internalized:
+
+- orchestration packet carries objective, plan, verification, rollback, and acceptance meaning
+- each executable task gets a task-local worker-spec
+- each actual run gets an immutable dispatch ticket
+- worker-result stays task-local; completion stays runtime-owned
 
 The guard loop stays repo-local and deterministic:
 

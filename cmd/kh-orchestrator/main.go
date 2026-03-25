@@ -139,6 +139,7 @@ func runRoute(args []string) error {
 			Root:                   *root,
 			RequestID:              *requestID,
 			TaskID:                 task.TaskID,
+			ThreadKey:              task.ThreadKey,
 			PlanEpoch:              task.PlanEpoch,
 			Attempt:                currentAttempt,
 			IdempotencyKey:         fmt.Sprintf("dispatch:%s:epoch_%d:attempt_%d", task.TaskID, task.PlanEpoch, currentAttempt),

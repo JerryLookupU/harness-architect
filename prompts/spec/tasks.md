@@ -1,15 +1,9 @@
-Artifact: tasks
+Legacy mapping shim: tasks
 
-Purpose:
-- turn the spec package into a bounded, executable checklist
+The old `tasks` meaning is now internalized into:
+- orchestration packet `executionTasks`
+- task-local `worker-spec.json`
+- immutable dispatch tickets
 
-Formatting rules:
-- group work under numbered headings
-- every task must be a checkbox item
-- keep tasks small enough for one focused implementation step
-- order tasks by dependency
-
-Quality rules:
-- every task should have a clear done condition
-- include verification-oriented tasks where needed
-- avoid vague tasks like "handle edge cases" without naming the edge case
+Use this file only when translating older prompt stacks.
+Do not treat `tasks` as a separate outer runtime stage.

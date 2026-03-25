@@ -28,9 +28,10 @@ type verificationRule struct {
 }
 
 type DispatchBundle struct {
-	ManifestPath string
-	PromptPath   string
-	ArtifactDir  string
+	TicketPath     string
+	WorkerSpecPath string
+	PromptPath     string
+	ArtifactDir    string
 }
 
 func Prepare(root string, ticket dispatch.Ticket, leaseID string) (DispatchBundle, error) {
@@ -55,7 +56,8 @@ func Prepare(root string, ticket dispatch.Ticket, leaseID string) (DispatchBundl
 	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
 		return DispatchBundle{}, err
 	}
-	manifestPath := filepath.Join(paths.StateDir, fmt.Sprintf("dispatch-manifest-%s.json", task.TaskID))
+	ticketPath := filepath.Join(paths.StateDir, fmt.Sprintf("dispatch-ticket-%s.json", task.TaskID))
+	workerSpecPath := filepath.Join(artifactDir, "worker-spec.json")
 	promptPath := filepath.Join(paths.StateDir, fmt.Sprintf("runner-prompt-%s.md", task.TaskID))
 	repoRole := projectMeta.RepoRole
 	if repoRole == "" {
@@ -73,15 +75,53 @@ func Prepare(root string, ticket dispatch.Ticket, leaseID string) (DispatchBundl
 		strings.Join(task.OwnedPaths, "|"),
 		strings.Join(task.VerificationRuleIDs, "|"),
 	)
-	manifest := map[string]any{
-		"schemaVersion":           "kh.dispatch-manifest.v1",
+	workerSpec := map[string]any{
+		"schemaVersion":     "kh.worker-spec.v1",
+		"generator":         "kh-worker-supervisor",
+		"generatedAt":       nowUTC(),
+		"dispatchId":        ticket.DispatchID,
+		"taskId":            task.TaskID,
+		"threadKey":         task.ThreadKey,
+		"planEpoch":         task.PlanEpoch,
+		"attempt":           ticket.Attempt,
+		"objective":         coalesce(task.Summary, task.Title),
+		"selectedPlan":      coalesce(task.Description, task.Summary, task.Title),
+		"constraints":       taskConstraints(task),
+		"ownedPaths":        unique(task.OwnedPaths),
+		"blockedPaths":      unique(task.ForbiddenPaths),
+		"taskBudget":        ticket.Budget,
+		"acceptanceMarkers": unique(task.VerificationRuleIDs),
+		"verificationPlan": map[string]any{
+			"ruleIds":  unique(task.VerificationRuleIDs),
+			"commands": verifyCommands,
+		},
+		"decisionRationale": coalesce(task.Description, task.Summary),
+		"replanTriggers": []string{
+			"verification_failed",
+			"acceptance_markers_missing",
+			"owned_paths_conflict",
+			"authority_boundary_conflict",
+		},
+		"rollbackHints": []string{
+			"leave_task_local_artifacts_intact",
+			"preserve_checkpoint_for_supervisor",
+			"handoff_before_exit_when_blocked",
+		},
+	}
+	if err := writeJSON(workerSpecPath, workerSpec); err != nil {
+		return DispatchBundle{}, err
+	}
+	dispatchTicket := map[string]any{
+		"schemaVersion":           "kh.dispatch-ticket.v1",
 		"generator":               "kh-worker-supervisor",
 		"generatedAt":             nowUTC(),
 		"dispatchId":              ticket.DispatchID,
+		"idempotencyKey":          ticket.IdempotencyKey,
 		"leaseId":                 leaseID,
 		"taskId":                  task.TaskID,
 		"threadKey":               task.ThreadKey,
 		"planEpoch":               task.PlanEpoch,
+		"attempt":                 ticket.Attempt,
 		"intentFingerprint":       intentFingerprint,
 		"taskKind":                task.Kind,
 		"workerMode":              task.WorkerMode,
@@ -102,35 +142,47 @@ func Prepare(root string, ticket dispatch.Ticket, leaseID string) (DispatchBundl
 		"allowedWriteGlobs":       unique(task.OwnedPaths),
 		"blockedWriteGlobs":       unique(task.ForbiddenPaths),
 		"artifactDir":             artifactDir,
+		"workerSpecPath":          workerSpecPath,
+		"workerSpec":              workerSpec,
 		"artifacts": map[string]string{
+			"workerSpec":   workerSpecPath,
 			"workerResult": filepath.Join(artifactDir, "worker-result.json"),
 			"verify":       filepath.Join(artifactDir, "verify.json"),
 			"handoff":      filepath.Join(artifactDir, "handoff.md"),
+		},
+		"authorityBoundary": map[string]any{
+			"routeFirstDispatchSecond":  true,
+			"workerMayWriteGlobalState": false,
+			"workerMayMergeOrArchive":   false,
+			"completionOwnedByRuntime":  true,
+			"completionGatePath":        filepath.Join(paths.StateDir, "completion-gate.json"),
 		},
 		"verification": map[string]any{
 			"ruleIds":  unique(task.VerificationRuleIDs),
 			"commands": verifyCommands,
 		},
-		"specPlanning": orchestration.DefaultSpecLoop(paths.Root),
+		"packetSynthesis": orchestration.DefaultPacketSynthesisLoop(paths.Root),
 		"runtimeRefs": mergeStringMaps(
 			map[string]string{
 				"promptRef":  ticket.PromptRef,
 				"promptPath": promptPath,
+				"workerSpec": workerSpecPath,
 			},
-			orchestration.SpecPromptRefs(paths.Root),
+			orchestration.PromptRefs(paths.Root),
 		),
 	}
-	if err := writeJSON(manifestPath, manifest); err != nil {
+	if err := writeJSON(ticketPath, dispatchTicket); err != nil {
 		return DispatchBundle{}, err
 	}
-	prompt := buildPrompt(manifestPath, artifactDir, task, ticket)
+	prompt := buildPrompt(ticketPath, workerSpecPath, artifactDir, task, ticket)
 	if err := os.WriteFile(promptPath, []byte(prompt), 0o644); err != nil {
 		return DispatchBundle{}, err
 	}
 	return DispatchBundle{
-		ManifestPath: manifestPath,
-		PromptPath:   promptPath,
-		ArtifactDir:  artifactDir,
+		TicketPath:     ticketPath,
+		WorkerSpecPath: workerSpecPath,
+		PromptPath:     promptPath,
+		ArtifactDir:    artifactDir,
 	}, nil
 }
 
@@ -172,20 +224,22 @@ func verificationCommands(path string, ruleIDs []string) ([]map[string]any, erro
 	return commands, nil
 }
 
-func buildPrompt(manifestPath, artifactDir string, task adapter.Task, ticket dispatch.Ticket) string {
+func buildPrompt(ticketPath, workerSpecPath, artifactDir string, task adapter.Task, ticket dispatch.Ticket) string {
 	lines := []string{
 		"You are the Klein worker for exactly one bound task inside a repo-local closed-loop runtime.",
 		"",
 		"Read order:",
-		fmt.Sprintf("1. Read the dispatch manifest first: %s", manifestPath),
-		"2. If task-local artifacts already exist, read worker-result.json, verify.json, handoff.md, and referenced compact handoff logs.",
-		"3. Read only the files explicitly referenced by the manifest before expanding your search.",
+		fmt.Sprintf("1. Read the immutable dispatch ticket first: %s", ticketPath),
+		fmt.Sprintf("2. Read the task-local worker spec: %s", workerSpecPath),
+		"3. If task-local artifacts already exist, read worker-result.json, verify.json, handoff.md, and referenced compact handoff logs.",
+		"4. Read only the files explicitly referenced by the ticket before expanding your search.",
 		"",
 		"Hard authority rules:",
 		"- Never create or mutate thread keys, request ids, task ids, plan epochs, leases, or global `.harness/state/*` ledgers.",
 		"- Never edit files outside the bound worktree.",
 		"- Never edit paths outside `allowedWriteGlobs`.",
 		"- Never edit `blockedWriteGlobs`.",
+		"- Never write task-local outputs outside `artifactDir`.",
 		"- Never merge, rebase, push, archive, delete branches, or delete worktrees.",
 		"- Never decide that the loop is complete. You may only decide the terminal outcome of this worker run.",
 		"",
@@ -194,17 +248,19 @@ func buildPrompt(manifestPath, artifactDir string, task adapter.Task, ticket dis
 		"- Keep changes minimal, focused, and consistent with the existing codebase.",
 		"- Read a file before editing it.",
 		"- Before each meaningful tool/action group, briefly state your immediate intent.",
-		"- Follow the orchestration loop in order: context assembly -> targeted research -> plan -> execute -> verify -> handoff.",
+		"- Follow the task-local loop in order: context assembly -> targeted research -> refine worker-spec understanding -> execute -> verify -> handoff.",
 		"- Do not skip directly from the request text to edits when the referenced files have not been read yet.",
-		"- When the task starts from a requirement or spec request, first run the default 3+1 spec loop from the manifest: 3 parallel spec planners, then 1 judge/formatter subagent.",
-		"- The judge must choose the final orchestration result using evidence, not blend all plans together by default.",
+		"- The outer runtime already owns submit -> route -> dispatch. Do not recreate a second outer orchestrator inside this task.",
+		"- If bounded packet synthesis is required inside this task, keep it task-local: 3 candidate worker-spec refinements, 1 judge, no new global task set.",
 		"",
 		"Verification:",
-		"- Run verify commands from the manifest in order.",
+		"- Run verify commands from the dispatch ticket in order.",
 		"- Start with the narrowest relevant validation, then broader checks when required.",
 		"- Record each command, exit code, and output path in verify.json.",
+		"- A noop completion is valid only when acceptance is already satisfied and verify.json records concrete evidence for that claim.",
 		"",
 		"Required artifacts before exit:",
+		fmt.Sprintf("- %s", workerSpecPath),
 		fmt.Sprintf("- %s", filepath.Join(artifactDir, "worker-result.json")),
 		fmt.Sprintf("- %s", filepath.Join(artifactDir, "verify.json")),
 		fmt.Sprintf("- %s", filepath.Join(artifactDir, "handoff.md")),
@@ -225,21 +281,21 @@ func buildPrompt(manifestPath, artifactDir string, task adapter.Task, ticket dis
 		fmt.Sprintf("- ownedPaths: %s", strings.Join(task.OwnedPaths, ", ")),
 		fmt.Sprintf("- verificationRuleIds: %s", strings.Join(task.VerificationRuleIDs, ", ")),
 		fmt.Sprintf("- promptRef: %s", ticket.PromptRef),
-		fmt.Sprintf("- specPromptDir: %s", filepath.Join("prompts", "spec")),
-		fmt.Sprintf("- specReadme: %s", filepath.Join("prompts", "spec", "README.md")),
-		fmt.Sprintf("- specOrchestrator: %s", filepath.Join("prompts", "spec", "orchestrator.md")),
-		fmt.Sprintf("- specWorkflowPropose: %s", filepath.Join("prompts", "spec", "propose.md")),
-		fmt.Sprintf("- specArtifactProposal: %s", filepath.Join("prompts", "spec", "proposal.md")),
-		fmt.Sprintf("- specArtifactSpecs: %s", filepath.Join("prompts", "spec", "specs.md")),
-		fmt.Sprintf("- specArtifactDesign: %s", filepath.Join("prompts", "spec", "design.md")),
-		fmt.Sprintf("- specArtifactTasks: %s", filepath.Join("prompts", "spec", "tasks.md")),
-		fmt.Sprintf("- specWorkflowApply: %s", filepath.Join("prompts", "spec", "apply.md")),
-		fmt.Sprintf("- specWorkflowVerify: %s", filepath.Join("prompts", "spec", "verify.md")),
-		fmt.Sprintf("- specWorkflowArchive: %s", filepath.Join("prompts", "spec", "archive.md")),
-		fmt.Sprintf("- specPlannerArchitecture: %s", filepath.Join("prompts", "spec", "planner-architecture.md")),
-		fmt.Sprintf("- specPlannerDelivery: %s", filepath.Join("prompts", "spec", "planner-delivery.md")),
-		fmt.Sprintf("- specPlannerRisk: %s", filepath.Join("prompts", "spec", "planner-risk.md")),
-		fmt.Sprintf("- specJudge: %s", filepath.Join("prompts", "spec", "judge.md")),
+		fmt.Sprintf("- promptDir: %s", filepath.Join("prompts", "spec")),
+		fmt.Sprintf("- runtimeReadme: %s", filepath.Join("prompts", "spec", "README.md")),
+		fmt.Sprintf("- orchestratorPrompt: %s", filepath.Join("prompts", "spec", "orchestrator.md")),
+		fmt.Sprintf("- packetWorkflow: %s", filepath.Join("prompts", "spec", "propose.md")),
+		fmt.Sprintf("- orchestrationPacketGuide: %s", filepath.Join("prompts", "spec", "packet.md")),
+		fmt.Sprintf("- workerSpecGuide: %s", filepath.Join("prompts", "spec", "worker-spec.md")),
+		fmt.Sprintf("- dispatchTicketGuide: %s", filepath.Join("prompts", "spec", "dispatch-ticket.md")),
+		fmt.Sprintf("- workerResultGuide: %s", filepath.Join("prompts", "spec", "worker-result.md")),
+		fmt.Sprintf("- applyWorkflow: %s", filepath.Join("prompts", "spec", "apply.md")),
+		fmt.Sprintf("- verifyWorkflow: %s", filepath.Join("prompts", "spec", "verify.md")),
+		fmt.Sprintf("- archiveWorkflow: %s", filepath.Join("prompts", "spec", "archive.md")),
+		fmt.Sprintf("- plannerArchitecture: %s", filepath.Join("prompts", "spec", "planner-architecture.md")),
+		fmt.Sprintf("- plannerDelivery: %s", filepath.Join("prompts", "spec", "planner-delivery.md")),
+		fmt.Sprintf("- plannerRisk: %s", filepath.Join("prompts", "spec", "planner-risk.md")),
+		fmt.Sprintf("- judgePrompt: %s", filepath.Join("prompts", "spec", "judge.md")),
 		"",
 		"Final response:",
 		"- Be brief.",
@@ -268,6 +324,22 @@ func unique(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func taskConstraints(task adapter.Task) []string {
+	constraints := []string{
+		"stay within task-local scope",
+		"do not mutate global control-plane ledgers",
+		"obey allowedWriteGlobs and blockedWriteGlobs",
+		"leave merge, archive, and completion decisions to runtime",
+	}
+	if task.WorkerMode != "" {
+		constraints = append(constraints, "workerMode="+task.WorkerMode)
+	}
+	if task.ResumeStrategy != "" {
+		constraints = append(constraints, "resumeStrategy="+task.ResumeStrategy)
+	}
+	return constraints
 }
 
 func coalesce(values ...string) string {

@@ -49,7 +49,7 @@ func TestDetectNativeSessionIDPrefersNewEntry(t *testing.T) {
 	}
 }
 
-func TestBuildTaskUsesDefaultSpecConvergencePrompt(t *testing.T) {
+func TestBuildTaskUsesDefaultPacketConvergencePrompt(t *testing.T) {
 	task := buildTask("/repo", Request{Prompt: "Add orchestration convergence."}, sessionRecord{
 		ID:                     "sess-1",
 		TaskID:                 "task-1",
@@ -59,10 +59,10 @@ func TestBuildTaskUsesDefaultSpecConvergencePrompt(t *testing.T) {
 		ApprovalPolicy: "never",
 		SandboxMode:    "workspace-write",
 	}, []instructions.File{{Path: "/repo/AGENTS.md"}})
-	if !strings.Contains(task.Description, "OpenSpec") || !strings.Contains(task.Description, "b3ehive") {
+	if !strings.Contains(task.Description, "dispatch ticket") || !strings.Contains(task.Description, "worker-spec") {
 		t.Fatalf("task description missing orchestration defaults: %s", task.Description)
 	}
-	if len(task.PromptStages) < 4 || task.PromptStages[1] != "spec_parallel_planning" {
+	if len(task.PromptStages) < 4 || task.PromptStages[1] != "packet_parallel_planning" {
 		t.Fatalf("unexpected prompt stages: %+v", task.PromptStages)
 	}
 }

@@ -5,6 +5,8 @@ import (
 
 	"klein-harness/internal/a2a"
 	"klein-harness/internal/adapter"
+	"klein-harness/internal/dispatch"
+	"klein-harness/internal/lease"
 	"klein-harness/internal/state"
 )
 
@@ -17,7 +19,10 @@ type DiffStats struct {
 type CheckpointRecord struct {
 	DispatchID    string   `json:"dispatchId"`
 	TaskID        string   `json:"taskId"`
+	ThreadKey     string   `json:"threadKey,omitempty"`
+	PlanEpoch     int      `json:"planEpoch"`
 	Attempt       int      `json:"attempt"`
+	LeaseID       string   `json:"leaseId,omitempty"`
 	CheckpointRef string   `json:"checkpointRef"`
 	Status        string   `json:"status"`
 	Summary       string   `json:"summary"`
@@ -28,7 +33,11 @@ type CheckpointRecord struct {
 type OutcomeRecord struct {
 	DispatchID        string    `json:"dispatchId"`
 	TaskID            string    `json:"taskId"`
+	ThreadKey         string    `json:"threadKey,omitempty"`
+	PlanEpoch         int       `json:"planEpoch"`
 	Attempt           int       `json:"attempt"`
+	WorkerID          string    `json:"workerId,omitempty"`
+	LeaseID           string    `json:"leaseId,omitempty"`
 	Status            string    `json:"status"`
 	Summary           string    `json:"summary"`
 	CheckpointRef     string    `json:"checkpointRef,omitempty"`
@@ -39,28 +48,31 @@ type OutcomeRecord struct {
 }
 
 type TaskState struct {
-	TaskID            string           `json:"taskId"`
-	LatestCheckpoint  CheckpointRecord `json:"latestCheckpoint"`
-	LatestOutcome     OutcomeRecord    `json:"latestOutcome"`
+	TaskID           string           `json:"taskId"`
+	LatestCheckpoint CheckpointRecord `json:"latestCheckpoint"`
+	LatestOutcome    OutcomeRecord    `json:"latestOutcome"`
 }
 
 type Summary struct {
 	state.Metadata
-	Tasks map[string]TaskState `json:"tasks"`
+	Tasks      map[string]TaskState `json:"tasks"`
+	ByDispatch map[string]string    `json:"byDispatch,omitempty"`
 }
 
 type IngestCheckpointRequest struct {
-	Root         string
-	RequestID    string
-	TaskID       string
-	DispatchID   string
-	PlanEpoch    int
-	Attempt      int
-	CausationID  string
-	ReasonCodes  []string
+	Root          string
+	RequestID     string
+	TaskID        string
+	DispatchID    string
+	PlanEpoch     int
+	Attempt       int
+	CausationID   string
+	ReasonCodes   []string
+	ThreadKey     string
+	LeaseID       string
 	CheckpointRef string
-	Status       string
-	Summary      string
+	Status        string
+	Summary       string
 }
 
 type IngestOutcomeRequest struct {
@@ -74,6 +86,7 @@ type IngestOutcomeRequest struct {
 	WorkerID          string
 	LeaseID           string
 	ReasonCodes       []string
+	ThreadKey         string
 	Status            string
 	Summary           string
 	CheckpointRef     string
@@ -91,10 +104,21 @@ func IngestCheckpoint(request IngestCheckpointRequest) (CheckpointRecord, error)
 	if err != nil {
 		return CheckpointRecord{}, err
 	}
+	if _, err := dispatch.EnsureCurrent(request.Root, request.DispatchID, request.TaskID, request.PlanEpoch); err != nil {
+		return CheckpointRecord{}, err
+	}
+	if request.LeaseID != "" {
+		if _, err := lease.ValidateCurrent(request.Root, request.LeaseID, request.TaskID, request.DispatchID); err != nil {
+			return CheckpointRecord{}, err
+		}
+	}
 	record := CheckpointRecord{
 		DispatchID:    request.DispatchID,
 		TaskID:        request.TaskID,
+		ThreadKey:     request.ThreadKey,
+		PlanEpoch:     request.PlanEpoch,
 		Attempt:       request.Attempt,
+		LeaseID:       request.LeaseID,
 		CheckpointRef: request.CheckpointRef,
 		Status:        request.Status,
 		Summary:       request.Summary,
@@ -105,6 +129,7 @@ func IngestCheckpoint(request IngestCheckpointRequest) (CheckpointRecord, error)
 	taskState.TaskID = request.TaskID
 	taskState.LatestCheckpoint = record
 	summary.Tasks[request.TaskID] = taskState
+	summary.ByDispatch[request.DispatchID] = request.TaskID
 	if _, err := state.WriteSnapshot(paths.CheckpointSummaryPath, &summary, "kh-worker-supervisor", summary.Revision); err != nil {
 		return CheckpointRecord{}, err
 	}
@@ -140,10 +165,20 @@ func IngestOutcome(request IngestOutcomeRequest) (OutcomeRecord, error) {
 	if err != nil {
 		return OutcomeRecord{}, err
 	}
+	if _, err := dispatch.EnsureCurrent(request.Root, request.DispatchID, request.TaskID, request.PlanEpoch); err != nil {
+		return OutcomeRecord{}, err
+	}
+	if _, err := lease.ValidateCurrent(request.Root, request.LeaseID, request.TaskID, request.DispatchID); err != nil {
+		return OutcomeRecord{}, err
+	}
 	record := OutcomeRecord{
 		DispatchID:        request.DispatchID,
 		TaskID:            request.TaskID,
+		ThreadKey:         request.ThreadKey,
+		PlanEpoch:         request.PlanEpoch,
 		Attempt:           request.Attempt,
+		WorkerID:          request.WorkerID,
+		LeaseID:           request.LeaseID,
 		Status:            request.Status,
 		Summary:           request.Summary,
 		CheckpointRef:     request.CheckpointRef,
@@ -156,6 +191,7 @@ func IngestOutcome(request IngestOutcomeRequest) (OutcomeRecord, error) {
 	taskState.TaskID = request.TaskID
 	taskState.LatestOutcome = record
 	summary.Tasks[request.TaskID] = taskState
+	summary.ByDispatch[request.DispatchID] = request.TaskID
 	if _, err := state.WriteSnapshot(paths.CheckpointSummaryPath, &summary, "kh-worker-supervisor", summary.Revision); err != nil {
 		return OutcomeRecord{}, err
 	}
@@ -186,13 +222,17 @@ func IngestOutcome(request IngestOutcomeRequest) (OutcomeRecord, error) {
 
 func loadSummary(path string) (Summary, error) {
 	summary := Summary{
-		Tasks: map[string]TaskState{},
+		Tasks:      map[string]TaskState{},
+		ByDispatch: map[string]string{},
 	}
 	if _, err := state.LoadJSONIfExists(path, &summary); err != nil {
 		return Summary{}, err
 	}
 	if summary.Tasks == nil {
 		summary.Tasks = map[string]TaskState{}
+	}
+	if summary.ByDispatch == nil {
+		summary.ByDispatch = map[string]string{}
 	}
 	return summary, nil
 }

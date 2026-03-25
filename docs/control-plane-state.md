@@ -45,6 +45,9 @@ They are the default machine-facing surface. Markdown projections are secondary.
 - `.harness/state/log-index.json`
 - `.harness/state/policy-summary.json`
 - `.harness/state/research-summary.json`
+- `.harness/state/lease-summary.json`
+- `.harness/state/dispatch-summary.json`
+- `.harness/state/checkpoint-summary.json`
 
 Every summary snapshot includes:
 
@@ -52,19 +55,19 @@ Every summary snapshot includes:
 - `generator`
 - `generatedAt`
 
-## Planned authority summaries
+## Authority summaries
 
-For the orchestrator / worker-supervisor split, the next authority-tightening pass should add:
-
-- `.harness/state/lease-summary.json`
-- `.harness/state/dispatch-summary.json`
-- `.harness/state/checkpoint-summary.json`
-
-These are intended to answer:
+The orchestrator / worker-supervisor split uses these summary ledgers to answer:
 
 - which lease is active and who owns it
 - which dispatch ticket is currently approved or in flight
 - which checkpoint is the latest resumable execution boundary
+
+These ledgers also guard against stale worker write-back:
+
+- stale leases must not overwrite newer accepted execution
+- stale dispatches must not become the latest task truth
+- task-local outcomes are ingested only when lease and dispatch authority still match
 
 The design contract for this split is documented in:
 
@@ -90,6 +93,10 @@ The runtime executes only when the guard can prove it is safe.
 
 Unknown dirty worktrees block automation.
 Managed dirty worktrees become checkpoint-eligible provenance instead of being silently absorbed.
+
+Task-local execution artifacts live under `.harness/state/artifacts/<taskId>/<dispatchId>/`.
+Those artifacts carry `worker-spec.json`, `worker-result.json`, `verify.json`, and `handoff.md`.
+They are not a replacement for global runtime summaries.
 
 ## Health separation
 

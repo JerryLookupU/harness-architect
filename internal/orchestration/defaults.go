@@ -22,40 +22,41 @@ type JudgeAgent struct {
 	Dimensions []string `json:"dimensions"`
 }
 
-type SpecLoop struct {
-	PlannerCount int            `json:"plannerCount"`
-	Planners     []PlannerAgent `json:"planners"`
-	Judge        JudgeAgent     `json:"judge"`
-	OutputShape  []string       `json:"outputShape"`
+type PacketSynthesisLoop struct {
+	PlannerCount     int            `json:"plannerCount"`
+	Planners         []PlannerAgent `json:"planners"`
+	Judge            JudgeAgent     `json:"judge"`
+	PacketFields     []string       `json:"packetFields"`
+	WorkerSpecFields []string       `json:"workerSpecFields"`
 }
 
-const specPromptDir = "prompts/spec"
+const promptDir = "prompts/spec"
 
 func DefaultPromptStages() []string {
 	return []string{
 		"context_assembly",
-		"spec_parallel_planning",
-		"spec_judging",
-		"task_formatting",
+		"packet_parallel_planning",
+		"packet_judging",
+		"worker_spec_synthesis",
 		"execute",
 		"verify",
 		"handoff",
 	}
 }
 
-func SpecPromptDir(root string) string {
-	return filepath.Join(root, specPromptDir)
+func PromptDir(root string) string {
+	return filepath.Join(root, promptDir)
 }
 
-func SpecPromptFiles() []string {
+func PromptFiles() []string {
 	return []string{
 		"README.md",
 		"orchestrator.md",
 		"propose.md",
-		"proposal.md",
-		"specs.md",
-		"design.md",
-		"tasks.md",
+		"packet.md",
+		"worker-spec.md",
+		"dispatch-ticket.md",
+		"worker-result.md",
 		"apply.md",
 		"verify.md",
 		"archive.md",
@@ -66,96 +67,111 @@ func SpecPromptFiles() []string {
 	}
 }
 
-func SpecPromptRefs(root string) map[string]string {
-	dir := SpecPromptDir(root)
+func PromptRefs(root string) map[string]string {
+	dir := PromptDir(root)
 	return map[string]string{
-		"specPromptDir":           dir,
-		"specReadme":              filepath.Join(dir, "README.md"),
-		"specOrchestrator":        filepath.Join(dir, "orchestrator.md"),
-		"specWorkflowPropose":     filepath.Join(dir, "propose.md"),
-		"specArtifactProposal":    filepath.Join(dir, "proposal.md"),
-		"specArtifactSpecs":       filepath.Join(dir, "specs.md"),
-		"specArtifactDesign":      filepath.Join(dir, "design.md"),
-		"specArtifactTasks":       filepath.Join(dir, "tasks.md"),
-		"specWorkflowApply":       filepath.Join(dir, "apply.md"),
-		"specWorkflowVerify":      filepath.Join(dir, "verify.md"),
-		"specWorkflowArchive":     filepath.Join(dir, "archive.md"),
-		"specPlannerArchitecture": filepath.Join(dir, "planner-architecture.md"),
-		"specPlannerDelivery":     filepath.Join(dir, "planner-delivery.md"),
-		"specPlannerRisk":         filepath.Join(dir, "planner-risk.md"),
-		"specJudge":               filepath.Join(dir, "judge.md"),
+		"promptDir":                dir,
+		"runtimeReadme":            filepath.Join(dir, "README.md"),
+		"orchestratorPrompt":       filepath.Join(dir, "orchestrator.md"),
+		"packetWorkflow":           filepath.Join(dir, "propose.md"),
+		"orchestrationPacketGuide": filepath.Join(dir, "packet.md"),
+		"workerSpecGuide":          filepath.Join(dir, "worker-spec.md"),
+		"dispatchTicketGuide":      filepath.Join(dir, "dispatch-ticket.md"),
+		"workerResultGuide":        filepath.Join(dir, "worker-result.md"),
+		"applyWorkflow":            filepath.Join(dir, "apply.md"),
+		"verifyWorkflow":           filepath.Join(dir, "verify.md"),
+		"archiveWorkflow":          filepath.Join(dir, "archive.md"),
+		"plannerArchitecture":      filepath.Join(dir, "planner-architecture.md"),
+		"plannerDelivery":          filepath.Join(dir, "planner-delivery.md"),
+		"plannerRisk":              filepath.Join(dir, "planner-risk.md"),
+		"judgePrompt":              filepath.Join(dir, "judge.md"),
 	}
 }
 
-func DefaultSpecLoop(root string) SpecLoop {
-	promptsDir := SpecPromptDir(root)
-	return SpecLoop{
+func DefaultPacketSynthesisLoop(root string) PacketSynthesisLoop {
+	promptsDir := PromptDir(root)
+	return PacketSynthesisLoop{
 		PlannerCount: 3,
 		Planners: []PlannerAgent{
 			{
-				ID:        "spec-architecture",
-				Name:      "Spec Planner A",
-				Focus:     "Architecture fit and bounded change shape",
+				ID:        "packet-architecture",
+				Name:      "Packet Planner A",
+				Focus:     "Architecture fit, authority boundaries, and bounded change shape",
 				PromptRef: filepath.Join(promptsDir, "planner-architecture.md"),
 			},
 			{
-				ID:        "spec-delivery",
-				Name:      "Spec Planner B",
-				Focus:     "Incremental delivery, work breakdown, and dependency order",
+				ID:        "packet-delivery",
+				Name:      "Packet Planner B",
+				Focus:     "Incremental delivery, worker-spec slicing, and dependency order",
 				PromptRef: filepath.Join(promptsDir, "planner-delivery.md"),
 			},
 			{
-				ID:        "spec-risk",
-				Name:      "Spec Planner C",
-				Focus:     "Risk, verification, rollback, and phase-1 control-plane fit",
+				ID:        "packet-risk",
+				Name:      "Packet Planner C",
+				Focus:     "Risk, verification, rollback, noop-validation, and phase-1 control-plane fit",
 				PromptRef: filepath.Join(promptsDir, "planner-risk.md"),
 			},
 		},
 		Judge: JudgeAgent{
-			ID:        "spec-judge",
-			Name:      "Spec Judge",
-			Focus:     "Choose the best orchestration result and format final executable tasks",
+			ID:        "packet-judge",
+			Name:      "Packet Judge",
+			Focus:     "Choose one packet candidate and format final execution-ready worker-spec slices",
 			PromptRef: filepath.Join(promptsDir, "judge.md"),
 			Dimensions: []string{
-				"spec_clarity",
+				"packet_clarity",
 				"repo_fit",
 				"execution_feasibility",
 				"verification_completeness",
 				"rollback_risk",
 			},
 		},
-		OutputShape: []string{
+		PacketFields: []string{
 			"objective",
 			"constraints",
-			"selected_plan",
-			"rejected_alternatives",
-			"execution_tasks",
-			"verification_plan",
-			"decision_rationale",
+			"selectedPlan",
+			"rejectedAlternatives",
+			"executionTasks",
+			"verificationPlan",
+			"decisionRationale",
+			"ownedPaths",
+			"taskBudgets",
+			"acceptanceMarkers",
+			"replanTriggers",
+			"rollbackHints",
+		},
+		WorkerSpecFields: []string{
+			"taskId",
+			"objective",
+			"constraints",
+			"ownedPaths",
+			"blockedPaths",
+			"taskBudget",
+			"acceptanceMarkers",
+			"verificationPlan",
+			"replanTriggers",
+			"rollbackHints",
 		},
 	}
 }
 
 func DefaultTopLevelPrompt(root, userPrompt string) string {
 	base := loadPromptOrFallback(
-		filepath.Join(SpecPromptDir(root), "orchestrator.md"),
+		filepath.Join(PromptDir(root), "orchestrator.md"),
 		`You are the Klein orchestration agent.
 
-Use an OpenSpec-style artifact flow before execution:
-- clarify proposal intent
-- shape specs and design only to the depth needed
-- produce executable tasks
+The repo-local runtime owns the outer loop:
+- submit -> classify -> fuse -> bind -> route -> issue dispatch ticket -> ingest outcome -> verify -> refresh summaries
 
-Then use the default b3ehive-style convergence loop:
-- run 3 isolated spec planners in parallel
-- have 1 judge select and format the final orchestration result`,
+When orchestration packet synthesis is needed, use the default b3e convergence subunit:
+- run 3 isolated planners that each produce one orchestration packet candidate plus task-local worker-spec candidates
+- have 1 judge select and format the final runtime-owned packet`,
 	)
 	lines := []string{
 		strings.TrimSpace(base),
 		"",
-		"Load supporting spec prompts from prompts/spec in this order when relevant:",
+		"Load supporting runtime prompts from prompts/spec in this order when relevant:",
 	}
-	for _, file := range SpecPromptFiles() {
+	for _, file := range PromptFiles() {
 		if file == "README.md" || file == "orchestrator.md" {
 			continue
 		}
@@ -166,14 +182,19 @@ Then use the default b3ehive-style convergence loop:
 		"User requirement:",
 		strings.TrimSpace(userPrompt),
 		"",
-		"Final orchestration output must include:",
+		"Final orchestration packet must include:",
 		"- objective",
 		"- constraints",
-		"- selected_plan",
-		"- rejected_alternatives",
-		"- execution_tasks",
-		"- verification_plan",
-		"- decision_rationale",
+		"- selectedPlan",
+		"- rejectedAlternatives",
+		"- executionTasks",
+		"- verificationPlan",
+		"- decisionRationale",
+		"- ownedPaths",
+		"- taskBudgets",
+		"- acceptanceMarkers",
+		"- replanTriggers",
+		"- rollbackHints",
 	)
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }

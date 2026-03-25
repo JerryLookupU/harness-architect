@@ -26,6 +26,7 @@ submit
 - execution is blocked when the control plane is unsure
 - summary state is the default operator surface
 - semantic success requires gate-aligned evidence, not only exit code
+- orchestration packet meaning is runtime-owned; workers only operate on task-local worker-specs and dispatch tickets
 
 ## Safety Boundary
 
@@ -52,6 +53,12 @@ The next refactor keeps the guard semantics but sharpens the runtime into two lo
 
 - orchestrator big loop: `submit -> classify -> fuse -> bind -> route -> issue dispatch ticket -> ingest outcome -> verify -> emit repair/replan/complete -> refresh summaries`
 - worker-supervisor small loop: `claim ticket -> ensure worker -> ensure worktree -> run bounded burst -> write heartbeat/checkpoint/outcome -> release or renew lease`
+
+Important clarification:
+
+- mini-agent-loop is not the outer runtime loop
+- b3e 3+1 convergence exists only inside orchestration packet synthesis subunits
+- workers execute only task-local scope and may not mutate global control-plane ledgers
 
 The critical rule stays the same:
 

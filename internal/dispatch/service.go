@@ -12,6 +12,7 @@ import (
 
 var ErrDispatchClaimed = errors.New("dispatch already claimed by another worker")
 var ErrDispatchNotFound = errors.New("dispatch not found")
+var ErrDispatchStale = errors.New("dispatch is stale for current task execution")
 
 type Budget struct {
 	MaxTurns     int `json:"maxTurns"`
@@ -20,28 +21,30 @@ type Budget struct {
 }
 
 type Ticket struct {
-	DispatchID              string   `json:"dispatchId"`
-	RequestID               string   `json:"requestId,omitempty"`
-	TaskID                  string   `json:"taskId"`
-	PlanEpoch               int      `json:"planEpoch"`
-	Attempt                 int      `json:"attempt"`
-	Status                  string   `json:"status"`
-	WorkerClass             string   `json:"workerClass"`
-	Cwd                     string   `json:"cwd"`
-	Command                 string   `json:"command"`
-	PromptRef               string   `json:"promptRef"`
-	Budget                  Budget   `json:"budget"`
-	LeaseTTLSec             int      `json:"leaseTtlSec"`
-	CausationID             string   `json:"causationId"`
-	ReasonCodes             []string `json:"reasonCodes,omitempty"`
-	RequiredSummaryVersion  string   `json:"requiredSummaryVersion,omitempty"`
-	ResumeSessionID         string   `json:"resumeSessionId,omitempty"`
-	WorktreePath            string   `json:"worktreePath,omitempty"`
-	OwnedPaths              []string `json:"ownedPaths,omitempty"`
-	ClaimedBy               string   `json:"claimedBy,omitempty"`
-	LeaseID                 string   `json:"leaseId,omitempty"`
-	CreatedAt               string   `json:"createdAt"`
-	UpdatedAt               string   `json:"updatedAt"`
+	DispatchID             string   `json:"dispatchId"`
+	IdempotencyKey         string   `json:"idempotencyKey,omitempty"`
+	RequestID              string   `json:"requestId,omitempty"`
+	TaskID                 string   `json:"taskId"`
+	ThreadKey              string   `json:"threadKey,omitempty"`
+	PlanEpoch              int      `json:"planEpoch"`
+	Attempt                int      `json:"attempt"`
+	Status                 string   `json:"status"`
+	WorkerClass            string   `json:"workerClass"`
+	Cwd                    string   `json:"cwd"`
+	Command                string   `json:"command"`
+	PromptRef              string   `json:"promptRef"`
+	Budget                 Budget   `json:"budget"`
+	LeaseTTLSec            int      `json:"leaseTtlSec"`
+	CausationID            string   `json:"causationId"`
+	ReasonCodes            []string `json:"reasonCodes,omitempty"`
+	RequiredSummaryVersion string   `json:"requiredSummaryVersion,omitempty"`
+	ResumeSessionID        string   `json:"resumeSessionId,omitempty"`
+	WorktreePath           string   `json:"worktreePath,omitempty"`
+	OwnedPaths             []string `json:"ownedPaths,omitempty"`
+	ClaimedBy              string   `json:"claimedBy,omitempty"`
+	LeaseID                string   `json:"leaseId,omitempty"`
+	CreatedAt              string   `json:"createdAt"`
+	UpdatedAt              string   `json:"updatedAt"`
 }
 
 type Summary struct {
@@ -49,37 +52,40 @@ type Summary struct {
 	Tickets          map[string]Ticket   `json:"tickets"`
 	IdempotencyIndex map[string]string   `json:"idempotencyIndex"`
 	TaskIndex        map[string][]string `json:"taskIndex"`
+	LatestByTask     map[string]string   `json:"latestByTask"`
+	ThreadEpochIndex map[string]string   `json:"threadEpochIndex,omitempty"`
 }
 
 type IssueRequest struct {
-	Root                  string
-	RequestID             string
-	TaskID                string
-	PlanEpoch             int
-	Attempt               int
-	IdempotencyKey        string
-	CausationID           string
-	ReasonCodes           []string
-	WorkerClass           string
-	Cwd                   string
-	Command               string
-	PromptRef             string
-	Budget                Budget
-	LeaseTTLSec           int
+	Root                   string
+	RequestID              string
+	TaskID                 string
+	ThreadKey              string
+	PlanEpoch              int
+	Attempt                int
+	IdempotencyKey         string
+	CausationID            string
+	ReasonCodes            []string
+	WorkerClass            string
+	Cwd                    string
+	Command                string
+	PromptRef              string
+	Budget                 Budget
+	LeaseTTLSec            int
 	RequiredSummaryVersion string
-	ResumeSessionID       string
-	WorktreePath          string
-	OwnedPaths            []string
+	ResumeSessionID        string
+	WorktreePath           string
+	OwnedPaths             []string
 }
 
 type ClaimRequest struct {
-	Root         string
-	DispatchID   string
-	TaskID       string
-	WorkerID     string
-	LeaseID      string
-	CausationID  string
-	ReasonCodes  []string
+	Root        string
+	DispatchID  string
+	TaskID      string
+	WorkerID    string
+	LeaseID     string
+	CausationID string
+	ReasonCodes []string
 }
 
 func Issue(request IssueRequest) (Ticket, bool, error) {
@@ -104,8 +110,10 @@ func Issue(request IssueRequest) (Ticket, bool, error) {
 	now := state.NowUTC()
 	ticket := Ticket{
 		DispatchID:             dispatchID,
+		IdempotencyKey:         request.IdempotencyKey,
 		RequestID:              request.RequestID,
 		TaskID:                 request.TaskID,
+		ThreadKey:              request.ThreadKey,
 		PlanEpoch:              request.PlanEpoch,
 		Attempt:                request.Attempt,
 		Status:                 "issued",
@@ -127,6 +135,10 @@ func Issue(request IssueRequest) (Ticket, bool, error) {
 	summary.Tickets[dispatchID] = ticket
 	summary.IdempotencyIndex[request.IdempotencyKey] = dispatchID
 	summary.TaskIndex[request.TaskID] = append(summary.TaskIndex[request.TaskID], dispatchID)
+	summary.LatestByTask[request.TaskID] = dispatchID
+	if request.ThreadKey != "" && request.PlanEpoch > 0 {
+		summary.ThreadEpochIndex[threadEpochKey(request.ThreadKey, request.PlanEpoch)] = dispatchID
+	}
 	if _, err := state.WriteSnapshot(paths.DispatchSummaryPath, &summary, "kh-orchestrator", summary.Revision); err != nil {
 		return Ticket{}, false, err
 	}
@@ -172,6 +184,14 @@ func Claim(request ClaimRequest) (Ticket, error) {
 	ticket, ok := findTicket(summary, request.DispatchID, request.TaskID)
 	if !ok {
 		return Ticket{}, ErrDispatchNotFound
+	}
+	if latest := summary.LatestByTask[ticket.TaskID]; latest != "" && latest != ticket.DispatchID {
+		return Ticket{}, fmt.Errorf("%w: latest dispatch for %s is %s", ErrDispatchStale, ticket.TaskID, latest)
+	}
+	if ticket.ThreadKey != "" && ticket.PlanEpoch > 0 {
+		if latest := summary.ThreadEpochIndex[threadEpochKey(ticket.ThreadKey, ticket.PlanEpoch)]; latest != "" && latest != ticket.DispatchID {
+			return Ticket{}, fmt.Errorf("%w: latest dispatch for %s is %s", ErrDispatchStale, threadEpochKey(ticket.ThreadKey, ticket.PlanEpoch), latest)
+		}
 	}
 	if ticket.Status == "claimed" && ticket.ClaimedBy != request.WorkerID {
 		return Ticket{}, ErrDispatchClaimed
@@ -274,11 +294,43 @@ func FindClaimableForTask(root, taskID string) (Ticket, error) {
 	return Ticket{}, ErrDispatchNotFound
 }
 
+func EnsureCurrent(root, dispatchID, taskID string, planEpoch int) (Ticket, error) {
+	ticket, err := Get(root, dispatchID)
+	if err != nil {
+		return Ticket{}, err
+	}
+	if taskID != "" && ticket.TaskID != taskID {
+		return Ticket{}, fmt.Errorf("%w: task mismatch %s != %s", ErrDispatchStale, ticket.TaskID, taskID)
+	}
+	if planEpoch > 0 && ticket.PlanEpoch != planEpoch {
+		return Ticket{}, fmt.Errorf("%w: plan epoch mismatch %d != %d", ErrDispatchStale, ticket.PlanEpoch, planEpoch)
+	}
+	paths, err := adapter.Resolve(root)
+	if err != nil {
+		return Ticket{}, err
+	}
+	summary, err := loadSummary(paths.DispatchSummaryPath)
+	if err != nil {
+		return Ticket{}, err
+	}
+	if latest := summary.LatestByTask[ticket.TaskID]; latest != "" && latest != dispatchID {
+		return Ticket{}, fmt.Errorf("%w: latest dispatch for %s is %s", ErrDispatchStale, ticket.TaskID, latest)
+	}
+	if ticket.ThreadKey != "" && ticket.PlanEpoch > 0 {
+		if latest := summary.ThreadEpochIndex[threadEpochKey(ticket.ThreadKey, ticket.PlanEpoch)]; latest != "" && latest != dispatchID {
+			return Ticket{}, fmt.Errorf("%w: latest dispatch for %s is %s", ErrDispatchStale, threadEpochKey(ticket.ThreadKey, ticket.PlanEpoch), latest)
+		}
+	}
+	return ticket, nil
+}
+
 func loadSummary(path string) (Summary, error) {
 	summary := Summary{
 		Tickets:          map[string]Ticket{},
 		IdempotencyIndex: map[string]string{},
 		TaskIndex:        map[string][]string{},
+		LatestByTask:     map[string]string{},
+		ThreadEpochIndex: map[string]string{},
 	}
 	if _, err := state.LoadJSONIfExists(path, &summary); err != nil {
 		return Summary{}, err
@@ -291,6 +343,28 @@ func loadSummary(path string) (Summary, error) {
 	}
 	if summary.TaskIndex == nil {
 		summary.TaskIndex = map[string][]string{}
+	}
+	if summary.LatestByTask == nil {
+		summary.LatestByTask = map[string]string{}
+	}
+	if summary.ThreadEpochIndex == nil {
+		summary.ThreadEpochIndex = map[string]string{}
+	}
+	if len(summary.LatestByTask) == 0 {
+		for taskID, ids := range summary.TaskIndex {
+			if len(ids) == 0 {
+				continue
+			}
+			summary.LatestByTask[taskID] = ids[len(ids)-1]
+		}
+	}
+	if len(summary.ThreadEpochIndex) == 0 {
+		for _, ticket := range summary.Tickets {
+			if ticket.ThreadKey == "" || ticket.PlanEpoch <= 0 {
+				continue
+			}
+			summary.ThreadEpochIndex[threadEpochKey(ticket.ThreadKey, ticket.PlanEpoch)] = ticket.DispatchID
+		}
 	}
 	return summary, nil
 }
@@ -315,4 +389,8 @@ func findTicket(summary Summary, dispatchID, taskID string) (Ticket, bool) {
 
 func DefaultCheckpointPath(root, taskID string, attempt int) string {
 	return filepath.Join(root, ".harness", "checkpoints", taskID, fmt.Sprintf("attempt_%d.json", attempt))
+}
+
+func threadEpochKey(threadKey string, planEpoch int) string {
+	return fmt.Sprintf("%s:%d", threadKey, planEpoch)
 }

@@ -1,16 +1,16 @@
-Workflow: propose a new change from a requirement.
+Workflow: synthesize or refresh one orchestration packet from a requirement.
 
 Goal:
-- create a coherent spec package that is ready for implementation planning
+- create a runtime-owned packet that is ready for route-first-dispatch-second execution
 
 Steps:
-1. derive or normalize the change name and primary objective
-2. establish artifact order before writing
-3. create proposal, specs, optional design, and tasks in dependency order
-4. stop when the implementation prerequisites are complete
+1. derive or normalize the primary objective and constraints
+2. decide whether the accepted epoch needs a new packet or only packet reuse
+3. when synthesis is needed, shape one packet candidate and task-local worker-spec candidates together
+4. stop when dispatch-ready task slices, verification intent, and rollback hints are explicit
 
 Guardrails:
-- read already completed dependency artifacts before creating the next one
-- ask for clarification only when ambiguity would materially change the artifact
-- do not copy meta-rules into artifact output
-- end by stating what is ready for implementation
+- read current runtime summaries before creating a fresh packet
+- ask for clarification only when ambiguity would materially change packet ownership or acceptance
+- do not copy meta-rules into packet output
+- end by stating what is ready for dispatch and what still requires route/runtime judgment

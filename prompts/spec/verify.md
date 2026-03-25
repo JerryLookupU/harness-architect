@@ -1,4 +1,4 @@
-Workflow: verify that implementation matches the spec package.
+Workflow: verify that implementation matches the orchestration packet and task-local worker-spec.
 
 Verify three dimensions:
 - completeness
@@ -6,13 +6,13 @@ Verify three dimensions:
 - coherence
 
 Checks:
-- compare completed tasks against actual implementation evidence
+- compare worker-result claims against actual implementation evidence
 - compare requirements and scenarios against code and tests
-- compare design decisions against the resulting implementation shape
+- compare packet decisions and acceptance markers against the resulting implementation shape
 
 Severity rules:
-- CRITICAL for missing required behavior or incomplete tasks
-- WARNING for likely divergence from spec or design
+- CRITICAL for missing required behavior, missing acceptance evidence, or incomplete tasks
+- WARNING for likely divergence from packet, worker-spec, or design intent
 - SUGGESTION for pattern or consistency improvements
 
 Output:

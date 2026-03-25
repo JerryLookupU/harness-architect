@@ -71,6 +71,19 @@ The detailed design is captured in:
 
 This is a planned tightening of the current runtime boundary, not a claim that the full split already exists in code today.
 
+## Internalized Spec Meaning
+
+Klein-Harness no longer models `proposal/specs/design/tasks` as a visible outer stage.
+That meaning is internalized into runtime-owned objects:
+
+- orchestration packet
+- task-local worker-spec
+- immutable dispatch ticket
+- task-local worker-result
+- runtime-owned completion gate
+
+See [internalized-spec-runtime.md](/Users/linzhenjie/code/claw-code/harness-architect/docs/internalized-spec-runtime.md).
+
 ## Lineage Dimensions
 
 The harness avoids self-intersection by adding explicit dimensions instead of letting prompts blur them together.

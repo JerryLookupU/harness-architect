@@ -1,4 +1,4 @@
-# Claude-Style Orchestrator with OpenSpec Task Execution
+# Internalized Packet Framework with b3e Packet Synthesis
 
 Date: 2026-03-24
 Mode: extension
@@ -8,28 +8,27 @@ Research mode: none
 
 Freeze the intended framework shape for Klein-Harness:
 
-- the orchestrator is a Claude Code style mini-agent-loop
-- the outer orchestration block uses OpenSpec plus b3ehive to generate the final task package
-- the executor polls and executes those tasks using an OpenSpec-like apply flow
+- the outer runtime is route-first-dispatch-second, not a mini-agent-loop
+- packet synthesis uses b3e convergence to generate one runtime-owned orchestration packet plus worker-spec candidates
+- the executor consumes dispatch tickets and task-local worker-specs
 
 ## Architecture
 
-### 1. Outer orchestrator
+### 1. Outer runtime
 
-The orchestrator is not a generic chat loop.
-It is a bounded planning loop with GPT-facing prompts and repo-local state.
+The outer runtime is not a generic chat loop.
+It is a repo-local control loop with deterministic ledgers and bounded synthesis calls.
 
 Loop:
 
 ```text
-requirement or spec
+requirement
 -> context assembly
--> determine whether artifact shaping is needed
--> shape proposal/specs/design/tasks when needed
--> run 3 parallel planners
--> run 1 judge
--> emit final orchestration package
--> persist package into task/request state
+-> determine whether an accepted epoch already has a usable packet
+-> synthesize or refresh packet only when needed
+-> persist packet meaning into task/request/dispatch state
+-> route
+-> issue dispatch ticket
 ```
 
 This is the Claude Code influence:
@@ -39,45 +38,46 @@ This is the Claude Code influence:
 - judge-style convergence instead of naive single-pass planning
 - planning separated from execution
 
-### 2. Outer planning block
+### 2. Packet synthesis block
 
-The outer planning block combines two ideas:
+The packet synthesis block combines two ideas:
 
-- OpenSpec gives the artifact shape
-  - proposal
-  - specs
-  - design
-  - tasks
+- runtime-owned packet fields carry the old artifact meaning
 - b3ehive gives the convergence pattern
   - 3 isolated candidate planners
   - 1 judge/formatter
 
-The orchestrator output should look like an OpenSpec execution package, not a free-form essay.
+The synthesis output should look like an execution-ready orchestration packet, not a free-form essay.
 
 Required output fields:
 
 - objective
 - constraints
-- selected_plan
-- rejected_alternatives
-- execution_tasks
-- verification_plan
-- decision_rationale
+- selectedPlan
+- rejectedAlternatives
+- executionTasks
+- verificationPlan
+- decisionRationale
+- ownedPaths
+- taskBudgets
+- acceptanceMarkers
+- replanTriggers
+- rollbackHints
 
 ## 3. Inner executor
 
 The executor is not a replanner.
-Its job is to poll actionable tasks and execute them.
+Its job is to consume dispatch tickets and execute task-local worker-specs.
 
 Loop:
 
 ```text
-poll next executable task
--> read current proposal/specs/design/tasks context
--> apply one task
+claim dispatch ticket
+-> read dispatch ticket and worker-spec
+-> apply one task-local slice
 -> verify the result
 -> write outcome / handoff / checkpoint
--> poll next task
+-> return outcome to runtime
 ```
 
 The executor may report drift or blockers, but it should not replace the orchestrator's role.
@@ -87,7 +87,7 @@ The executor may report drift or blockers, but it should not replace the orchest
 Already present:
 
 - prompt-level orchestrator contract in `prompts/spec/`
-- `3 + 1` spec loop in worker manifest and orchestration defaults
+- `3 + 1` packet synthesis loop in worker manifest and orchestration defaults
 - Codex-style entrypoint via `kh-codex`
 - task/session/dispatch/lease/checkpoint ledgers
 - worker-side bounded burst execution
@@ -95,14 +95,14 @@ Already present:
 Not fully implemented yet:
 
 - deterministic runtime fan-out/fan-in for the 3 planners plus 1 judge as first-class control-plane tasks
-- a dedicated executor poller that consumes only `execution_tasks` as a separate runtime role
-- full OpenSpec artifact persistence as first-class runtime outputs instead of prompt-shaped text only
+- a dedicated executor poller that consumes only dispatch tickets and task-local worker-specs as a separate runtime role
+- standalone packet persistence per accepted epoch as a first-class repo-local snapshot, instead of prompt-derived references alone
 
 ## Design rule
 
 When evolving the framework:
 
 - do not let the executor become a second planner
-- do not let the orchestrator skip artifact shaping for vague requirements
+- do not let packet synthesis skip bounded worker-spec shaping for vague requirements
 - do not merge planner outputs by averaging; judge them and select deliberately
-- keep the output package structured enough that execution can proceed without reinterpreting the original request
+- keep packet and worker-spec outputs structured enough that execution can proceed without reinterpreting the original request

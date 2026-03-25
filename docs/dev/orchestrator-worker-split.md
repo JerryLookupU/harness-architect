@@ -31,6 +31,7 @@ Hard boundaries:
 - it does not directly own `tmux`
 - it does not treat long chat memory as system state
 - it is `deterministic-first`, with LLM help only where heuristics are insufficient
+- it owns orchestration packet truth; workers do not
 
 ## Node B: `worker-supervisor-node`
 
@@ -69,6 +70,11 @@ submit
 -> next tick
 ```
 
+Note:
+
+- the outer runtime loop is not a mini-agent-loop
+- b3e 3+1 convergence is only an internal packet synthesis subunit when runtime needs a fresh packet
+
 ### Small loop: worker supervisor
 
 ```text
@@ -89,6 +95,7 @@ claim ticket
 - Supervisor executes only against an approved dispatch ticket.
 - Worktree ownership is task-scoped and lease-scoped, not session-scoped.
 - Session reuse is valid only when the route gate already emitted a resumable decision.
+- Worker output is task-local only and cannot mutate global control-plane ledgers.
 
 ## Why This Split Fits Klein
 

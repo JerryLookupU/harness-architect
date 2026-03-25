@@ -7,13 +7,13 @@ import (
 	"testing"
 )
 
-func TestDefaultSpecLoop(t *testing.T) {
+func TestDefaultPacketSynthesisLoop(t *testing.T) {
 	root := "/repo"
-	loop := DefaultSpecLoop(root)
+	loop := DefaultPacketSynthesisLoop(root)
 	if loop.PlannerCount != 3 || len(loop.Planners) != 3 {
 		t.Fatalf("unexpected planner count: %+v", loop)
 	}
-	if loop.Judge.ID != "spec-judge" {
+	if loop.Judge.ID != "packet-judge" {
 		t.Fatalf("unexpected judge: %+v", loop.Judge)
 	}
 	if got := loop.Planners[0].PromptRef; got != filepath.Join(root, "prompts", "spec", "planner-architecture.md") {
@@ -21,7 +21,7 @@ func TestDefaultSpecLoop(t *testing.T) {
 	}
 }
 
-func TestDefaultTopLevelPromptLoadsSpecPromptDirectory(t *testing.T) {
+func TestDefaultTopLevelPromptLoadsPromptDirectory(t *testing.T) {
 	root := t.TempDir()
 	specDir := filepath.Join(root, "prompts", "spec")
 	if err := os.MkdirAll(specDir, 0o755); err != nil {
@@ -33,10 +33,10 @@ func TestDefaultTopLevelPromptLoadsSpecPromptDirectory(t *testing.T) {
 	prompt := DefaultTopLevelPrompt(root, "Implement a bounded orchestrator.")
 	for _, want := range []string{
 		"Spec orchestrator base prompt.",
-		"prompts/spec/proposal.md",
-		"prompts/spec/specs.md",
+		"prompts/spec/packet.md",
+		"prompts/spec/worker-spec.md",
 		"prompts/spec/judge.md",
-		"execution_tasks",
+		"executionTasks",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q: %s", want, prompt)

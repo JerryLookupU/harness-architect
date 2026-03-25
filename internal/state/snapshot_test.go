@@ -7,8 +7,8 @@ import (
 )
 
 type snapshotFixture struct {
-	Metadata Metadata `json:"-"`
-	Name     string   `json:"name"`
+	Metadata
+	Name string `json:"name"`
 }
 
 func TestWriteSnapshotCAS(t *testing.T) {
