@@ -26,6 +26,7 @@ type EntitySelection struct {
 
 type ContentContract struct {
 	OutputDir         string   `json:"outputDir,omitempty"`
+	OutputFile        string   `json:"outputFile,omitempty"`
 	IndexFile         string   `json:"indexFile,omitempty"`
 	FileExtension     string   `json:"fileExtension,omitempty"`
 	FileNamingRule    string   `json:"fileNamingRule,omitempty"`

@@ -7,6 +7,15 @@ import (
 	"testing"
 )
 
+func containsStringValue(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
 func TestDefaultPacketSynthesisLoop(t *testing.T) {
 	root := "/repo"
 	loop := DefaultPacketSynthesisLoop(root)
@@ -74,5 +83,18 @@ func TestDefaultTopLevelPromptLoadsPromptDirectory(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q: %s", want, prompt)
 		}
+	}
+}
+
+func TestDefaultExecutionLoopContractDoesNotInjectHarnessSkillIntoWorkerActiveSkills(t *testing.T) {
+	loop := DefaultExecutionLoopContract("/repo", []string{"policy_harness_state_first"})
+	if !containsStringValue(loop.ActiveSkills, "qiushi-execution") {
+		t.Fatalf("expected qiushi execution skill, got %+v", loop.ActiveSkills)
+	}
+	if containsStringValue(loop.ActiveSkills, "klein-harness") {
+		t.Fatalf("expected harness skill to stay out of worker active skills, got %+v", loop.ActiveSkills)
+	}
+	if !containsStringValue(loop.SkillHints, "inspect control plane first, then execution plane, then operator plane for harness-oriented tasks") {
+		t.Fatalf("expected harness-state-first hint to remain, got %+v", loop.SkillHints)
 	}
 }

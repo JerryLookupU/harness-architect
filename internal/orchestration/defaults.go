@@ -802,9 +802,6 @@ func activeSkills(reasonCodes []string) []string {
 	if containsString(codes, "policy_resume_state_first") || containsString(codes, "policy_log_compact_first") {
 		skills = append(skills, "harness-log-search-cskill")
 	}
-	if containsString(codes, "policy_harness_state_first") {
-		skills = append(skills, "klein-harness")
-	}
 	return uniqueStrings(skills)
 }
 

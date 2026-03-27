@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"klein-harness/internal/adapter"
 	"klein-harness/internal/dispatch"
 	"klein-harness/internal/orchestration"
 )
@@ -14,6 +15,15 @@ import (
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsSubstring(values []string, want string) bool {
+	for _, value := range values {
+		if strings.Contains(value, want) {
 			return true
 		}
 	}
@@ -812,5 +822,84 @@ func TestPrepareDerivesInlineDisplayRequirementsFromSingleLineGoal(t *testing.T)
 	}
 	if !strings.Contains(ticket.AcceptedPacket.ExecutionTasks[4].Summary, "追加需求的落点和 token 热区变化") {
 		t.Fatalf("expected appended requirement task, got %+v", ticket.AcceptedPacket.ExecutionTasks)
+	}
+}
+
+func TestInferCorpusPlanningHonorsExplicitSingleFileOutput(t *testing.T) {
+	task := adapter.Task{
+		TaskID:      "T-linguists",
+		Title:       "语言学家资料单文档交付",
+		Summary:     "根据 docs/prd.md 产出 20 位世界顶级语言学家资料，写入 output/linguists.md，总正文不少于 2000 字。",
+		Description: "每位学者包含 基本信息、代表成果、核心贡献、历史影响。",
+	}
+
+	info := inferCorpusPlanning(task)
+	if !info.SingleDocument {
+		t.Fatalf("expected explicit output file to select single-document mode, got %+v", info)
+	}
+	if info.OutputFile != "output/linguists.md" {
+		t.Fatalf("expected explicit output file, got %+v", info)
+	}
+	if info.OutputDir != "output" {
+		t.Fatalf("expected output dir to follow output file, got %+v", info)
+	}
+	if info.IndexFile != "" {
+		t.Fatalf("expected single-document plan to avoid default index file, got %+v", info)
+	}
+	if info.SubjectCount != 20 || info.SubjectLabel != "世界顶级语言学家资料" {
+		t.Fatalf("expected subject parsing to survive single-document mode, got %+v", info)
+	}
+	if info.MinChars != 2000 {
+		t.Fatalf("expected doc-level min chars, got %+v", info)
+	}
+	if !containsString(info.RequiredSections, "基本信息") || !containsString(info.RequiredSections, "历史影响") {
+		t.Fatalf("expected required sections to be preserved, got %+v", info)
+	}
+}
+
+func TestSingleDocumentCorpusContextAvoidsMultiFileDefaults(t *testing.T) {
+	task := adapter.Task{
+		TaskID:      "T-linguists",
+		Title:       "语言学家资料单文档交付",
+		Summary:     "根据 docs/prd.md 产出 20 位世界顶级语言学家资料，写入 output/linguists.md，总正文不少于 2000 字。",
+		Description: "每位学者包含 基本信息、代表成果、核心贡献、历史影响。",
+	}
+
+	executionTasks := deriveExecutionTasks(task, nil)
+	if len(executionTasks) != 2 {
+		t.Fatalf("expected single-document corpus flow to derive 2 execution tasks, got %+v", executionTasks)
+	}
+	if executionTasks[0].Title != "写入单文档交付件" {
+		t.Fatalf("expected single-document writing slice first, got %+v", executionTasks)
+	}
+	if len(executionTasks[0].OutputTargets) != 1 || executionTasks[0].OutputTargets[0] != "output/linguists.md" {
+		t.Fatalf("expected single output target, got %+v", executionTasks[0])
+	}
+
+	sharedContext := buildSharedTaskGroupContext(task, executionTasks)
+	if sharedContext == nil {
+		t.Fatalf("expected shared context for single-document corpus task")
+	}
+	if sharedContext.ContentContract.OutputFile != "output/linguists.md" {
+		t.Fatalf("expected shared context to preserve explicit output file, got %+v", sharedContext.ContentContract)
+	}
+	if sharedContext.ContentContract.IndexFile != "" || sharedContext.ContentContract.FileNamingRule != "" {
+		t.Fatalf("expected single-document context to avoid multi-file defaults, got %+v", sharedContext.ContentContract)
+	}
+	if containsString(sharedContext.ContentContract.FormatConstraints, "每位对象单独一个文件") ||
+		containsString(sharedContext.ContentContract.FormatConstraints, "总索引与正文文件分离") {
+		t.Fatalf("expected single-document context to avoid multi-file format constraints, got %+v", sharedContext.ContentContract)
+	}
+	if !containsString(sharedContext.ContentContract.FormatConstraints, "固定单文件交付") {
+		t.Fatalf("expected single-document constraint marker, got %+v", sharedContext.ContentContract)
+	}
+	if containsString(sharedContext.OperatorTaskList, "冻结名单与单文档结构") {
+		t.Fatalf("expected execution task list to avoid planning-only slices, got %+v", sharedContext.OperatorTaskList)
+	}
+	if !containsSubstring(sharedContext.SharedPrompt, "总正文不少于 2000 字") {
+		t.Fatalf("expected shared prompt to describe doc-level min chars, got %+v", sharedContext.SharedPrompt)
+	}
+	if containsSubstring(sharedContext.SharedPrompt, "每个文件不少于 2000 字") {
+		t.Fatalf("expected shared prompt to avoid per-file min chars wording, got %+v", sharedContext.SharedPrompt)
 	}
 }

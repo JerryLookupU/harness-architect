@@ -44,6 +44,7 @@ type executionTaskSpec struct {
 
 type corpusPlanningInfo struct {
 	OutputDir        string
+	OutputFile       string
 	SubjectLabel     string
 	SubjectCount     int
 	MinChars         int
@@ -51,6 +52,7 @@ type corpusPlanningInfo struct {
 	IndexFile        string
 	RequiredSections []string
 	RequiresIndex    bool
+	SingleDocument   bool
 }
 
 type DispatchBundle struct {
@@ -407,6 +409,7 @@ func buildPrompt(ticketPath, workerSpecPath, sharedContextPath, acceptedPacketPa
 		fmt.Sprintf("2. Read the task-local worker spec: %s", workerSpecPath),
 		fmt.Sprintf("3. Read the shared task-group context: %s", sharedContextPath),
 		fmt.Sprintf("4. Read the current dispatch task contract: %s", taskContractPath),
+		"4.5 When these files are large JSON, read only the fields needed for the current slice first; avoid full-file pretty prints unless a contradiction forces deeper inspection.",
 		"5. If task-local artifacts already exist, read worker-result.json, verify.json, handoff.md, and referenced compact handoff logs.",
 		"6. If feedback-summary exists and this task has recent failures, read only the current task's recent 3 high-severity failures before re-execution.",
 		"7. After those reads, move to execution. Do not reopen planner/judge work unless the dispatch files contradict each other.",
@@ -428,6 +431,7 @@ func buildPrompt(ticketPath, workerSpecPath, sharedContextPath, acceptedPacketPa
 		"- Keep work bounded to the current slice and its outputs.",
 		"- Before each meaningful tool/action group, briefly state your immediate intent.",
 		"- Prefer acting from shared context over re-reading every orchestration prompt file.",
+		"- Prefer compact field extraction over dumping entire dispatch/state JSON files into the transcript.",
 		"- If shared context is missing a required planning decision, stop and report planning drift instead of freelancing.",
 		"",
 		"Current slice payload:",
@@ -456,6 +460,9 @@ func buildPrompt(ticketPath, workerSpecPath, sharedContextPath, acceptedPacketPa
 		}
 		if sharedContext.ContentContract.OutputDir != "" {
 			lines = append(lines, fmt.Sprintf("- outputDir: %s", sharedContext.ContentContract.OutputDir))
+		}
+		if sharedContext.ContentContract.OutputFile != "" {
+			lines = append(lines, fmt.Sprintf("- outputFile: %s", sharedContext.ContentContract.OutputFile))
 		}
 		if len(sharedContext.ContentContract.RequiredSections) > 0 {
 			lines = append(lines, fmt.Sprintf("- requiredSections: %s", strings.Join(sharedContext.ContentContract.RequiredSections, ", ")))
@@ -857,20 +864,29 @@ func buildSharedTaskGroupContext(task adapter.Task, executionTasks []orchestrati
 			SelectionCriteria: uniqueNonEmpty("优先在编排阶段冻结名单或名单生成规则，再交给 worker 执行当前批次"),
 		}
 	}
-	if info.OutputDir != "" || len(info.RequiredSections) > 0 || info.MinChars > 0 {
-		context.ContentContract = orchestration.ContentContract{
-			OutputDir:         info.OutputDir,
-			IndexFile:         info.IndexFile,
-			FileExtension:     coalesce(info.FileExtension, ".md"),
-			FileNamingRule:    "序号-名称.md",
-			RequiredFields:    uniqueNonEmpty("基本信息", "代表成果", "核心贡献", "历史影响", "争议点", "延伸阅读"),
-			RequiredSections:  unique(info.RequiredSections),
-			MinChars:          info.MinChars,
-			FormatConstraints: uniqueNonEmpty("每位对象单独一个文件", "总索引与正文文件分离"),
+	if info.OutputDir != "" || info.OutputFile != "" || len(info.RequiredSections) > 0 || info.MinChars > 0 {
+		contract := orchestration.ContentContract{
+			OutputDir:        info.OutputDir,
+			OutputFile:       info.OutputFile,
+			FileExtension:    coalesce(info.FileExtension, ".md"),
+			RequiredSections: unique(info.RequiredSections),
+			MinChars:         info.MinChars,
 		}
+		if info.SingleDocument {
+			contract.FormatConstraints = uniqueNonEmpty(
+				"固定单文件交付",
+				singleDocumentOutputConstraint(info),
+			)
+		} else {
+			contract.IndexFile = info.IndexFile
+			contract.FileNamingRule = "序号-名称.md"
+			contract.RequiredFields = uniqueNonEmpty("基本信息", "代表成果", "核心贡献", "历史影响", "争议点", "延伸阅读")
+			contract.FormatConstraints = uniqueNonEmpty("每位对象单独一个文件", "总索引与正文文件分离")
+		}
+		context.ContentContract = contract
 	}
 	context.SourcePlan = orchestration.SourcePlan{
-		ResearchGoal: "先冻结名单、格式和资料策略，再进入批量写作或整理",
+		ResearchGoal: corpusResearchGoal(info),
 		PreferredSourceTypes: uniqueNonEmpty(
 			"百科类权威资料",
 			"高校 / 学术机构页面",
@@ -900,8 +916,11 @@ func selectedPlanText(task adapter.Task, sharedContext *orchestration.SharedTask
 		if sharedContext.ContentContract.OutputDir != "" {
 			parts = append(parts, "输出目录="+sharedContext.ContentContract.OutputDir)
 		}
+		if sharedContext.ContentContract.OutputFile != "" {
+			parts = append(parts, "输出文件="+sharedContext.ContentContract.OutputFile)
+		}
 		if sharedContext.ContentContract.MinChars > 0 {
-			parts = append(parts, fmt.Sprintf("每个文件不少于 %d 字", sharedContext.ContentContract.MinChars))
+			parts = append(parts, minCharsPromptText(sharedContext.ContentContract.OutputFile != "", sharedContext.ContentContract.MinChars))
 		}
 	}
 	if len(executionTasks) > 0 {
@@ -920,49 +939,61 @@ func decisionRationaleText(task adapter.Task, sharedContext *orchestration.Share
 
 func deriveCorpusExecutionTaskSpecs(task adapter.Task) []executionTaskSpec {
 	info := inferCorpusPlanning(task)
-	if info.OutputDir == "" && info.SubjectLabel == "" && info.SubjectCount == 0 {
+	if info.OutputDir == "" && info.OutputFile == "" && info.SubjectLabel == "" && info.SubjectCount == 0 {
 		return nil
 	}
 	sharedSummary := buildSharedPromptLine(task, info)
-	specs := []executionTaskSpec{
-		{
-			Title:                "冻结名单与命名规范",
-			Summary:              fmt.Sprintf("在规划阶段确定本轮 %s 的名单或名单生成规则，并冻结文件命名规范。", summarizeCorpusSubject(info)),
-			TaskGroupID:          task.TaskID + ".group",
-			SharedContextSummary: sharedSummary,
-			DoneCriteria:         []string{"名单或名单规则写入共享上下文", "文件命名规范可供后续批次直接继承"},
-		},
-		{
-			Title:                "冻结公共内容模板与资料策略",
-			Summary:              "整理每个文件的固定字段、篇幅约束、输出目录和资料来源策略，形成任务组公共提示词。",
-			TaskGroupID:          task.TaskID + ".group",
-			SharedContextSummary: sharedSummary,
-			DoneCriteria:         []string{"公共字段模板冻结", "资料策略冻结", "worker 可直接复用公共上下文"},
-		},
+	if info.SingleDocument {
+		outputTarget := coalesce(info.OutputFile, filepath.Join(info.OutputDir, "deliverable"+coalesce(info.FileExtension, ".md")))
+		return []executionTaskSpec{
+			{
+				Title:                "写入单文档交付件",
+				Summary:              fmt.Sprintf("按已冻结的共享上下文把 %s 的资料写入 %s，并满足整体篇幅约束。", summarizeCorpusSubject(info), outputTarget),
+				TaskGroupID:          task.TaskID + ".group",
+				SharedContextSummary: sharedSummary,
+				OutputTargets:        uniqueNonEmpty(outputTarget),
+				DoneCriteria:         []string{"交付文件开始落盘", "总正文满足共享字数约束"},
+			},
+			{
+				Title:                "完成校验与收口",
+				Summary:              fmt.Sprintf("对单文档交付件完成整体校验，并补全 verify 与 handoff 收口。 | output=%s", outputTarget),
+				TaskGroupID:          task.TaskID + ".group",
+				SharedContextSummary: sharedSummary,
+				OutputTargets:        uniqueNonEmpty(outputTarget),
+				DoneCriteria:         []string{"整体校验完成", "verify evidence 完整", "closeout artifacts 完整"},
+			},
+		}
 	}
+	specs := []executionTaskSpec{}
 	batchLabel := "正文批次"
 	if info.SubjectCount > 0 {
 		batchLabel = fmt.Sprintf("%s正文批次", summarizeCorpusSubject(info))
 	}
 	specs = append(specs, executionTaskSpec{
 		Title:                "批量产出正文文件",
-		Summary:              fmt.Sprintf("按共享上下文批量产出 %s 的正文文件，并把当前批次的输出写入 %s。", summarizeCorpusSubject(info), coalesce(info.OutputDir, "目标目录")),
+		Summary:              fmt.Sprintf("按已冻结的共享上下文批量产出 %s 的正文文件，并把当前批次的输出写入 %s。", summarizeCorpusSubject(info), coalesce(info.OutputDir, "目标目录")),
 		TaskGroupID:          task.TaskID + ".group",
 		BatchLabel:           batchLabel,
 		SharedContextSummary: sharedSummary,
 		OutputTargets:        uniqueNonEmpty(info.OutputDir),
 		DoneCriteria:         []string{"正文文件开始落盘", "每个文件遵循共享字段模板和字数约束"},
 	})
+	closeoutSummary := "完成整体校验、verify 与 handoff 收口。"
+	closeoutTargets := uniqueNonEmpty(info.OutputDir)
+	doneCriteria := []string{"verify evidence 完整", "closeout artifacts 完整"}
 	if info.RequiresIndex || info.IndexFile != "" {
-		specs = append(specs, executionTaskSpec{
-			Title:                "生成总索引与收口校验",
-			Summary:              fmt.Sprintf("生成总索引文件并完成整体校验、verify 与 handoff 收口。 | index=%s", coalesce(info.IndexFile, "总索引")),
-			TaskGroupID:          task.TaskID + ".group",
-			SharedContextSummary: sharedSummary,
-			OutputTargets:        uniqueNonEmpty(filepath.Join(info.OutputDir, coalesce(info.IndexFile, "00-总索引.md"))),
-			DoneCriteria:         []string{"总索引写入完成", "verify evidence 完整", "closeout artifacts 完整"},
-		})
+		closeoutSummary = fmt.Sprintf("生成总索引文件并完成整体校验、verify 与 handoff 收口。 | index=%s", coalesce(info.IndexFile, "总索引"))
+		closeoutTargets = uniqueNonEmpty(filepath.Join(info.OutputDir, coalesce(info.IndexFile, "00-总索引.md")))
+		doneCriteria = append([]string{"总索引写入完成"}, doneCriteria...)
 	}
+	specs = append(specs, executionTaskSpec{
+		Title:                "完成校验与收口",
+		Summary:              closeoutSummary,
+		TaskGroupID:          task.TaskID + ".group",
+		SharedContextSummary: sharedSummary,
+		OutputTargets:        closeoutTargets,
+		DoneCriteria:         doneCriteria,
+	})
 	return specs
 }
 
@@ -970,10 +1001,21 @@ func inferCorpusPlanning(task adapter.Task) corpusPlanningInfo {
 	text := strings.Join(uniqueNonEmpty(task.Title, task.Summary, task.Description), "\n")
 	info := corpusPlanningInfo{
 		FileExtension: ".md",
-		IndexFile:     "00-总索引.md",
+	}
+	if outputFile := detectExplicitOutputFile(text); outputFile != "" {
+		info.OutputFile = outputFile
+		info.SingleDocument = true
+		if ext := strings.TrimSpace(filepath.Ext(outputFile)); ext != "" {
+			info.FileExtension = ext
+		}
+		if dir := strings.TrimSpace(filepath.Dir(outputFile)); dir != "" && dir != "." {
+			info.OutputDir = dir
+		}
 	}
 	if matches := regexp.MustCompile(`(?:在|到)\s+(\S+)\s+下`).FindStringSubmatch(text); len(matches) == 2 {
-		info.OutputDir = strings.TrimSpace(matches[1])
+		if info.OutputDir == "" {
+			info.OutputDir = strings.TrimSpace(matches[1])
+		}
 	}
 	if matches := regexp.MustCompile(`(\d+)\s*位([^\s。；，、]+)`).FindStringSubmatch(text); len(matches) == 3 {
 		fmt.Sscanf(matches[1], "%d", &info.SubjectCount)
@@ -1009,6 +1051,9 @@ func inferCorpusPlanning(task adapter.Task) corpusPlanningInfo {
 		}
 	}
 	info.RequiredSections = unique(info.RequiredSections)
+	if !info.SingleDocument && (info.OutputDir != "" || info.SubjectLabel != "" || info.SubjectCount > 0) {
+		info.IndexFile = "00-总索引.md"
+	}
 	return info
 }
 
@@ -1027,16 +1072,51 @@ func buildSharedPromptLine(task adapter.Task, info corpusPlanningInfo) string {
 	if info.OutputDir != "" {
 		parts = append(parts, "输出目录="+info.OutputDir)
 	}
+	if info.OutputFile != "" {
+		parts = append(parts, "输出文件="+info.OutputFile)
+	}
 	if len(info.RequiredSections) > 0 {
 		parts = append(parts, "固定字段="+strings.Join(info.RequiredSections, " / "))
 	}
 	if info.MinChars > 0 {
-		parts = append(parts, fmt.Sprintf("每个文件不少于 %d 字", info.MinChars))
+		parts = append(parts, minCharsPromptText(info.SingleDocument, info.MinChars))
 	}
 	if strings.TrimSpace(task.Description) != "" {
 		parts = append(parts, strings.TrimSpace(task.Description))
 	}
 	return strings.Join(uniqueNonEmpty(parts...), " | ")
+}
+
+func corpusResearchGoal(info corpusPlanningInfo) string {
+	if info.SingleDocument {
+		return "先冻结名单、结构和资料策略，再进入单文档写作与收口"
+	}
+	return "先冻结名单、格式和资料策略，再进入批量写作或整理"
+}
+
+func minCharsPromptText(singleDocument bool, minChars int) string {
+	if minChars <= 0 {
+		return ""
+	}
+	if singleDocument {
+		return fmt.Sprintf("总正文不少于 %d 字", minChars)
+	}
+	return fmt.Sprintf("每个文件不少于 %d 字", minChars)
+}
+
+func singleDocumentOutputConstraint(info corpusPlanningInfo) string {
+	if strings.TrimSpace(info.OutputFile) == "" {
+		return ""
+	}
+	return "输出文件=" + strings.TrimSpace(info.OutputFile)
+}
+
+func detectExplicitOutputFile(text string) string {
+	matches := regexp.MustCompile("(?:写入|写到|输出到|输出至|保存到|保存至|生成到|生成至|落到)\\s*[`\"'“”‘’]?([^\\s`\"'“”‘’，。；;：:]+?\\.[A-Za-z0-9]+)[`\"'“”‘’]?").FindStringSubmatch(text)
+	if len(matches) != 2 {
+		return ""
+	}
+	return strings.TrimSpace(matches[1])
 }
 
 func buildSearchHint(task adapter.Task, info corpusPlanningInfo) string {
