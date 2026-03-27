@@ -27,6 +27,10 @@ func main() {
 		err = runInit(os.Args[2:])
 	case "submit":
 		err = runSubmit(os.Args[2:])
+	case "release-status":
+		err = runReleaseStatus(os.Args[2:])
+	case "release-snapshot":
+		err = runReleaseSnapshot(os.Args[2:])
 	case "tasks":
 		err = runTasks(os.Args[2:])
 	case "task":
@@ -48,7 +52,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: harness <init|submit|tasks|task|control|daemon> [args...]")
+	fmt.Fprintln(os.Stderr, "usage: harness <init|submit|release-status|release-snapshot|tasks|task|control|daemon> [args...]")
 }
 
 func runInit(args []string) error {
@@ -105,6 +109,30 @@ func runTasks(args []string) error {
 		return err
 	}
 	return writeJSON(map[string]any{"tasks": tasks})
+}
+
+func runReleaseStatus(args []string) error {
+	root, _, err := cli.ResolveRootArg(args)
+	if err != nil {
+		return err
+	}
+	board, err := query.ReleaseStatus(root)
+	if err != nil {
+		return err
+	}
+	return writeJSON(board)
+}
+
+func runReleaseSnapshot(args []string) error {
+	root, _, err := cli.ResolveRootArg(args)
+	if err != nil {
+		return err
+	}
+	snapshot, err := query.ReleaseSnapshotStatus(root)
+	if err != nil {
+		return err
+	}
+	return writeJSON(snapshot)
 }
 
 func runTask(args []string) error {

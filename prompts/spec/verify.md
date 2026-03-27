@@ -1,14 +1,15 @@
 Workflow: verify that implementation matches the orchestration packet and task-local worker-spec.
 
-Verify three dimensions:
-- completeness
-- correctness
-- coherence
+Verify five dimensions:
+- scopeCompletion
+- behaviorCorrectness
+- packetAlignment
 - evidence quality
 - review readiness when the change is multi-file or high-risk
 
 Checks:
 - compare worker-result claims against actual implementation evidence
+- compare the accepted packet and task contract identities against the current dispatch
 - compare requirements and scenarios against code and tests
 - compare packet decisions and acceptance markers against the resulting implementation shape
 - require command, diff, file, or runtime evidence for every success claim
@@ -25,7 +26,9 @@ Severity rules:
 
 Output:
 - summary scorecard
+- accepted packet / task contract references used for the evaluation
 - evidence ledger with commands, inspected artifacts, and what each item proves
 - prioritized findings
 - review checklist findings when review was required
+- recommendedNextAction for runtime follow-up (`archive`, `review`, `repair`, or `unblock`)
 - concrete recommendations with file evidence where possible

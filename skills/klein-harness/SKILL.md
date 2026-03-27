@@ -24,6 +24,34 @@ allowed-tools: ["Bash", "Read", "Write", "Edit", "Glob", "Grep"]
 
 > 好的 harness 应该像 gstack 的流程层一样，让多 agent 并行不是“更多窗口”，而是“更清楚的分工、停点和交接”。
 
+# Use When
+
+适用于：
+
+- 仓库还没有 `.harness/`
+- `.harness/` 存在，但状态或协议明显漂移
+- 需要 bootstrap / refresh / audit / agent-entry
+- 需要补 claim、handoff、operator surface、session/worktree 约束
+- 需要先判断这套 harness 还能不能支撑多 agent 推进
+
+# Do Not Use When
+
+不适用于：
+
+- 普通代码实现任务
+- 单一 bug fix 且当前 `.harness/` 已经健康
+- 只是查 handoff / verify 线索时
+- 只是普通 worker lane 的局部执行时
+
+# Expected Effects
+
+使用这个 skill 后，Codex 应该：
+
+- 先理解 harness 的 control plane / execution plane / operator plane
+- 先判断当前应该是 bootstrap / refresh / audit / agent-entry 哪个模式
+- 优先补协作契约，而不是堆无用产物
+- 让后续 agent 可以快速接力，不需要重新猜系统状态
+
 # 边界
 
 ## 这个 skill 负责
@@ -117,6 +145,48 @@ raw logs 只用于 operator debug、RCA 证据、或定向 detail retrieval。
 - `.harness/` 齐全
 - 你只是接力推进现有工作
 - 不需要重建底层协作制度
+
+# Canonical Runtime Mapping
+
+这份 `SKILL.md` 的真正 runtime 落点是：
+
+- `internal/route/gate.go`
+  - 负责把 harness-oriented 请求变成 `policy_harness_state_first`、`policy_operator_surface_required` 等信号
+- `internal/orchestration/defaults.go`
+  - 负责把 harness-state-first discipline 与相关 methodology lenses、execution hints 结构化
+- `internal/worker/manifest.go`
+  - 负责把 control plane / execution plane / operator plane 的读取顺序和 closeout 要求注入给 Codex
+
+因此这份 skill 文档是 **Codex 的入口说明**，不是 runtime authority。
+
+# Minimal Read Order / Inputs
+
+Codex 在使用这份 skill 时，默认应优先读：
+
+1. `.harness/state/progress.json`
+2. `.harness/work-items.json`
+3. `.harness/task-pool.json`
+4. `.harness/spec.json`
+5. `.harness/standards.md`
+6. `.harness/session-registry.json`
+7. `.harness/session-init.sh`
+8. 如果存在热状态和 compact log，再读 `current.json`、`runtime.json`、`request-summary.json`、`lineage-index.json`、`log-index.json`
+
+# Optimization Points
+
+- 把 bootstrap / refresh / audit / agent-entry 的触发条件写得更稳定
+- 把三层理解法下沉到 worker prompt，而不只留在 skill 文档里
+- 把 unattended / parallel / forever 的 operator surface 要求沉到 closeout
+- 保持 progressive disclosure，不让 Codex 默认全读 examples
+
+# Drift Risks
+
+出现以下情况时，说明 skill 已经与 runtime 漂移：
+
+- harness-oriented task 没有优先读 control plane / execution plane / operator plane
+- worker prompt 仍按普通实现任务的读取顺序执行
+- route 无法识别 harness audit / refresh / operator surface 请求
+- `SKILL.md` 里写了很多运行时真相，但 dispatch ticket / worker prompt 没体现
 
 # Progressive Disclosure
 

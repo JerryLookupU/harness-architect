@@ -14,6 +14,33 @@ description: |
 - 让规划更聚焦
 - 让执行更闭环
 
+# Use When
+
+适用于：
+
+- 任务复杂，但事实不足
+- 方向很多，需要先收敛主线
+- 已经执行过，但 verify / closeout 还没闭环
+- 任务完成状态与 evidence 不一致
+- 需要把 worker 行为收得更稳
+
+# Do Not Use When
+
+不适用于：
+
+- 把它当成新的 runtime
+- 用它替代 route / dispatch / verify / gate
+- 用它做大段方法论叙事而不进入执行
+
+# Expected Effects
+
+使用这个 skill 后，Codex 应该：
+
+- 调查优先，而不是凭经验直接改
+- 一次只推进一个 bounded slice
+- 用命令 / 文件 / artifact 证据证明完成
+- 在 closeout 里诚实写清风险和未完成项
+
 ## 核心纪律
 
 1. 先事实，后判断
@@ -87,3 +114,44 @@ description: |
 一句话记忆：
 
 `调查优先 -> 聚焦主线 -> 小步执行 -> 证据验证 -> 诚实复盘`
+
+# Canonical Runtime Mapping
+
+这份 `SKILL.md` 的真正 runtime 落点是：
+
+- `internal/route/gate.go`
+  - 通过 `policy_bug_rca_first`、`policy_resume_state_first` 等 reason code 激活不同 discipline
+- `internal/orchestration/defaults.go`
+  - 通过 `MethodologyContract`、`ExecutionLoopContract`、`ConstraintSystem` 结构化表达这套纪律
+- `internal/worker/manifest.go`
+  - 把这套纪律写进 dispatch ticket、worker-spec、worker prompt
+
+因此这份 skill 文档是 **Codex 的入口说明**，不是 runtime authority。
+
+# Minimal Read Order / Inputs
+
+当 Codex 以这份 skill 为当前执行纪律时，至少应先读：
+
+1. dispatch ticket
+2. worker-spec
+3. accepted packet
+4. task contract
+5. planning trace
+6. constraint snapshot
+7. 若存在最近失败，再读 feedback summary 中当前 task 的局部失败记忆
+
+# Optimization Points
+
+- 保持它是 discipline，不是第二 runtime
+- 让 route policy tags 更清楚地驱动这套 discipline
+- 让 worker prompt 以简短硬约束表达，而不是长篇说明文
+- 让 closeout / verify 与 evidence-first 原则完全对齐
+
+# Drift Risks
+
+出现以下情况时，说明 skill 已与 runtime 漂移：
+
+- worker prompt 不再强调 investigate -> execute -> verify -> closeout
+- verify 可以在 evidence 不足时默认通过
+- planning trace 看不到 methodology lenses / execution loop
+- 这份文档开始长出新的 runtime 阶段或新的控制面实体

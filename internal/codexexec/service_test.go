@@ -1,6 +1,7 @@
 package codexexec
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -64,5 +65,53 @@ func TestBuildTaskUsesDefaultPacketConvergencePrompt(t *testing.T) {
 	}
 	if len(task.PromptStages) < 4 || task.PromptStages[1] != "packet_parallel_planning" {
 		t.Fatalf("unexpected prompt stages: %+v", task.PromptStages)
+	}
+}
+
+func TestStatusForRouteDecisionMapsReplanAndBlock(t *testing.T) {
+	if got := statusForRouteDecision("replan"); got != "needs_replan" {
+		t.Fatalf("expected replan to map to needs_replan, got %q", got)
+	}
+	if got := statusForRouteDecision("block"); got != "blocked" {
+		t.Fatalf("expected block to map to blocked, got %q", got)
+	}
+	if got := statusForRouteDecision("dispatch"); got != "queued" {
+		t.Fatalf("expected dispatch fallback to stay queued, got %q", got)
+	}
+}
+
+func TestStatusForBurstMapsTerminalStates(t *testing.T) {
+	if got := statusForBurst("failed"); got != "needs_replan" {
+		t.Fatalf("expected failed burst to map to needs_replan, got %q", got)
+	}
+	if got := statusForBurst("timed_out"); got != "needs_replan" {
+		t.Fatalf("expected timed_out burst to map to needs_replan, got %q", got)
+	}
+	if got := statusForBurst("succeeded"); got != "succeeded" {
+		t.Fatalf("expected succeeded burst to stay succeeded, got %q", got)
+	}
+}
+
+func TestFinalTaskStatusCompletedAfterVerifiedCompletion(t *testing.T) {
+	got := finalTaskStatus("succeeded", "passed", "task.completed", nil)
+	if got != "completed" {
+		t.Fatalf("expected completed final status, got %q", got)
+	}
+}
+
+func TestFinalTaskStatusNeedsReplanForAnalysisLoop(t *testing.T) {
+	got := finalTaskStatus("succeeded", "failed", "replan.emitted", nil)
+	if got != "needs_replan" {
+		t.Fatalf("expected needs_replan final status, got %q", got)
+	}
+	if followUp := effectiveFollowUp("replan.emitted", "succeeded", "failed", nil); followUp != "analysis.required" {
+		t.Fatalf("expected effective follow up to become analysis.required, got %q", followUp)
+	}
+}
+
+func TestFinalTaskStatusBlockedWhenVerificationErrors(t *testing.T) {
+	got := finalTaskStatus("succeeded", "passed", "", errors.New("gate open"))
+	if got != "blocked" {
+		t.Fatalf("expected blocked final status on verification error, got %q", got)
 	}
 }

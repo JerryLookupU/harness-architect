@@ -8,7 +8,17 @@ import (
 	"testing"
 
 	"klein-harness/internal/dispatch"
+	"klein-harness/internal/orchestration"
 )
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
 
 func TestPrepareWritesDispatchTicketWorkerSpecAndPrompt(t *testing.T) {
 	root := t.TempDir()
@@ -78,6 +88,7 @@ func TestPrepareWritesDispatchTicketWorkerSpecAndPrompt(t *testing.T) {
 			"dispatch_ready",
 			"policy_bug_rca_first",
 			"policy_resume_state_first",
+			"policy_log_compact_first",
 			"policy_verify_evidence_required",
 			"policy_review_if_multi_file_or_high_risk",
 		},
@@ -97,9 +108,14 @@ func TestPrepareWritesDispatchTicketWorkerSpecAndPrompt(t *testing.T) {
 		DirectTargetEditAllowed bool     `json:"directTargetEditAllowed"`
 		ArtifactDir             string   `json:"artifactDir"`
 		PlanningTracePath       string   `json:"planningTracePath"`
+		AcceptedPacketPath      string   `json:"acceptedPacketPath"`
+		TaskContractPath        string   `json:"taskContractPath"`
+		ExecutionSliceID        string   `json:"executionSliceId"`
 		WorkerSpecPath          string   `json:"workerSpecPath"`
 		ReasonCodes             []string `json:"reasonCodes"`
 		PolicyTags              []string `json:"policyTags"`
+		ActiveSkills            []string `json:"activeSkills"`
+		SkillHints              []string `json:"skillHints"`
 		PacketSynthesis         struct {
 			PlannerCount int `json:"plannerCount"`
 			Judge        struct {
@@ -127,6 +143,8 @@ func TestPrepareWritesDispatchTicketWorkerSpecAndPrompt(t *testing.T) {
 			Mode            string   `json:"mode"`
 			Owner           string   `json:"owner"`
 			SkillPath       string   `json:"skillPath"`
+			ActiveSkills    []string `json:"activeSkills"`
+			SkillHints      []string `json:"skillHints"`
 			Phases          []string `json:"phases"`
 			CoreRules       []string `json:"coreRules"`
 			RetryTransition string   `json:"retryTransition"`
@@ -144,7 +162,8 @@ func TestPrepareWritesDispatchTicketWorkerSpecAndPrompt(t *testing.T) {
 				VerificationMode string `json:"verificationMode"`
 			} `json:"rules"`
 		} `json:"constraintSystem"`
-		Verification struct {
+		ConstraintPath string `json:"constraintPath"`
+		Verification   struct {
 			Commands []map[string]any `json:"commands"`
 		} `json:"verification"`
 		ValidationHooks []struct {
@@ -179,6 +198,15 @@ func TestPrepareWritesDispatchTicketWorkerSpecAndPrompt(t *testing.T) {
 	if ticket.PlanningTracePath != bundle.PlanningTracePath {
 		t.Fatalf("planning trace path mismatch: ticket=%s bundle=%s", ticket.PlanningTracePath, bundle.PlanningTracePath)
 	}
+	if ticket.AcceptedPacketPath != bundle.AcceptedPacketPath {
+		t.Fatalf("accepted packet path mismatch: ticket=%s bundle=%s", ticket.AcceptedPacketPath, bundle.AcceptedPacketPath)
+	}
+	if ticket.TaskContractPath != bundle.TaskContractPath {
+		t.Fatalf("task contract path mismatch: ticket=%s bundle=%s", ticket.TaskContractPath, bundle.TaskContractPath)
+	}
+	if ticket.ExecutionSliceID == "" {
+		t.Fatalf("expected execution slice id in ticket: %+v", ticket)
+	}
 	if ticket.WorkerSpecPath != bundle.WorkerSpecPath {
 		t.Fatalf("worker spec path mismatch: ticket=%s bundle=%s", ticket.WorkerSpecPath, bundle.WorkerSpecPath)
 	}
@@ -187,6 +215,15 @@ func TestPrepareWritesDispatchTicketWorkerSpecAndPrompt(t *testing.T) {
 	}
 	if len(ticket.ReasonCodes) == 0 || len(ticket.PolicyTags) == 0 {
 		t.Fatalf("expected route reason codes and policy tags in ticket: %+v", ticket)
+	}
+	if len(ticket.ActiveSkills) < 2 {
+		t.Fatalf("expected active skills in ticket: %+v", ticket)
+	}
+	if !containsString(ticket.ActiveSkills, "qiushi-execution") || !containsString(ticket.ActiveSkills, "systematic-debugging") || !containsString(ticket.ActiveSkills, "harness-log-search-cskill") {
+		t.Fatalf("ticket missing expected active skills: %+v", ticket.ActiveSkills)
+	}
+	if len(ticket.SkillHints) == 0 {
+		t.Fatalf("expected skill hints in ticket: %+v", ticket)
 	}
 	if len(ticket.ValidationHooks) < 3 {
 		t.Fatalf("expected hookified validation plan in ticket: %+v", ticket.ValidationHooks)
@@ -200,7 +237,7 @@ func TestPrepareWritesDispatchTicketWorkerSpecAndPrompt(t *testing.T) {
 	if len(ticket.Methodology.ActiveLenses) < 6 {
 		t.Fatalf("expected active methodology lenses in ticket: %+v", ticket.Methodology)
 	}
-	if ticket.JudgeDecision.JudgeID != "packet-judge" || ticket.JudgeDecision.SelectedFlow != "debugging-first bounded packet" {
+	if ticket.JudgeDecision.JudgeID != "packet-judge" || ticket.JudgeDecision.SelectedFlow != "compact-log-first packet" {
 		t.Fatalf("judge decision missing from ticket: %+v", ticket.JudgeDecision)
 	}
 	if len(ticket.JudgeDecision.SelectedDimensions) == 0 || len(ticket.JudgeDecision.SelectedLensIDs) < 6 || !ticket.JudgeDecision.ReviewRequired || !ticket.JudgeDecision.VerifyRequired {
@@ -209,8 +246,17 @@ func TestPrepareWritesDispatchTicketWorkerSpecAndPrompt(t *testing.T) {
 	if ticket.ExecutionLoop.Mode != "qiushi execution / validation loop" || len(ticket.ExecutionLoop.Phases) != 6 || !strings.Contains(ticket.ExecutionLoop.SkillPath, filepath.Join("skills", "qiushi-execution", "SKILL.md")) {
 		t.Fatalf("execution loop contract missing from ticket: %+v", ticket.ExecutionLoop)
 	}
+	if len(ticket.ExecutionLoop.ActiveSkills) < 2 || len(ticket.ExecutionLoop.SkillHints) == 0 {
+		t.Fatalf("execution loop skill surface missing from ticket: %+v", ticket.ExecutionLoop)
+	}
 	if ticket.ConstraintSystem.Mode != "two-level layered constraints" || len(ticket.ConstraintSystem.Rules) < 8 {
 		t.Fatalf("constraint system missing from ticket: %+v", ticket.ConstraintSystem)
+	}
+	if ticket.ConstraintPath == "" || !strings.Contains(ticket.ConstraintPath, filepath.Join(".harness", "state", "constraints-T-1.json")) {
+		t.Fatalf("constraint path missing from ticket: %+v", ticket)
+	}
+	if _, err := os.Stat(ticket.ConstraintPath); err != nil {
+		t.Fatalf("expected shared constraint snapshot to exist: %v", err)
 	}
 
 	var workerSpec struct {
@@ -222,6 +268,7 @@ func TestPrepareWritesDispatchTicketWorkerSpecAndPrompt(t *testing.T) {
 		Objective         string   `json:"objective"`
 		SelectedPlan      string   `json:"selectedPlan"`
 		AcceptanceMarkers []string `json:"acceptanceMarkers"`
+		ConstraintPath    string   `json:"constraintPath"`
 	}
 	workerSpecPayload, err := os.ReadFile(bundle.WorkerSpecPath)
 	if err != nil {
@@ -239,22 +286,58 @@ func TestPrepareWritesDispatchTicketWorkerSpecAndPrompt(t *testing.T) {
 	if workerSpec.Objective == "" || workerSpec.SelectedPlan == "" || len(workerSpec.AcceptanceMarkers) != 1 {
 		t.Fatalf("worker spec missing execution contract: %+v", workerSpec)
 	}
+	if workerSpec.ConstraintPath != ticket.ConstraintPath {
+		t.Fatalf("worker spec missing shared constraint path: %+v ticket=%+v", workerSpec, ticket)
+	}
+	if _, err := os.Stat(bundle.AcceptedPacketPath); err != nil {
+		t.Fatalf("expected accepted packet to exist: %v", err)
+	}
+	if _, err := os.Stat(bundle.TaskContractPath); err != nil {
+		t.Fatalf("expected task contract to exist: %v", err)
+	}
 	prompt, err := os.ReadFile(bundle.PromptPath)
 	if err != nil {
 		t.Fatalf("read prompt: %v", err)
 	}
 	promptText := string(prompt)
-	if !strings.Contains(promptText, bundle.TicketPath) {
-		t.Fatalf("prompt missing ticket path: %s", promptText)
+	if !strings.Contains(promptText, "Codex skill contract for this dispatch:") {
+		t.Fatalf("prompt missing codex skill contract section")
+	}
+	if !strings.Contains(promptText, "activeSkills: qiushi-execution") {
+		t.Fatalf("prompt missing active skills guidance: %s", promptText)
+	}
+	if !strings.Contains(promptText, "skills are entry guidance for Codex; dispatch ticket, worker-spec, task contract, and runtime rules remain authoritative.") {
+		t.Fatalf("prompt missing skill authority guidance: %s", promptText)
 	}
 	if !strings.Contains(promptText, bundle.WorkerSpecPath) {
 		t.Fatalf("prompt missing worker spec path: %s", promptText)
 	}
+	if !strings.Contains(promptText, bundle.AcceptedPacketPath) {
+		t.Fatalf("prompt missing accepted packet path: %s", promptText)
+	}
+	if !strings.Contains(promptText, bundle.TaskContractPath) {
+		t.Fatalf("prompt missing task contract path: %s", promptText)
+	}
+	if !strings.Contains(promptText, ticket.ExecutionSliceID) {
+		t.Fatalf("prompt missing execution slice id: %s", promptText)
+	}
 	if !strings.Contains(promptText, bundle.PlanningTracePath) {
 		t.Fatalf("prompt missing planning trace path: %s", promptText)
 	}
-	if !strings.Contains(promptText, "Final response:") {
-		t.Fatalf("prompt missing worker close-out contract")
+	if !strings.Contains(promptText, ticket.ConstraintPath) {
+		t.Fatalf("prompt missing shared constraint path: %s", promptText)
+	}
+	if !strings.Contains(promptText, "Codex skill-specific read order overrides:") {
+		t.Fatalf("prompt missing codex skill-specific read order overrides")
+	}
+	if !strings.Contains(promptText, "If activeSkills includes harness-log-search-cskill") {
+		t.Fatalf("prompt missing log-search skill override: %s", promptText)
+	}
+	if !strings.Contains(promptText, "If activeSkills includes qiushi-execution") {
+		t.Fatalf("prompt missing qiushi skill override: %s", promptText)
+	}
+	if !strings.Contains(promptText, "If activeSkills includes harness-log-search-cskill, keep raw runner logs as detail fallback only") {
+		t.Fatalf("prompt missing raw log fallback guidance: %s", promptText)
 	}
 	if !strings.Contains(promptText, "After those reads, move to execution in owned paths.") {
 		t.Fatalf("prompt missing simplified execution handoff")
@@ -276,6 +359,9 @@ func TestPrepareWritesDispatchTicketWorkerSpecAndPrompt(t *testing.T) {
 	}
 	if !strings.Contains(promptText, "Hard constraints verified item-by-item by runtime / verify:") {
 		t.Fatalf("prompt missing hard constraints section")
+	}
+	if !strings.Contains(promptText, "Read the shared constraint snapshot for this task:") {
+		t.Fatalf("prompt missing required shared constraint read")
 	}
 	if !strings.Contains(promptText, "[execution/process/soft/enforced]") {
 		t.Fatalf("prompt missing soft execution-layer constraint preview")
@@ -327,10 +413,10 @@ func TestPrepareWritesDispatchTicketWorkerSpecAndPrompt(t *testing.T) {
 	if !strings.Contains(planningText, "## Active Methodology Lenses") {
 		t.Fatalf("planning trace missing active methodology lenses: %s", planningText)
 	}
-	if !strings.Contains(planningText, "RCA First") || !strings.Contains(planningText, "State First Resume") || !strings.Contains(planningText, "Review Before Done") {
+	if !strings.Contains(planningText, "RCA First") || !strings.Contains(planningText, "State First Resume") || !strings.Contains(planningText, "Compact Log First") || !strings.Contains(planningText, "Review Before Done") {
 		t.Fatalf("planning trace missing policy-derived methodology lenses: %s", planningText)
 	}
-	if !strings.Contains(planningText, "## Judge Decision") || !strings.Contains(planningText, "selectedFlow: debugging-first bounded packet") {
+	if !strings.Contains(planningText, "## Judge Decision") || !strings.Contains(planningText, "selectedFlow: compact-log-first packet") {
 		t.Fatalf("planning trace missing judge decision: %s", planningText)
 	}
 	if !strings.Contains(planningText, "## Execution Validation Loop") || !strings.Contains(planningText, "mode: qiushi execution / validation loop") {
@@ -447,5 +533,165 @@ func TestPrepareIncludesOuterLoopMemoryInPromptWhenFeedbackSummaryExists(t *test
 	}
 	if !strings.Contains(promptText, "Identify the exact acceptance mismatch before changing code again.") {
 		t.Fatalf("prompt missing thinking summary: %s", promptText)
+	}
+}
+
+func TestPrepareDerivesMicroExecutionSlicesAndSelectsByAttempt(t *testing.T) {
+	root := t.TempDir()
+	harnessDir := filepath.Join(root, ".harness")
+	if err := os.MkdirAll(filepath.Join(harnessDir, "verification-rules"), 0o755); err != nil {
+		t.Fatalf("mkdir harness dirs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(harnessDir, "task-pool.json"), []byte(`{
+  "tasks": [
+    {
+      "taskId": "T-2",
+      "threadKey": "thread-2",
+      "kind": "feature",
+      "roleHint": "worker",
+      "title": "Split execution into micro slices",
+      "summary": "Keep dispatches narrow and path-scoped.",
+      "workerMode": "execution",
+      "planEpoch": 1,
+      "ownedPaths": ["internal/worker/**", "internal/verify/**", "prompts/spec/**"],
+      "forbiddenPaths": [".harness/**"],
+      "resumeStrategy": "fresh",
+      "routingModel": "gpt-5.4",
+      "executionModel": "gpt-5.3-codex",
+      "orchestrationSessionId": "orch-2",
+      "promptStages": ["route", "dispatch", "execute", "verify"]
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write task-pool: %v", err)
+	}
+
+	bundle, err := Prepare(root, dispatch.Ticket{
+		DispatchID:     "dispatch_T-2_1_2",
+		IdempotencyKey: "dispatch:T-2:epoch_1:attempt_2",
+		TaskID:         "T-2",
+		ThreadKey:      "thread-2",
+		PlanEpoch:      1,
+		Attempt:        2,
+		PromptRef:      "prompts/spec/apply.md",
+		ReasonCodes:    []string{"dispatch_ready"},
+	}, "lease-2")
+	if err != nil {
+		t.Fatalf("prepare bundle: %v", err)
+	}
+
+	var ticket struct {
+		ExecutionSliceID string `json:"executionSliceId"`
+		AcceptedPacket   struct {
+			ExecutionTasks []struct {
+				ID      string   `json:"id"`
+				InScope []string `json:"inScope"`
+			} `json:"executionTasks"`
+		} `json:"acceptedPacket"`
+		TaskContract struct {
+			ExecutionSliceID string   `json:"executionSliceId"`
+			InScope          []string `json:"inScope"`
+		} `json:"taskContract"`
+	}
+	payload, err := os.ReadFile(bundle.TicketPath)
+	if err != nil {
+		t.Fatalf("read ticket: %v", err)
+	}
+	if err := json.Unmarshal(payload, &ticket); err != nil {
+		t.Fatalf("unmarshal ticket: %v", err)
+	}
+	if len(ticket.AcceptedPacket.ExecutionTasks) != 3 {
+		t.Fatalf("expected 3 micro execution tasks, got %+v", ticket.AcceptedPacket.ExecutionTasks)
+	}
+	if ticket.ExecutionSliceID != "T-2.slice.2" {
+		t.Fatalf("expected attempt 2 to select slice 2, got %+v", ticket)
+	}
+	if ticket.TaskContract.ExecutionSliceID != "T-2.slice.2" {
+		t.Fatalf("expected task contract to bind selected slice, got %+v", ticket.TaskContract)
+	}
+	if len(ticket.TaskContract.InScope) != 1 || ticket.TaskContract.InScope[0] != "internal/verify/**" {
+		t.Fatalf("expected selected slice to stay path-scoped, got %+v", ticket.TaskContract)
+	}
+}
+
+func TestPrepareSelectsFirstIncompleteSliceFromProgress(t *testing.T) {
+	root := t.TempDir()
+	harnessDir := filepath.Join(root, ".harness")
+	if err := os.MkdirAll(filepath.Join(harnessDir, "state"), 0o755); err != nil {
+		t.Fatalf("mkdir harness state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(harnessDir, "task-pool.json"), []byte(`{
+  "tasks": [
+    {
+      "taskId": "T-3",
+      "threadKey": "thread-3",
+      "kind": "feature",
+      "roleHint": "worker",
+      "title": "Progress-driven slice selection",
+      "summary": "Pick the next incomplete narrow slice.",
+      "workerMode": "execution",
+      "planEpoch": 1,
+      "ownedPaths": ["internal/worker/**", "internal/verify/**", "prompts/spec/**"],
+      "forbiddenPaths": [".harness/**"],
+      "resumeStrategy": "fresh",
+      "routingModel": "gpt-5.4",
+      "executionModel": "gpt-5.3-codex",
+      "orchestrationSessionId": "orch-3",
+      "promptStages": ["route", "dispatch", "execute", "verify"]
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write task-pool: %v", err)
+	}
+	if err := orchestration.WritePacketProgress(orchestration.PacketProgressPath(root, "T-3"), orchestration.PacketProgress{
+		SchemaVersion:     "kh.packet-progress.v1",
+		Generator:         "test",
+		UpdatedAt:         "2026-03-26T10:00:00Z",
+		TaskID:            "T-3",
+		ThreadKey:         "thread-3",
+		PlanEpoch:         1,
+		AcceptedPacketID:  "packet_T-3_1",
+		CompletedSliceIDs: []string{"T-3.slice.1"},
+		LastDispatchID:    "dispatch_T-3_1_1",
+	}); err != nil {
+		t.Fatalf("write packet progress: %v", err)
+	}
+
+	bundle, err := Prepare(root, dispatch.Ticket{
+		DispatchID:     "dispatch_T-3_1_5",
+		IdempotencyKey: "dispatch:T-3:epoch_1:attempt_5",
+		TaskID:         "T-3",
+		ThreadKey:      "thread-3",
+		PlanEpoch:      1,
+		Attempt:        5,
+		PromptRef:      "prompts/spec/apply.md",
+		ReasonCodes:    []string{"dispatch_ready"},
+	}, "lease-3")
+	if err != nil {
+		t.Fatalf("prepare bundle: %v", err)
+	}
+
+	var ticket struct {
+		ExecutionSliceID string `json:"executionSliceId"`
+		TaskContract     struct {
+			ExecutionSliceID string   `json:"executionSliceId"`
+			InScope          []string `json:"inScope"`
+		} `json:"taskContract"`
+	}
+	payload, err := os.ReadFile(bundle.TicketPath)
+	if err != nil {
+		t.Fatalf("read ticket: %v", err)
+	}
+	if err := json.Unmarshal(payload, &ticket); err != nil {
+		t.Fatalf("unmarshal ticket: %v", err)
+	}
+	if ticket.ExecutionSliceID != "T-3.slice.2" {
+		t.Fatalf("expected first incomplete slice to be selected, got %+v", ticket)
+	}
+	if ticket.TaskContract.ExecutionSliceID != "T-3.slice.2" {
+		t.Fatalf("expected task contract to bind first incomplete slice, got %+v", ticket.TaskContract)
+	}
+	if len(ticket.TaskContract.InScope) != 1 || ticket.TaskContract.InScope[0] != "internal/verify/**" {
+		t.Fatalf("expected first incomplete slice scope, got %+v", ticket.TaskContract)
 	}
 }

@@ -30,6 +30,11 @@ Optional runtime-carried metadata:
 - policyTags
 - selectedPlan
 - decisionRationale
+- acceptedPacketId
+- contractId
+- acceptedPacketPath
+- taskContractPath
+- executionSliceId
 
 Field conventions:
 - `objective` is the execution objective for one task-local slice
@@ -39,5 +44,6 @@ Field conventions:
 Rules:
 - one executable task gets one task-local `worker-spec.json`
 - worker-spec may refine task-local execution but may not create new global task sets
+- worker-spec should reference the task contract for done definition instead of duplicating `doneCriteria` / `requiredEvidence`
 - workers may edit only owned task-local paths and artifacts
 - workers may not mutate global ledgers, leases, route decisions, merges, or completion state

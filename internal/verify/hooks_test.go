@@ -7,6 +7,7 @@ import (
 
 	"klein-harness/internal/adapter"
 	"klein-harness/internal/dispatch"
+	"klein-harness/internal/orchestration"
 )
 
 func TestBuildHookPlanPromotesLearnedCloseoutPattern(t *testing.T) {
@@ -17,6 +18,22 @@ func TestBuildHookPlanPromotesLearnedCloseoutPattern(t *testing.T) {
 	if err := recordLearning(root, patternMissingCloseoutArtifacts); err != nil {
 		t.Fatalf("record learning twice: %v", err)
 	}
+	constraintSystem := orchestration.DefaultConstraintSystem(root, []string{"dispatch_ready"})
+	constraintPath := orchestration.ConstraintSnapshotPath(root, "T-1")
+	softRules, hardRules := orchestration.SplitConstraintRules(constraintSystem)
+	if err := orchestration.WriteConstraintSnapshot(constraintPath, orchestration.ConstraintSnapshot{
+		SchemaVersion:    "kh.constraint-snapshot.v1",
+		Generator:        "test",
+		GeneratedAt:      "2026-03-26T10:00:00Z",
+		TaskID:           "T-1",
+		DispatchID:       "dispatch_T-1_1_1",
+		PlanEpoch:        1,
+		ConstraintSystem: constraintSystem,
+		SoftRules:        softRules,
+		HardRules:        hardRules,
+	}); err != nil {
+		t.Fatalf("write constraint snapshot: %v", err)
+	}
 
 	plan := BuildHookPlan(root, adapter.Task{
 		TaskID:       "T-1",
@@ -25,13 +42,16 @@ func TestBuildHookPlanPromotesLearnedCloseoutPattern(t *testing.T) {
 	}, dispatch.Ticket{
 		DispatchID:  "dispatch_T-1_1_1",
 		ReasonCodes: []string{"dispatch_ready"},
-	}, nil)
+	}, nil, constraintPath, constraintSystem)
 
 	if len(plan.Hooks) == 0 || plan.Hooks[0].Action != "block" {
 		t.Fatalf("expected promoted preflight hook to block, got %+v", plan.Hooks)
 	}
 	if len(plan.LearningHints) == 0 {
 		t.Fatalf("expected learning hints, got %+v", plan)
+	}
+	if len(plan.Hooks[0].Checklist) < 5 {
+		t.Fatalf("expected shared hard constraints checklist item, got %+v", plan.Hooks[0].Checklist)
 	}
 }
 

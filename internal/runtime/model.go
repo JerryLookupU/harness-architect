@@ -3,14 +3,72 @@ package runtime
 import "klein-harness/internal/state"
 
 type RequestRecord struct {
-	RequestID string   `json:"requestId"`
-	TaskID    string   `json:"taskId,omitempty"`
-	Kind      string   `json:"kind,omitempty"`
-	Goal      string   `json:"goal"`
-	Contexts  []string `json:"contexts,omitempty"`
-	Status    string   `json:"status"`
-	CreatedAt string   `json:"createdAt"`
-	UpdatedAt string   `json:"updatedAt"`
+	RequestID             string   `json:"requestId"`
+	TaskID                string   `json:"taskId,omitempty"`
+	ThreadKey             string   `json:"threadKey,omitempty"`
+	TargetThreadKey       string   `json:"targetThreadKey,omitempty"`
+	TargetPlanEpoch       int      `json:"targetPlanEpoch,omitempty"`
+	Kind                  string   `json:"kind,omitempty"`
+	Goal                  string   `json:"goal"`
+	Contexts              []string `json:"contexts,omitempty"`
+	Status                string   `json:"status"`
+	FrontDoorTriage       string   `json:"frontDoorTriage,omitempty"`
+	NormalizedIntentClass string   `json:"normalizedIntentClass,omitempty"`
+	FusionDecision        string   `json:"fusionDecision,omitempty"`
+	IdempotencyKey        string   `json:"idempotencyKey,omitempty"`
+	CanonicalGoalHash     string   `json:"canonicalGoalHash,omitempty"`
+	EvidenceFingerprint   string   `json:"evidenceFingerprint,omitempty"`
+	ClassificationReason  string   `json:"classificationReason,omitempty"`
+	CreatedAt             string   `json:"createdAt"`
+	UpdatedAt             string   `json:"updatedAt"`
+}
+
+type IntakeSummary struct {
+	state.Metadata
+	LatestRequestID       string `json:"latestRequestId,omitempty"`
+	LatestTaskID          string `json:"latestTaskId,omitempty"`
+	LatestThreadKey       string `json:"latestThreadKey,omitempty"`
+	FrontDoorTriage       string `json:"frontDoorTriage,omitempty"`
+	NormalizedIntentClass string `json:"normalizedIntentClass,omitempty"`
+	FusionDecision        string `json:"fusionDecision,omitempty"`
+	RequestCount          int    `json:"requestCount"`
+	ActiveThreadCount     int    `json:"activeThreadCount"`
+}
+
+type ThreadEntry struct {
+	ThreadKey         string   `json:"threadKey"`
+	CanonicalGoalHash string   `json:"canonicalGoalHash,omitempty"`
+	LatestRequestID   string   `json:"latestRequestId,omitempty"`
+	LatestTaskID      string   `json:"latestTaskId,omitempty"`
+	PlanEpoch         int      `json:"planEpoch,omitempty"`
+	RequestIDs        []string `json:"requestIds,omitempty"`
+	TaskIDs           []string `json:"taskIds,omitempty"`
+	Status            string   `json:"status,omitempty"`
+	UpdatedAt         string   `json:"updatedAt,omitempty"`
+}
+
+type ThreadState struct {
+	state.Metadata
+	Threads map[string]ThreadEntry `json:"threads"`
+}
+
+type ChangeSummary struct {
+	state.Metadata
+	LatestRequestID  string `json:"latestRequestId,omitempty"`
+	LatestTaskID     string `json:"latestTaskId,omitempty"`
+	TargetThreadKey  string `json:"targetThreadKey,omitempty"`
+	ChangeKind       string `json:"changeKind,omitempty"`
+	Summary          string `json:"summary,omitempty"`
+	AffectsExecution bool   `json:"affectsExecution"`
+}
+
+type TodoSummary struct {
+	state.Metadata
+	NextTaskID      string   `json:"nextTaskId,omitempty"`
+	TaskIDs         []string `json:"taskIds,omitempty"`
+	PendingCount    int      `json:"pendingCount"`
+	ActiveThreadKey string   `json:"activeThreadKey,omitempty"`
+	LatestRequestID string   `json:"latestRequestId,omitempty"`
 }
 
 type RuntimeState struct {

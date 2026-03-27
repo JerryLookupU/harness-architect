@@ -23,6 +23,7 @@ type Paths struct {
 	DispatchSummaryPath       string
 	CheckpointSummaryPath     string
 	VerificationSummaryPath   string
+	ReleaseSnapshotPath       string
 	TmuxSummaryPath           string
 	CompletionGatePath        string
 	GuardStatePath            string
@@ -187,6 +188,7 @@ func Resolve(root string) (Paths, error) {
 		DispatchSummaryPath:       filepath.Join(stateDir, "dispatch-summary.json"),
 		CheckpointSummaryPath:     filepath.Join(stateDir, "checkpoint-summary.json"),
 		VerificationSummaryPath:   filepath.Join(stateDir, "verification-summary.json"),
+		ReleaseSnapshotPath:       filepath.Join(stateDir, "release-snapshot.json"),
 		TmuxSummaryPath:           filepath.Join(stateDir, "tmux-summary.json"),
 		CompletionGatePath:        filepath.Join(stateDir, "completion-gate.json"),
 		GuardStatePath:            filepath.Join(stateDir, "guard-state.json"),

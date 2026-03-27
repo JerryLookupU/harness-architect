@@ -44,6 +44,7 @@ type MethodologyContract struct {
 	GuidePath    string            `json:"guidePath"`
 	CoreRules    []string          `json:"coreRules"`
 	ActiveLenses []MethodologyLens `json:"activeLenses"`
+	ActiveSkills []string          `json:"activeSkills,omitempty"`
 }
 
 type JudgeDecision struct {
@@ -62,6 +63,8 @@ type ExecutionLoopContract struct {
 	Mode            string   `json:"mode"`
 	Owner           string   `json:"owner"`
 	SkillPath       string   `json:"skillPath"`
+	ActiveSkills    []string `json:"activeSkills,omitempty"`
+	SkillHints      []string `json:"skillHints,omitempty"`
 	Phases          []string `json:"phases"`
 	CoreRules       []string `json:"coreRules"`
 	RetryTransition string   `json:"retryTransition"`
@@ -227,6 +230,7 @@ func DefaultMethodologyContract(root string, reasonCodes []string) MethodologyCo
 			"close out honestly: name what changed, what was verified, and what remains risky",
 		},
 		ActiveLenses: methodologyLenses(reasonCodes),
+		ActiveSkills: activeSkills(reasonCodes),
 	}
 }
 
@@ -240,6 +244,12 @@ func DefaultJudgeDecision(loop PacketSynthesisLoop, methodology MethodologyContr
 	codes := uniqueStrings(reasonCodes)
 	if containsString(codes, "policy_bug_rca_first") {
 		rationale = append(rationale, "require failure evidence and one active hypothesis before implementation")
+	}
+	if containsString(codes, "policy_harness_state_first") {
+		rationale = append(rationale, "inspect control plane, execution plane, and operator plane before changing harness-oriented surfaces")
+	}
+	if containsString(codes, "policy_log_compact_first") {
+		rationale = append(rationale, "prefer compact log and hot-state evidence before expanding into raw runner logs")
 	}
 	if containsString(codes, "policy_options_before_plan") {
 		rationale = append(rationale, "compare options before narrowing to one execution packet")
@@ -271,12 +281,25 @@ func DefaultExecutionLoopContract(root string, reasonCodes []string) ExecutionLo
 		"verify with command/file evidence before claiming success",
 		"if verify or closeout fails, move to analysis and then re-enter execution",
 	}
+	hints := []string{
+		"skill docs are entry guidance; runtime contracts and worker prompt remain authoritative",
+	}
 	codes := uniqueStrings(reasonCodes)
 	if containsString(codes, "policy_bug_rca_first") {
 		rules = append(rules, "for bug flows, confirm evidence and one active hypothesis before changing code")
 	}
 	if containsString(codes, "policy_resume_state_first") {
 		rules = append(rules, "for resume flows, inspect state, sessions, and prior artifacts before continuing")
+		hints = append(hints, "prefer hot state, compact logs, and prior artifacts before resuming execution")
+	}
+	if containsString(codes, "policy_log_compact_first") {
+		hints = append(hints, "prefer compact log and index surfaces before falling back to raw runner logs")
+	}
+	if containsString(codes, "policy_harness_state_first") {
+		hints = append(hints, "inspect control plane first, then execution plane, then operator plane for harness-oriented tasks")
+	}
+	if containsString(codes, "policy_operator_surface_required") {
+		hints = append(hints, "close out with operator-visible overview, watch, or metrics surfaces when requested")
 	}
 	if containsString(codes, "policy_review_if_multi_file_or_high_risk") {
 		rules = append(rules, "for high-risk or multi-file work, include a short review pass before closeout")
@@ -285,6 +308,8 @@ func DefaultExecutionLoopContract(root string, reasonCodes []string) ExecutionLo
 		Mode:            "qiushi execution / validation loop",
 		Owner:           "worker + verify + runtime closeout",
 		SkillPath:       filepath.Join(root, "skills", "qiushi-execution", "SKILL.md"),
+		ActiveSkills:    activeSkills(reasonCodes),
+		SkillHints:      uniqueStrings(hints),
 		Phases:          []string{"investigate", "execute", "verify", "closeout", "analysis", "re-execute"},
 		CoreRules:       rules,
 		RetryTransition: "verify_not_passed -> analysis.required -> needs_replan -> next dispatch",
@@ -512,6 +537,36 @@ func methodologyLenses(reasonCodes []string) []MethodologyLens {
 			HookifyHint: "warn before resume without state inspection",
 		})
 	}
+	if containsString(codes, "policy_harness_state_first") {
+		lenses = append(lenses, MethodologyLens{
+			ID:          "harness-state-first",
+			Name:        "Harness State First",
+			Trigger:     "reasonCodes include policy_harness_state_first",
+			Effect:      "inspect control plane first, then execution plane, then operator plane before editing harness-oriented tasks",
+			Stage:       "route",
+			HookifyHint: "warn before editing harness tasks without state inspection",
+		})
+	}
+	if containsString(codes, "policy_log_compact_first") {
+		lenses = append(lenses, MethodologyLens{
+			ID:          "compact-log-first",
+			Name:        "Compact Log First",
+			Trigger:     "reasonCodes include policy_log_compact_first",
+			Effect:      "prefer compact log and hot state surfaces before raw runner logs",
+			Stage:       "worker",
+			HookifyHint: "warn before broad raw log scans",
+		})
+	}
+	if containsString(codes, "policy_operator_surface_required") {
+		lenses = append(lenses, MethodologyLens{
+			ID:          "operator-surface-required",
+			Name:        "Operator Surface Required",
+			Trigger:     "reasonCodes include policy_operator_surface_required",
+			Effect:      "ensure overview, watch, or metrics-facing surfaces are part of closeout when explicitly requested",
+			Stage:       "closeout",
+			HookifyHint: "warn before closing without operator-visible outputs",
+		})
+	}
 	if containsString(codes, "policy_review_if_multi_file_or_high_risk") {
 		lenses = append(lenses, MethodologyLens{
 			ID:          "review-before-done",
@@ -708,6 +763,24 @@ func loadPromptOrFallback(path, fallback string) string {
 	return text
 }
 
+func activeSkills(reasonCodes []string) []string {
+	codes := uniqueStrings(reasonCodes)
+	skills := []string{"qiushi-execution"}
+	if containsString(codes, "policy_bug_rca_first") {
+		skills = append(skills, "systematic-debugging")
+	}
+	if containsString(codes, "policy_options_before_plan") {
+		skills = append(skills, "blueprint-architect")
+	}
+	if containsString(codes, "policy_resume_state_first") || containsString(codes, "policy_log_compact_first") {
+		skills = append(skills, "harness-log-search-cskill")
+	}
+	if containsString(codes, "policy_harness_state_first") {
+		skills = append(skills, "klein-harness")
+	}
+	return uniqueStrings(skills)
+}
+
 func uniqueStrings(values []string) []string {
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(values))
@@ -736,6 +809,10 @@ func containsString(values []string, target string) bool {
 func selectedFlow(reasonCodes []string) string {
 	codes := uniqueStrings(reasonCodes)
 	switch {
+	case containsString(codes, "policy_harness_state_first"):
+		return "harness-state-first packet"
+	case containsString(codes, "policy_log_compact_first"):
+		return "compact-log-first packet"
 	case containsString(codes, "policy_bug_rca_first"):
 		return "debugging-first bounded packet"
 	case containsString(codes, "policy_options_before_plan"):

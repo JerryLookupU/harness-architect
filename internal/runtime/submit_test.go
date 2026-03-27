@@ -1,0 +1,313 @@
+package runtime
+
+import (
+	"path/filepath"
+	"testing"
+
+	"klein-harness/internal/adapter"
+	"klein-harness/internal/bootstrap"
+	"klein-harness/internal/state"
+)
+
+func TestSubmitWritesIntakeThreadChangeAndTodoSummaries(t *testing.T) {
+	root := t.TempDir()
+	if _, err := bootstrap.Init(root); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	result, err := Submit(SubmitRequest{
+		Root:     root,
+		Goal:     "Implement thread-aware intake",
+		Contexts: []string{"docs/prd.md"},
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if result.Request.ThreadKey == "" || result.Task.ThreadKey == "" {
+		t.Fatalf("expected thread keys on request/task: %+v %+v", result.Request, result.Task)
+	}
+	if result.Request.ThreadKey != result.Task.ThreadKey {
+		t.Fatalf("expected request and task to share thread key: %+v %+v", result.Request, result.Task)
+	}
+	if result.Request.FrontDoorTriage == "" || result.Request.NormalizedIntentClass == "" || result.Request.FusionDecision == "" {
+		t.Fatalf("expected intake metadata on request: %+v", result.Request)
+	}
+
+	var intake IntakeSummary
+	if err := state.LoadJSON(filepath.Join(root, ".harness", "state", "intake-summary.json"), &intake); err != nil {
+		t.Fatalf("load intake summary: %v", err)
+	}
+	if intake.LatestRequestID != result.Request.RequestID || intake.LatestThreadKey != result.Task.ThreadKey {
+		t.Fatalf("unexpected intake summary: %+v", intake)
+	}
+
+	var threadState ThreadState
+	if err := state.LoadJSON(filepath.Join(root, ".harness", "state", "thread-state.json"), &threadState); err != nil {
+		t.Fatalf("load thread state: %v", err)
+	}
+	thread := threadState.Threads[result.Task.ThreadKey]
+	if thread.LatestTaskID != result.Task.TaskID || len(thread.TaskIDs) != 1 {
+		t.Fatalf("unexpected thread state: %+v", threadState)
+	}
+
+	var change ChangeSummary
+	if err := state.LoadJSON(filepath.Join(root, ".harness", "state", "change-summary.json"), &change); err != nil {
+		t.Fatalf("load change summary: %v", err)
+	}
+	if change.LatestTaskID != result.Task.TaskID || change.TargetThreadKey != result.Task.ThreadKey {
+		t.Fatalf("unexpected change summary: %+v", change)
+	}
+
+	var todo TodoSummary
+	if err := state.LoadJSON(filepath.Join(root, ".harness", "state", "todo-summary.json"), &todo); err != nil {
+		t.Fatalf("load todo summary: %v", err)
+	}
+	if todo.NextTaskID != result.Task.TaskID || todo.PendingCount != 1 {
+		t.Fatalf("unexpected todo summary: %+v", todo)
+	}
+}
+
+func TestSubmitReusesExistingThreadForSameCanonicalGoal(t *testing.T) {
+	root := t.TempDir()
+	if _, err := bootstrap.Init(root); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	first, err := Submit(SubmitRequest{
+		Root: root,
+		Goal: "Fix runtime verify bug",
+	})
+	if err != nil {
+		t.Fatalf("first submit: %v", err)
+	}
+	second, err := Submit(SubmitRequest{
+		Root:     root,
+		Goal:     "Fix runtime   verify bug",
+		Contexts: []string{"logs/run-2.txt"},
+	})
+	if err != nil {
+		t.Fatalf("second submit: %v", err)
+	}
+	if second.Task.ThreadKey != first.Task.ThreadKey {
+		t.Fatalf("expected second submit to bind to existing thread: first=%s second=%s", first.Task.ThreadKey, second.Task.ThreadKey)
+	}
+	if second.Request.FusionDecision != "accepted_existing_thread" {
+		t.Fatalf("expected existing-thread fusion: %+v", second.Request)
+	}
+	if second.Request.NormalizedIntentClass != "context_enrichment" {
+		t.Fatalf("expected context enrichment classification: %+v", second.Request)
+	}
+
+	var threadState ThreadState
+	if err := state.LoadJSON(filepath.Join(root, ".harness", "state", "thread-state.json"), &threadState); err != nil {
+		t.Fatalf("load thread state: %v", err)
+	}
+	thread := threadState.Threads[first.Task.ThreadKey]
+	if len(thread.TaskIDs) != 2 || len(thread.RequestIDs) != 2 {
+		t.Fatalf("expected two requests/tasks on shared thread: %+v", thread)
+	}
+}
+
+func TestSubmitCarriesForwardMatchedThreadPlanEpoch(t *testing.T) {
+	root := t.TempDir()
+	if _, err := bootstrap.Init(root); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if err := adapter.UpsertTask(root, adapter.Task{
+		TaskID:    "T-7",
+		ThreadKey: "thread-7",
+		Title:     "Refine runtime intake",
+		Summary:   "Refine runtime intake",
+		PlanEpoch: 4,
+		Status:    "needs_replan",
+	}); err != nil {
+		t.Fatalf("upsert seed task: %v", err)
+	}
+
+	result, err := Submit(SubmitRequest{
+		Root: root,
+		Goal: "Refine runtime intake",
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if result.Request.TargetPlanEpoch != 4 {
+		t.Fatalf("expected target plan epoch to reuse matched thread epoch: %+v", result.Request)
+	}
+	if result.Task.PlanEpoch != 4 {
+		t.Fatalf("expected task plan epoch to reuse matched thread epoch: %+v", result.Task)
+	}
+	if result.Task.ThreadKey != "thread-7" {
+		t.Fatalf("expected matched thread key, got %+v", result.Task)
+	}
+}
+
+func TestRefreshTodoSummaryTracksPendingTasksAfterStatusChanges(t *testing.T) {
+	root := t.TempDir()
+	paths, err := bootstrap.Init(root)
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	seed := []adapter.Task{
+		{TaskID: "T-1", ThreadKey: "thread-1", Summary: "queued", Status: "queued"},
+		{TaskID: "T-2", ThreadKey: "thread-2", Summary: "running", Status: "running"},
+		{TaskID: "T-3", ThreadKey: "thread-3", Summary: "done", Status: "completed"},
+	}
+	for _, task := range seed {
+		if err := adapter.UpsertTask(root, task); err != nil {
+			t.Fatalf("upsert task %s: %v", task.TaskID, err)
+		}
+	}
+
+	if err := refreshTodoSummary(paths, "thread-2", "R-2"); err != nil {
+		t.Fatalf("refresh todo summary: %v", err)
+	}
+
+	var todo TodoSummary
+	if err := state.LoadJSON(filepath.Join(root, ".harness", "state", "todo-summary.json"), &todo); err != nil {
+		t.Fatalf("load todo summary: %v", err)
+	}
+	if todo.PendingCount != 2 {
+		t.Fatalf("expected only queued/running tasks to remain pending: %+v", todo)
+	}
+	if len(todo.TaskIDs) != 2 || todo.TaskIDs[0] != "T-1" || todo.TaskIDs[1] != "T-2" {
+		t.Fatalf("unexpected todo task ids: %+v", todo.TaskIDs)
+	}
+}
+
+func TestRefreshExecutionIndexesUpdatesThreadStateAfterRuntimeTransition(t *testing.T) {
+	root := t.TempDir()
+	paths, err := bootstrap.Init(root)
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	task := adapter.Task{
+		TaskID:      "T-9",
+		ThreadKey:   "thread-9",
+		Title:       "Runtime refresh",
+		Summary:     "Runtime refresh",
+		PlanEpoch:   2,
+		Status:      "completed",
+		UpdatedAt:   "2026-03-26T10:30:00Z",
+		CompletedAt: "2026-03-26T10:30:00Z",
+	}
+	if err := adapter.UpsertTask(root, task); err != nil {
+		t.Fatalf("upsert task: %v", err)
+	}
+
+	if err := refreshExecutionIndexes(paths, task, "", "goalhash-9"); err != nil {
+		t.Fatalf("refresh execution indexes: %v", err)
+	}
+
+	var threadState ThreadState
+	if err := state.LoadJSON(filepath.Join(root, ".harness", "state", "thread-state.json"), &threadState); err != nil {
+		t.Fatalf("load thread state: %v", err)
+	}
+	entry := threadState.Threads["thread-9"]
+	if entry.Status != "completed" || entry.PlanEpoch != 2 || entry.LatestTaskID != "T-9" {
+		t.Fatalf("unexpected thread entry after refresh: %+v", entry)
+	}
+}
+
+func TestRunOnceRoutesContextEnrichmentToNeedsReplan(t *testing.T) {
+	root := t.TempDir()
+	if _, err := bootstrap.Init(root); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	first, err := Submit(SubmitRequest{
+		Root: root,
+		Goal: "Refine runtime intake",
+	})
+	if err != nil {
+		t.Fatalf("first submit: %v", err)
+	}
+	if err := updateTask(root, first.Task.TaskID, func(current *adapter.Task) {
+		current.Status = "completed"
+		current.UpdatedAt = state.NowUTC()
+	}); err != nil {
+		t.Fatalf("complete first task: %v", err)
+	}
+
+	second, err := Submit(SubmitRequest{
+		Root:     root,
+		Goal:     "Refine runtime intake",
+		Contexts: []string{"docs/new-context.md"},
+	})
+	if err != nil {
+		t.Fatalf("second submit: %v", err)
+	}
+
+	result, err := RunOnce(root, RunOptions{})
+	if err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+	if result.RuntimeStatus != "needs_replan" {
+		t.Fatalf("expected needs_replan runtime status, got %+v", result)
+	}
+	if result.Route.Route != "replan" || result.Route.DispatchReady {
+		t.Fatalf("expected replan route decision, got %+v", result.Route)
+	}
+	if !containsString(result.Route.ReasonCodes, "context_enrichment_requires_replan") {
+		t.Fatalf("expected context enrichment reason code, got %+v", result.Route.ReasonCodes)
+	}
+
+	task, err := adapter.LoadTask(root, second.Task.TaskID)
+	if err != nil {
+		t.Fatalf("load second task: %v", err)
+	}
+	if task.Status != "needs_replan" {
+		t.Fatalf("expected second task to move into needs_replan, got %+v", task)
+	}
+}
+
+func TestBuildRouteInputCarriesIntakeSignals(t *testing.T) {
+	root := t.TempDir()
+	if _, err := bootstrap.Init(root); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	first, err := Submit(SubmitRequest{
+		Root: root,
+		Goal: "Refine route helper",
+	})
+	if err != nil {
+		t.Fatalf("first submit: %v", err)
+	}
+	second, err := Submit(SubmitRequest{
+		Root:     root,
+		Goal:     "Refine route helper",
+		Contexts: []string{"docs/helper.md"},
+	})
+	if err != nil {
+		t.Fatalf("second submit: %v", err)
+	}
+
+	input, err := BuildRouteInput(root, second.Task, second.Task.PlanEpoch, false, false, "state.v9")
+	if err != nil {
+		t.Fatalf("build route input: %v", err)
+	}
+	if input.FusionDecision != "accepted_existing_thread" {
+		t.Fatalf("expected fusion decision from latest request, got %+v", input)
+	}
+	if input.NormalizedIntentClass != "context_enrichment" {
+		t.Fatalf("expected context enrichment class, got %+v", input)
+	}
+	if input.PendingTaskCount != 2 {
+		t.Fatalf("expected pending task count from todo summary, got %+v", input)
+	}
+	if input.RequiredSummaryVersion != "state.v9" {
+		t.Fatalf("expected required summary version passthrough, got %+v", input)
+	}
+	if input.TaskID != second.Task.TaskID || input.TaskID == first.Task.TaskID {
+		t.Fatalf("expected route input to bind to second task, got %+v", input)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}

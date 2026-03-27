@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -61,6 +62,18 @@ type RunResult struct {
 	FollowUpEvent string          `json:"followUpEvent,omitempty"`
 }
 
+type submitClassification struct {
+	FrontDoorTriage       string
+	NormalizedIntentClass string
+	FusionDecision        string
+	TargetThreadKey       string
+	TargetPlanEpoch       int
+	IdempotencyKey        string
+	CanonicalGoalHash     string
+	EvidenceFingerprint   string
+	ClassificationReason  string
+}
+
 func Submit(request SubmitRequest) (SubmitResult, error) {
 	if strings.TrimSpace(request.Goal) == "" {
 		return SubmitResult{}, errors.New("goal is required")
@@ -80,9 +93,13 @@ func Submit(request SubmitRequest) (SubmitResult, error) {
 	if kind == "" {
 		kind = inferKind(request.Goal)
 	}
+	classification := classifySubmission(request, pool.Tasks)
+	if strings.TrimSpace(classification.TargetThreadKey) == "" {
+		classification.TargetThreadKey = requestID
+	}
 	task := adapter.Task{
 		TaskID:                 taskID,
-		ThreadKey:              requestID,
+		ThreadKey:              classification.TargetThreadKey,
 		Kind:                   kind,
 		RoleHint:               "worker",
 		Title:                  shortTitle(request.Goal),
@@ -91,7 +108,7 @@ func Submit(request SubmitRequest) (SubmitResult, error) {
 		WorkerMode:             "execution",
 		Status:                 "queued",
 		StatusReason:           "submitted",
-		PlanEpoch:              1,
+		PlanEpoch:              maxInt(classification.TargetPlanEpoch, 1),
 		OwnedPaths:             defaultOwnedPaths(paths.Root),
 		ForbiddenPaths:         []string{".git/**", ".harness/**"},
 		VerificationRuleIDs:    []string{},
@@ -113,16 +130,29 @@ func Submit(request SubmitRequest) (SubmitResult, error) {
 		return SubmitResult{}, err
 	}
 	record := RequestRecord{
-		RequestID: requestID,
-		TaskID:    taskID,
-		Kind:      kind,
-		Goal:      request.Goal,
-		Contexts:  uniqueNonEmpty(request.Contexts),
-		Status:    "queued",
-		CreatedAt: now,
-		UpdatedAt: now,
+		RequestID:             requestID,
+		TaskID:                taskID,
+		ThreadKey:             classification.TargetThreadKey,
+		TargetThreadKey:       classification.TargetThreadKey,
+		TargetPlanEpoch:       classification.TargetPlanEpoch,
+		Kind:                  kind,
+		Goal:                  request.Goal,
+		Contexts:              uniqueNonEmpty(request.Contexts),
+		Status:                "queued",
+		FrontDoorTriage:       classification.FrontDoorTriage,
+		NormalizedIntentClass: classification.NormalizedIntentClass,
+		FusionDecision:        classification.FusionDecision,
+		IdempotencyKey:        classification.IdempotencyKey,
+		CanonicalGoalHash:     classification.CanonicalGoalHash,
+		EvidenceFingerprint:   classification.EvidenceFingerprint,
+		ClassificationReason:  classification.ClassificationReason,
+		CreatedAt:             now,
+		UpdatedAt:             now,
 	}
 	if err := appendRequest(paths.QueuePath, record); err != nil {
+		return SubmitResult{}, err
+	}
+	if err := updateIntakeState(paths, record, task); err != nil {
 		return SubmitResult{}, err
 	}
 	if err := updateRuntime(paths.RuntimePath, func(current RuntimeState) RuntimeState {
@@ -205,25 +235,11 @@ func RunOnce(root string, options RunOptions) (RunResult, error) {
 			}
 		}
 	}
-	decision := route.Evaluate(route.Input{
-		TaskID:                    task.TaskID,
-		RoleHint:                  task.RoleHint,
-		Kind:                      task.Kind,
-		Title:                     task.Title,
-		Summary:                   strings.TrimSpace(strings.Join([]string{task.Summary, task.Description}, "\n")),
-		WorkerMode:                task.WorkerMode,
-		PlanEpoch:                 task.PlanEpoch,
-		LatestPlanEpoch:           latestPlanEpoch,
-		ResumeStrategy:            task.ResumeStrategy,
-		PreferredResumeSessionID:  task.PreferredResumeSessionID,
-		CandidateResumeSessionIDs: task.CandidateResumeSessionIDs,
-		SessionContested:          sessionContested,
-		CheckpointRequired:        task.CheckpointRequired,
-		CheckpointFresh:           checkpointFresh,
-		WorktreePath:              adapter.TaskCWD(paths, task),
-		OwnedPaths:                task.OwnedPaths,
-		RequiredSummaryVersion:    runtimeSummaryVersion(paths.RuntimePath),
-	})
+	routeInput, err := BuildRouteInput(paths.Root, task, latestPlanEpoch, checkpointFresh, sessionContested, runtimeSummaryVersion(paths.RuntimePath))
+	if err != nil {
+		return RunResult{}, err
+	}
+	decision := route.Evaluate(routeInput)
 	if !decision.DispatchReady {
 		status := "blocked"
 		if decision.Route == "replan" {
@@ -244,9 +260,16 @@ func RunOnce(root string, options RunOptions) (RunResult, error) {
 		}); err != nil {
 			return RunResult{}, err
 		}
+		updatedTask, loadErr := adapter.LoadTask(paths.Root, task.TaskID)
+		if loadErr != nil {
+			return RunResult{}, loadErr
+		}
+		if err := refreshExecutionIndexes(paths, updatedTask, "", ""); err != nil {
+			return RunResult{}, err
+		}
 		return RunResult{
 			RuntimeStatus: status,
-			Task:          task,
+			Task:          updatedTask,
 			Route:         decision,
 		}, nil
 	}
@@ -557,6 +580,9 @@ func RunOnce(root string, options RunOptions) (RunResult, error) {
 	if err != nil {
 		return RunResult{}, err
 	}
+	if err := refreshExecutionIndexes(paths, finalTask, "", ""); err != nil {
+		return RunResult{}, err
+	}
 	return RunResult{
 		RuntimeStatus: taskStatus,
 		Task:          finalTask,
@@ -579,6 +605,104 @@ func Loop(root string, interval time.Duration, options RunOptions) error {
 		}
 		time.Sleep(interval)
 	}
+}
+
+func classifySubmission(request SubmitRequest, tasks []adapter.Task) submitClassification {
+	goal := strings.TrimSpace(request.Goal)
+	contexts := uniqueNonEmpty(request.Contexts)
+	canonicalGoal := normalizeGoal(goal)
+	canonicalGoalHash := hashString(canonicalGoal)
+	evidenceFingerprint := hashString(strings.Join(contexts, "\n"))
+	frontDoorTriage := frontDoorTriage(goal, contexts)
+	intentClass := "fresh_work"
+	fusionDecision := "accepted_new_thread"
+	targetThreadKey := ""
+	targetPlanEpoch := 1
+	classificationReason := "new goal created a new execution thread"
+
+	if match, ok := latestMatchingTask(tasks, canonicalGoalHash); ok {
+		targetThreadKey = match.ThreadKey
+		if targetThreadKey == "" {
+			targetThreadKey = match.TaskID
+		}
+		targetPlanEpoch = maxInt(match.PlanEpoch, 1)
+		frontDoorTriage = "duplicate_or_context"
+		if len(contexts) > 0 {
+			intentClass = "context_enrichment"
+			fusionDecision = "accepted_existing_thread"
+			classificationReason = "same canonical goal with new context was attached to an existing thread"
+		} else {
+			intentClass = "append_change"
+			fusionDecision = "accepted_existing_thread"
+			classificationReason = "same canonical goal was bound to an existing thread for progressive execution"
+		}
+	} else {
+		targetThreadKey = ""
+	}
+	if frontDoorTriage == "inspection" {
+		intentClass = "inspection"
+		if fusionDecision == "accepted_new_thread" {
+			classificationReason = "inspection-like request kept a new thread because no matching execution thread existed"
+		}
+	}
+	return submitClassification{
+		FrontDoorTriage:       frontDoorTriage,
+		NormalizedIntentClass: intentClass,
+		FusionDecision:        fusionDecision,
+		TargetThreadKey:       targetThreadKey,
+		TargetPlanEpoch:       targetPlanEpoch,
+		IdempotencyKey:        "submit:" + canonicalGoalHash + ":" + evidenceFingerprint,
+		CanonicalGoalHash:     canonicalGoalHash,
+		EvidenceFingerprint:   evidenceFingerprint,
+		ClassificationReason:  classificationReason,
+	}
+}
+
+func updateIntakeState(paths adapter.Paths, record RequestRecord, task adapter.Task) error {
+	intakeSummaryPath := filepath.Join(paths.StateDir, "intake-summary.json")
+	changeSummaryPath := filepath.Join(paths.StateDir, "change-summary.json")
+	threadKey := coalesce(record.TargetThreadKey, record.ThreadKey, task.ThreadKey, task.TaskID)
+	if err := refreshThreadState(paths, task, record.RequestID, record.CanonicalGoalHash); err != nil {
+		return err
+	}
+	threadState, err := loadThreadState(filepath.Join(paths.StateDir, "thread-state.json"))
+	if err != nil {
+		return err
+	}
+
+	intakeSummary := IntakeSummary{}
+	if _, err := state.LoadJSONIfExists(intakeSummaryPath, &intakeSummary); err != nil {
+		return err
+	}
+	intakeSummary.LatestRequestID = record.RequestID
+	intakeSummary.LatestTaskID = task.TaskID
+	intakeSummary.LatestThreadKey = threadKey
+	intakeSummary.FrontDoorTriage = record.FrontDoorTriage
+	intakeSummary.NormalizedIntentClass = record.NormalizedIntentClass
+	intakeSummary.FusionDecision = record.FusionDecision
+	intakeSummary.RequestCount++
+	intakeSummary.ActiveThreadCount = len(threadState.Threads)
+	if _, err := state.WriteSnapshot(intakeSummaryPath, &intakeSummary, "harness-runtime", intakeSummary.Revision); err != nil {
+		return err
+	}
+
+	changeSummary := ChangeSummary{}
+	if _, err := state.LoadJSONIfExists(changeSummaryPath, &changeSummary); err != nil {
+		return err
+	}
+	changeSummary.LatestRequestID = record.RequestID
+	changeSummary.LatestTaskID = task.TaskID
+	changeSummary.TargetThreadKey = threadKey
+	changeSummary.ChangeKind = record.NormalizedIntentClass
+	changeSummary.Summary = record.ClassificationReason
+	changeSummary.AffectsExecution = record.FrontDoorTriage != "advisory_read_only"
+	if _, err := state.WriteSnapshot(changeSummaryPath, &changeSummary, "harness-runtime", changeSummary.Revision); err != nil {
+		return err
+	}
+	if err := refreshTodoSummary(paths, threadKey, record.RequestID); err != nil {
+		return err
+	}
+	return nil
 }
 
 func nextRunnableTask(root string) (adapter.Task, bool, error) {
@@ -615,6 +739,10 @@ func shouldEnterAnalysisLoop(burstStatus, verifyStatus, followUp string, verifyE
 		return true
 	}
 	return false
+}
+
+func ShouldEnterAnalysisLoop(burstStatus, verifyStatus, followUp string, verifyErr error) bool {
+	return shouldEnterAnalysisLoop(burstStatus, verifyStatus, followUp, verifyErr)
 }
 
 func analysisPromptStages() []string {
@@ -671,6 +799,83 @@ func appendRequest(path string, record RequestRecord) error {
 	defer handle.Close()
 	_, err = handle.Write(append(payload, '\n'))
 	return err
+}
+
+func BuildRouteInput(root string, task adapter.Task, latestPlanEpoch int, checkpointFresh, sessionContested bool, requiredSummaryVersion string) (route.Input, error) {
+	paths, err := adapter.Resolve(root)
+	if err != nil {
+		return route.Input{}, err
+	}
+	requestRecord, _, err := loadLatestRequestForTask(paths.QueuePath, task.TaskID)
+	if err != nil {
+		return route.Input{}, err
+	}
+	todoSummary, _, err := loadTodoSummary(filepath.Join(paths.StateDir, "todo-summary.json"))
+	if err != nil {
+		return route.Input{}, err
+	}
+	return route.Input{
+		TaskID:                    task.TaskID,
+		RoleHint:                  task.RoleHint,
+		Kind:                      task.Kind,
+		Title:                     task.Title,
+		Summary:                   strings.TrimSpace(strings.Join([]string{task.Summary, task.Description}, "\n")),
+		FrontDoorTriage:           requestRecord.FrontDoorTriage,
+		NormalizedIntentClass:     requestRecord.NormalizedIntentClass,
+		FusionDecision:            requestRecord.FusionDecision,
+		ChangeAffectsExecution:    requestRecord.FrontDoorTriage != "advisory_read_only" && requestRecord.NormalizedIntentClass != "inspection",
+		PendingTaskCount:          todoSummary.PendingCount,
+		WorkerMode:                task.WorkerMode,
+		PlanEpoch:                 task.PlanEpoch,
+		LatestPlanEpoch:           latestPlanEpoch,
+		ResumeStrategy:            task.ResumeStrategy,
+		PreferredResumeSessionID:  task.PreferredResumeSessionID,
+		CandidateResumeSessionIDs: task.CandidateResumeSessionIDs,
+		SessionContested:          sessionContested,
+		CheckpointRequired:        task.CheckpointRequired,
+		CheckpointFresh:           checkpointFresh,
+		WorktreePath:              adapter.TaskCWD(paths, task),
+		OwnedPaths:                task.OwnedPaths,
+		RequiredSummaryVersion:    requiredSummaryVersion,
+	}, nil
+}
+
+func RefreshExecutionIndexesForTask(root string, task adapter.Task) error {
+	paths, err := adapter.Resolve(root)
+	if err != nil {
+		return err
+	}
+	return refreshExecutionIndexes(paths, task, "", "")
+}
+
+func loadLatestRequestForTask(queuePath, taskID string) (RequestRecord, bool, error) {
+	file, err := os.Open(queuePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return RequestRecord{}, false, nil
+		}
+		return RequestRecord{}, false, err
+	}
+	defer file.Close()
+
+	found := false
+	latest := RequestRecord{}
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		var record RequestRecord
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			continue
+		}
+		if record.TaskID != taskID {
+			continue
+		}
+		latest = record
+		found = true
+	}
+	if err := scanner.Err(); err != nil {
+		return RequestRecord{}, false, err
+	}
+	return latest, found, nil
 }
 
 func updateTask(root, taskID string, update func(*adapter.Task)) error {
@@ -786,6 +991,168 @@ func runtimeSummaryVersion(path string) string {
 	return "runtime:" + payload.GeneratedAt
 }
 
+func normalizeGoal(goal string) string {
+	goal = strings.ToLower(strings.TrimSpace(goal))
+	space := regexp.MustCompile(`\s+`)
+	return space.ReplaceAllString(goal, " ")
+}
+
+func hashString(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return fmt.Sprintf("%x", sum[:8])
+}
+
+func latestMatchingTask(tasks []adapter.Task, canonicalGoalHash string) (adapter.Task, bool) {
+	for index := len(tasks) - 1; index >= 0; index-- {
+		task := tasks[index]
+		if hashString(normalizeGoal(task.Summary)) != canonicalGoalHash {
+			continue
+		}
+		return task, true
+	}
+	return adapter.Task{}, false
+}
+
+func frontDoorTriage(goal string, contexts []string) string {
+	signal := strings.ToLower(strings.TrimSpace(goal))
+	switch {
+	case matchesSignal(signal, "inspect", "status", "show", "list", "what is", "what's", "read only"):
+		return "inspection"
+	case matchesSignal(signal, "advice", "recommendation", "compare options", "trade-off", "tradeoff"):
+		return "advisory_read_only"
+	case len(contexts) > 0:
+		return "duplicate_or_context"
+	default:
+		return "work_order"
+	}
+}
+
+func matchesSignal(signal string, needles ...string) bool {
+	for _, needle := range needles {
+		if strings.Contains(signal, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func appendUnique(values []string, value string) []string {
+	for _, item := range values {
+		if item == value {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
+func firstString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func maxInt(values ...int) int {
+	maxValue := 0
+	for _, value := range values {
+		if value > maxValue {
+			maxValue = value
+		}
+	}
+	return maxValue
+}
+
+func refreshExecutionIndexes(paths adapter.Paths, task adapter.Task, latestRequestID, canonicalGoalHash string) error {
+	if err := refreshThreadState(paths, task, latestRequestID, canonicalGoalHash); err != nil {
+		return err
+	}
+	if err := refreshTodoSummary(paths, task.ThreadKey, latestRequestID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func refreshThreadState(paths adapter.Paths, task adapter.Task, latestRequestID, canonicalGoalHash string) error {
+	threadKey := firstString(task.ThreadKey, task.TaskID)
+	if threadKey == "" {
+		return nil
+	}
+	threadStatePath := filepath.Join(paths.StateDir, "thread-state.json")
+	threadState, err := loadThreadState(threadStatePath)
+	if err != nil {
+		return err
+	}
+	threadEntry := threadState.Threads[threadKey]
+	threadEntry.ThreadKey = threadKey
+	if canonicalGoalHash != "" {
+		threadEntry.CanonicalGoalHash = canonicalGoalHash
+	}
+	if latestRequestID != "" {
+		threadEntry.LatestRequestID = latestRequestID
+		threadEntry.RequestIDs = appendUnique(threadEntry.RequestIDs, latestRequestID)
+	}
+	threadEntry.LatestTaskID = task.TaskID
+	threadEntry.PlanEpoch = maxInt(threadEntry.PlanEpoch, task.PlanEpoch)
+	threadEntry.TaskIDs = appendUnique(threadEntry.TaskIDs, task.TaskID)
+	threadEntry.Status = task.Status
+	threadEntry.UpdatedAt = task.UpdatedAt
+	threadState.Threads[threadKey] = threadEntry
+	_, err = state.WriteSnapshot(threadStatePath, &threadState, "harness-runtime", threadState.Revision)
+	return err
+}
+
+func loadThreadState(path string) (ThreadState, error) {
+	threadState := ThreadState{Threads: map[string]ThreadEntry{}}
+	if _, err := state.LoadJSONIfExists(path, &threadState); err != nil {
+		return ThreadState{}, err
+	}
+	if threadState.Threads == nil {
+		threadState.Threads = map[string]ThreadEntry{}
+	}
+	return threadState, nil
+}
+
+func loadTodoSummary(path string) (TodoSummary, bool, error) {
+	todoSummary := TodoSummary{}
+	ok, err := state.LoadJSONIfExists(path, &todoSummary)
+	if err != nil {
+		return TodoSummary{}, false, err
+	}
+	return todoSummary, ok, nil
+}
+
+func refreshTodoSummary(paths adapter.Paths, activeThreadKey, latestRequestID string) error {
+	todoSummaryPath := filepath.Join(paths.StateDir, "todo-summary.json")
+	pool, err := adapter.LoadTaskPool(paths.Root)
+	if err != nil {
+		return err
+	}
+	todoIDs := make([]string, 0)
+	for _, item := range pool.Tasks {
+		switch item.Status {
+		case "", "queued", "needs_replan", "recoverable", "routing", "running":
+			todoIDs = append(todoIDs, item.TaskID)
+		}
+	}
+	todoSummary, _, err := loadTodoSummary(todoSummaryPath)
+	if err != nil {
+		return err
+	}
+	todoSummary.NextTaskID = firstString(todoIDs...)
+	todoSummary.TaskIDs = todoIDs
+	todoSummary.PendingCount = len(todoIDs)
+	if activeThreadKey != "" {
+		todoSummary.ActiveThreadKey = activeThreadKey
+	}
+	if latestRequestID != "" {
+		todoSummary.LatestRequestID = latestRequestID
+	}
+	_, err = state.WriteSnapshot(todoSummaryPath, &todoSummary, "harness-runtime", todoSummary.Revision)
+	return err
+}
+
 func resolveCommand(command string, replacements map[string]string) string {
 	resolved := command
 	for key, value := range replacements {
@@ -808,7 +1175,7 @@ func deriveVerification(artifactDir, burstStatus, burstSummary string) (string, 
 	if err := json.Unmarshal(payload, &decoded); err != nil {
 		return "failed", "verification artifact is invalid JSON", verifyPath
 	}
-	summary := coalesce(stringValue(decoded["summary"]), burstSummary, "verification completed")
+	summary := coalesce(stringValue(decoded["overallSummary"]), stringValue(decoded["summary"]), burstSummary, "verification completed")
 	status := strings.ToLower(strings.TrimSpace(stringValue(decoded["status"])))
 	overall := strings.ToLower(strings.TrimSpace(stringValue(decoded["overallStatus"])))
 	result := strings.ToLower(strings.TrimSpace(stringValue(decoded["result"])))
@@ -820,6 +1187,10 @@ func deriveVerification(artifactDir, burstStatus, burstSummary string) (string, 
 	default:
 		return "passed", summary, verifyPath
 	}
+}
+
+func DeriveVerification(artifactDir, burstStatus, burstSummary string) (string, string, string) {
+	return deriveVerification(artifactDir, burstStatus, burstSummary)
 }
 
 func ownedPathViolation(artifactDir string, ownedPaths []string) (string, bool) {

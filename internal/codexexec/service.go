@@ -20,8 +20,10 @@ import (
 	"klein-harness/internal/lease"
 	"klein-harness/internal/orchestration"
 	"klein-harness/internal/route"
+	runtimepkg "klein-harness/internal/runtime"
 	"klein-harness/internal/state"
 	"klein-harness/internal/tmux"
+	"klein-harness/internal/verify"
 	"klein-harness/internal/worker"
 )
 
@@ -144,6 +146,9 @@ func run(request Request, resume bool) (Result, error) {
 	if err := adapter.UpsertTask(root, task); err != nil {
 		return Result{}, err
 	}
+	if err := runtimepkg.RefreshExecutionIndexesForTask(root, task); err != nil {
+		return Result{}, err
+	}
 	latestPlanEpoch, err := adapter.LoadLatestPlanEpoch(root, task)
 	if err != nil {
 		return Result{}, err
@@ -161,25 +166,11 @@ func run(request Request, resume bool) (Result, error) {
 			}
 		}
 	}
-	decision := route.Evaluate(route.Input{
-		TaskID:                    task.TaskID,
-		RoleHint:                  task.RoleHint,
-		Kind:                      task.Kind,
-		Title:                     task.Title,
-		Summary:                   task.Summary + "\n" + task.Description,
-		WorkerMode:                task.WorkerMode,
-		PlanEpoch:                 task.PlanEpoch,
-		LatestPlanEpoch:           latestPlanEpoch,
-		ResumeStrategy:            task.ResumeStrategy,
-		PreferredResumeSessionID:  task.PreferredResumeSessionID,
-		CandidateResumeSessionIDs: task.CandidateResumeSessionIDs,
-		SessionContested:          sessionContested,
-		CheckpointRequired:        task.CheckpointRequired,
-		CheckpointFresh:           checkpointFresh,
-		WorktreePath:              adapter.TaskCWD(mustResolve(root), task),
-		OwnedPaths:                task.OwnedPaths,
-		RequiredSummaryVersion:    "state.v1",
-	})
+	routeInput, err := runtimepkg.BuildRouteInput(root, task, latestPlanEpoch, checkpointFresh, sessionContested, "state.v1")
+	if err != nil {
+		return Result{}, err
+	}
+	decision := route.Evaluate(routeInput)
 	registry = upsertRoutingDecision(registry, adapter.RoutingDecisionRecord{
 		TaskID:                    task.TaskID,
 		OrchestrationSessionID:    orchestratorID,
@@ -222,6 +213,15 @@ func run(request Request, resume bool) (Result, error) {
 		return Result{}, err
 	}
 	if !decision.DispatchReady {
+		task.Status = statusForRouteDecision(decision.Route)
+		task.StatusReason = strings.Join(decision.ReasonCodes, ", ")
+		task.UpdatedAt = state.NowUTC()
+		if err := adapter.UpsertTask(root, task); err != nil {
+			return Result{}, err
+		}
+		if err := runtimepkg.RefreshExecutionIndexesForTask(root, task); err != nil {
+			return Result{}, err
+		}
 		session.LastStatus = decision.Route
 		session.LastSummary = strings.Join(decision.ReasonCodes, ", ")
 		session.UpdatedAt = state.NowUTC()
@@ -293,6 +293,17 @@ func run(request Request, resume bool) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	task.Status = "running"
+	task.StatusReason = "kh-codex bounded burst in progress"
+	task.LastDispatchID = ticket.DispatchID
+	task.LastLeaseID = leaseRecord.LeaseID
+	task.UpdatedAt = state.NowUTC()
+	if err := adapter.UpsertTask(root, task); err != nil {
+		return Result{}, err
+	}
+	if err := runtimepkg.RefreshExecutionIndexesForTask(root, task); err != nil {
+		return Result{}, err
+	}
 	checkpointPath := dispatch.DefaultCheckpointPath(root, ticket.TaskID, ticket.Attempt)
 	outcomePath := filepath.Join(filepath.Dir(checkpointPath), "outcome.json")
 	lastMessagePath := filepath.Join(bundle.ArtifactDir, "last-message.txt")
@@ -322,6 +333,17 @@ func run(request Request, resume bool) (Result, error) {
 	})
 	if err != nil {
 		return Result{}, err
+	}
+	closeoutResult, err := verify.EnsureCloseoutArtifacts(root, task, ticket, bundle.ArtifactDir, burst.LogPath, burst.DiffStats, burst.Status, burst.Summary)
+	if err != nil {
+		return Result{}, err
+	}
+	if closeoutResult.Generated {
+		burst.Artifacts = append(burst.Artifacts, closeoutResult.GeneratedArtifacts...)
+		if burst.Status == "succeeded" {
+			burst.Status = closeoutResult.Status
+		}
+		burst.Summary = coalesce(closeoutResult.Summary, burst.Summary)
 	}
 	if _, err := checkpoint.IngestCheckpoint(checkpoint.IngestCheckpointRequest{
 		Root:          root,
@@ -373,6 +395,30 @@ func run(request Request, resume bool) (Result, error) {
 	if _, err := lease.Release(root, leaseRecord.LeaseID, causationID, []string{"kh_codex_finished"}); err != nil {
 		return Result{}, err
 	}
+	verifyStatus, verifySummary, verifyPath := runtimepkg.DeriveVerification(bundle.ArtifactDir, burst.Status, burst.Summary)
+	followUp := ""
+	verifyErr := error(nil)
+	if verifyStatus != "" {
+		verifyResult, err := verify.Ingest(verify.Request{
+			Root:                   root,
+			RequestID:              task.ThreadKey,
+			TaskID:                 ticket.TaskID,
+			DispatchID:             ticket.DispatchID,
+			PlanEpoch:              ticket.PlanEpoch,
+			Attempt:                ticket.Attempt,
+			CausationID:            causationID,
+			ReasonCodes:            decision.ReasonCodes,
+			Status:                 verifyStatus,
+			Summary:                verifySummary,
+			VerificationResultPath: verifyPath,
+			FollowUp:               nextKind,
+		})
+		if err != nil {
+			verifyErr = err
+		} else {
+			followUp = verifyResult.FollowUpEvent
+		}
+	}
 
 	afterIndex, err := readSessionIndex(request.HomeDir)
 	if err != nil {
@@ -381,8 +427,8 @@ func run(request Request, resume bool) (Result, error) {
 	nativeSessionID := detectNativeSessionID(beforeIndex, afterIndex, task.PreferredResumeSessionID)
 	session.NativeSessionID = nativeSessionID
 	session.LastDispatchID = ticket.DispatchID
-	session.LastStatus = burst.Status
-	session.LastSummary = burst.Summary
+	session.LastStatus = finalTaskStatus(burst.Status, verifyStatus, followUp, verifyErr)
+	session.LastSummary = coalesce(verifySummary, burst.Summary)
 	session.UpdatedAt = state.NowUTC()
 	summary = upsertSummarySession(summary, session)
 	if err := saveSessionSummary(summaryPath, summary); err != nil {
@@ -405,6 +451,25 @@ func run(request Request, resume bool) (Result, error) {
 		registry.LastCompletedByTask[task.TaskID] = nativeSessionID
 	}
 	if err := adapter.SaveSessionRegistry(root, registry); err != nil {
+		return Result{}, err
+	}
+	task.Status = finalTaskStatus(burst.Status, verifyStatus, followUp, verifyErr)
+	task.StatusReason = coalesce(effectiveFollowUp(followUp, burst.Status, verifyStatus, verifyErr), verifySummary, burst.Summary)
+	task.LastDispatchID = ticket.DispatchID
+	task.LastLeaseID = ""
+	task.VerificationStatus = verifyStatus
+	task.VerificationSummary = verifySummary
+	task.VerificationResultPath = verifyPath
+	task.TmuxSession = burst.SessionName
+	task.TmuxLogPath = burst.LogPath
+	task.UpdatedAt = state.NowUTC()
+	if task.Status == "completed" {
+		task.CompletedAt = state.NowUTC()
+	}
+	if err := adapter.UpsertTask(root, task); err != nil {
+		return Result{}, err
+	}
+	if err := runtimepkg.RefreshExecutionIndexesForTask(root, task); err != nil {
 		return Result{}, err
 	}
 
@@ -749,6 +814,49 @@ func resolveCodexHome(homeDir string) string {
 		return ".codex"
 	}
 	return filepath.Join(home, ".codex")
+}
+
+func statusForRouteDecision(routeName string) string {
+	if routeName == "replan" {
+		return "needs_replan"
+	}
+	if routeName == "block" {
+		return "blocked"
+	}
+	return "queued"
+}
+
+func statusForBurst(status string) string {
+	switch status {
+	case "failed", "timed_out":
+		return "needs_replan"
+	case "succeeded":
+		return "succeeded"
+	default:
+		return status
+	}
+}
+
+func finalTaskStatus(burstStatus, verifyStatus, followUp string, verifyErr error) string {
+	switch {
+	case verifyStatus == "passed" && verifyErr == nil && followUp == "task.completed":
+		return "completed"
+	case runtimepkg.ShouldEnterAnalysisLoop(burstStatus, verifyStatus, followUp, verifyErr):
+		return "needs_replan"
+	case verifyErr != nil:
+		return "blocked"
+	case verifyStatus == "blocked":
+		return "blocked"
+	default:
+		return statusForBurst(burstStatus)
+	}
+}
+
+func effectiveFollowUp(followUp, burstStatus, verifyStatus string, verifyErr error) string {
+	if runtimepkg.ShouldEnterAnalysisLoop(burstStatus, verifyStatus, followUp, verifyErr) {
+		return "analysis.required"
+	}
+	return followUp
 }
 
 func newID(prefix string) string {

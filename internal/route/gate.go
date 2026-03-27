@@ -12,6 +12,11 @@ type Input struct {
 	Kind                      string
 	Title                     string
 	Summary                   string
+	FrontDoorTriage           string
+	NormalizedIntentClass     string
+	FusionDecision            string
+	ChangeAffectsExecution    bool
+	PendingTaskCount          int
 	WorkerMode                string
 	PlanEpoch                 int
 	LatestPlanEpoch           int
@@ -39,6 +44,18 @@ type Decision struct {
 func Evaluate(input Input) Decision {
 	policyTags := policyReasonCodes(input)
 	reasons := make([]string, 0)
+	if input.FusionDecision == "accepted_existing_thread" &&
+		input.NormalizedIntentClass == "context_enrichment" &&
+		input.ChangeAffectsExecution {
+		return Decision{
+			Route:                  "replan",
+			DispatchReady:          false,
+			ReasonCodes:            append([]string{"context_enrichment_requires_replan", "existing_thread_replan"}, policyTags...),
+			RequiredSummaryVersion: input.RequiredSummaryVersion,
+			WorktreePath:           input.WorktreePath,
+			OwnedPaths:             input.OwnedPaths,
+		}
+	}
 	if input.LatestPlanEpoch > 0 && input.PlanEpoch > 0 && input.PlanEpoch < input.LatestPlanEpoch {
 		return Decision{
 			Route:                  "replan",
@@ -140,6 +157,34 @@ func policyReasonCodes(input Input) []string {
 		"how should", "help me choose", "help me decide",
 	) {
 		tags = append(tags, "policy_options_before_plan")
+	}
+	if matchesSignal(signal,
+		"harness", "bootstrap", "refresh", "audit", "agent-entry", "agent entry",
+		"claim", "handoff", "coordination", "session registry", "task pool",
+		"control plane", "execution plane", "operator plane",
+	) {
+		tags = append(tags, "policy_harness_state_first")
+	}
+	if matchesSignal(signal,
+		"log search", "compact log", "handoff log", "runner log", "raw log",
+		"transcript", "evidence window", "log window", "runtime log", "logs",
+	) {
+		tags = append(tags, "policy_log_compact_first")
+	}
+	if matchesSignal(signal,
+		"dashboard", "overview", "watch", "metrics", "forever", "unattended",
+		"parallel", "who is running", "status board", "operator surface",
+	) {
+		tags = append(tags, "policy_operator_surface_required")
+	}
+	if input.FrontDoorTriage == "inspection" || input.FrontDoorTriage == "advisory_read_only" {
+		tags = append(tags, "policy_read_only_intake")
+	}
+	if input.FusionDecision == "accepted_existing_thread" {
+		tags = append(tags, "policy_thread_reuse")
+	}
+	if input.PendingTaskCount > 1 {
+		tags = append(tags, "policy_smallest_pending_slice_first")
 	}
 	if input.ResumeStrategy == "resume" || input.PreferredResumeSessionID != "" || len(input.CandidateResumeSessionIDs) > 0 ||
 		matchesSignal(signal, "continue", "resume", "pick up", "keep going", "continue from", "continued from") {

@@ -1,0 +1,316 @@
+package query
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"klein-harness/internal/adapter"
+	"klein-harness/internal/orchestration"
+	"klein-harness/internal/runtime"
+	"klein-harness/internal/state"
+	"klein-harness/internal/verify"
+)
+
+func TestTaskIncludesPlanningActiveSkillsAndHints(t *testing.T) {
+	root := t.TempDir()
+	if err := adapter.UpsertTask(root, adapter.Task{
+		TaskID:         "T-skill",
+		ThreadKey:      "thread-skill",
+		Title:          "Resume with compact log hints",
+		Summary:        "Resume execution and inspect logs first",
+		PlanEpoch:      1,
+		Status:         "running",
+		LastDispatchID: "dispatch-skill",
+		OwnedPaths:     []string{"internal/query/**"},
+	}); err != nil {
+		t.Fatalf("upsert task: %v", err)
+	}
+	paths, err := adapter.Resolve(root)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	payload := `{
+		"resumeStrategy":"resume",
+		"sessionId":"sess-1",
+		"promptStages":["context_assembly","execute","verify"],
+		"planningTracePath":"` + filepath.Join(paths.StateDir, "planning-trace-T-skill.md") + `",
+		"constraintPath":"` + filepath.Join(paths.StateDir, "constraints-T-skill.json") + `",
+		"acceptedPacketPath":"` + filepath.Join(paths.StateDir, "accepted-packet-T-skill.json") + `",
+		"taskContractPath":"` + filepath.Join(paths.ArtifactsDir, "T-skill", "dispatch-skill", "task-contract.json") + `",
+		"executionSliceId":"T-skill.slice.1",
+		"runtimeRefs":{"promptPath":"` + filepath.Join(paths.StateDir, "runner-prompt-T-skill.md") + `"},
+		"methodology":{"mode":"qiushi-inspired fact-first / focus-first / verify-first discipline","guidePath":"prompts/spec/methodology.md","coreRules":[],"activeLenses":[],"activeSkills":["qiushi-execution","harness-log-search-cskill"]},
+		"judgeDecision":{"judgeId":"packet-judge","judgeName":"Packet Judge","selectedFlow":"state-first resume packet","winnerStrategy":"bounded winner","rationale":[],"selectedDimensions":[],"selectedLensIds":[],"reviewRequired":false,"verifyRequired":true},
+		"executionLoop":{"mode":"qiushi execution / validation loop","owner":"worker + verify + runtime closeout","skillPath":"skills/qiushi-execution/SKILL.md","activeSkills":["qiushi-execution","harness-log-search-cskill"],"skillHints":["prefer hot state, compact logs, and prior artifacts before resuming execution"],"phases":["investigate","execute","verify","closeout","analysis","re-execute"],"coreRules":[],"retryTransition":"retry"},
+		"constraintSystem":{"mode":"two-level layered constraints","objective":"obj","generation":"gen","rules":[]},
+		"packetSynthesis":{"plannerCount":3,"planners":[],"judge":{"id":"packet-judge","name":"Packet Judge","focus":"focus","promptRef":"judge.md","dimensions":[]},"packetFields":[],"workerSpecFields":[]}
+	}`
+	if err := os.WriteFile(filepath.Join(paths.StateDir, "dispatch-ticket-T-skill.json"), []byte(payload), 0o644); err != nil {
+		t.Fatalf("write dispatch ticket: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(paths.StateDir, "planning-trace-T-skill.md"), []byte("trace"), 0o644); err != nil {
+		t.Fatalf("write planning trace: %v", err)
+	}
+	view, err := Task(root, "T-skill")
+	if err != nil {
+		t.Fatalf("task view: %v", err)
+	}
+	if len(view.ActiveSkills) != 2 || view.ActiveSkills[0] != "qiushi-execution" {
+		t.Fatalf("expected active skills from planning view: %+v", view.ActiveSkills)
+	}
+	if len(view.SkillHints) == 0 {
+		t.Fatalf("expected skill hints from planning view: %+v", view.SkillHints)
+	}
+	if view.Planning == nil || len(view.Planning.ActiveSkills) != 2 || len(view.Planning.SkillHints) == 0 {
+		t.Fatalf("expected planning active skills and hints: %+v", view.Planning)
+	}
+}
+
+func TestTaskIncludesPacketProgressAndRemainingSlices(t *testing.T) {
+	root := t.TempDir()
+	if err := adapter.UpsertTask(root, adapter.Task{
+		TaskID:     "T-1",
+		ThreadKey:  "thread-1",
+		Title:      "Query task progress",
+		Summary:    "Expose remaining slices",
+		PlanEpoch:  1,
+		Status:     "queued",
+		OwnedPaths: []string{"internal/query/**"},
+	}); err != nil {
+		t.Fatalf("upsert task: %v", err)
+	}
+	if err := orchestration.WriteAcceptedPacket(orchestration.AcceptedPacketPath(root, "T-1"), orchestration.AcceptedPacket{
+		SchemaVersion: "kh.accepted-packet.v1",
+		Generator:     "test",
+		GeneratedAt:   "2026-03-26T10:00:00Z",
+		TaskID:        "T-1",
+		ThreadKey:     "thread-1",
+		PlanEpoch:     1,
+		PacketID:      "packet_T-1_1",
+		Objective:     "Expose remaining slices",
+		SelectedPlan:  "Run slices in order",
+		ExecutionTasks: []orchestration.ExecutionTask{
+			{ID: "T-1.slice.1", Title: "slice 1", Summary: "one"},
+			{ID: "T-1.slice.2", Title: "slice 2", Summary: "two"},
+			{ID: "T-1.slice.3", Title: "slice 3", Summary: "three"},
+		},
+		VerificationPlan:  map[string]any{},
+		DecisionRationale: "test packet",
+		AcceptedAt:        "2026-03-26T10:00:00Z",
+		AcceptedBy:        "test",
+	}); err != nil {
+		t.Fatalf("write accepted packet: %v", err)
+	}
+	if err := orchestration.WritePacketProgress(orchestration.PacketProgressPath(root, "T-1"), orchestration.PacketProgress{
+		SchemaVersion:     "kh.packet-progress.v1",
+		Generator:         "test",
+		UpdatedAt:         "2026-03-26T10:00:00Z",
+		TaskID:            "T-1",
+		ThreadKey:         "thread-1",
+		PlanEpoch:         1,
+		AcceptedPacketID:  "packet_T-1_1",
+		CompletedSliceIDs: []string{"T-1.slice.1"},
+	}); err != nil {
+		t.Fatalf("write packet progress: %v", err)
+	}
+
+	view, err := Task(root, "T-1")
+	if err != nil {
+		t.Fatalf("load task view: %v", err)
+	}
+	if view.PacketProgress == nil {
+		t.Fatalf("expected packet progress in task view")
+	}
+	if len(view.RemainingSlices) != 2 || view.RemainingSlices[0] != "T-1.slice.2" || view.RemainingSlices[1] != "T-1.slice.3" {
+		t.Fatalf("unexpected remaining slices: %+v", view.RemainingSlices)
+	}
+	if view.NextSliceID != "T-1.slice.2" {
+		t.Fatalf("expected next slice id, got %q", view.NextSliceID)
+	}
+	if view.Release.Status != "more_slices_remaining" || view.Release.NextAction != "replan" {
+		t.Fatalf("expected release readiness to surface remaining slices: %+v", view.Release)
+	}
+}
+
+func TestTaskIncludesIntakeThreadChangeAndTodoSummaries(t *testing.T) {
+	root := t.TempDir()
+	submitResult, err := runtime.Submit(runtime.SubmitRequest{
+		Root:     root,
+		Goal:     "Refine intake query visibility",
+		Contexts: []string{"docs/notes.md"},
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	view, err := Task(root, submitResult.Task.TaskID)
+	if err != nil {
+		t.Fatalf("load task view: %v", err)
+	}
+	if view.IntakeSummary == nil || view.IntakeSummary.LatestTaskID != submitResult.Task.TaskID {
+		t.Fatalf("expected intake summary in task view: %+v", view.IntakeSummary)
+	}
+	if view.ThreadEntry == nil || view.ThreadEntry.ThreadKey != submitResult.Task.ThreadKey {
+		t.Fatalf("expected thread entry in task view: %+v", view.ThreadEntry)
+	}
+	if view.ChangeSummary == nil || view.ChangeSummary.LatestTaskID != submitResult.Task.TaskID {
+		t.Fatalf("expected change summary in task view: %+v", view.ChangeSummary)
+	}
+	if view.TodoSummary == nil || view.TodoSummary.NextTaskID != submitResult.Task.TaskID {
+		t.Fatalf("expected todo summary in task view: %+v", view.TodoSummary)
+	}
+	if view.Request == nil || view.Request.TaskID != submitResult.Task.TaskID || view.Request.NormalizedIntentClass == "" {
+		t.Fatalf("expected latest request record in task view: %+v", view.Request)
+	}
+}
+
+func TestTaskIncludesReleaseReadyStateFromGateAndGuard(t *testing.T) {
+	root := t.TempDir()
+	if err := adapter.UpsertTask(root, adapter.Task{
+		TaskID:              "T-2",
+		ThreadKey:           "thread-2",
+		Title:               "Ready for archive",
+		Summary:             "Ready for archive",
+		Status:              "completed",
+		VerificationStatus:  "passed",
+		VerificationSummary: "verified",
+	}); err != nil {
+		t.Fatalf("upsert task: %v", err)
+	}
+	paths, err := adapter.Resolve(root)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if _, err := state.WriteSnapshot(paths.CompletionGatePath, &verify.CompletionGate{
+		Status:     "satisfied",
+		Satisfied:  true,
+		TaskID:     "T-2",
+		DispatchID: "dispatch-2",
+	}, "test", 0); err != nil {
+		t.Fatalf("write completion gate: %v", err)
+	}
+	if _, err := state.WriteSnapshot(paths.GuardStatePath, &verify.GuardState{
+		Status:                  "retire_ready",
+		TaskID:                  "T-2",
+		DispatchID:              "dispatch-2",
+		SafeToArchive:           true,
+		CompletionGateStatus:    "satisfied",
+		CompletionGateSatisfied: true,
+		RetireEligible:          true,
+	}, "test", 0); err != nil {
+		t.Fatalf("write guard state: %v", err)
+	}
+
+	view, err := Task(root, "T-2")
+	if err != nil {
+		t.Fatalf("load task view: %v", err)
+	}
+	if view.Release.Status != "release_ready" || !view.Release.Ready || !view.Release.SafeToArchive || view.Release.NextAction != "archive" {
+		t.Fatalf("expected release ready view: %+v", view.Release)
+	}
+}
+
+func TestReleaseStatusAggregatesReleaseBoard(t *testing.T) {
+	root := t.TempDir()
+	if err := adapter.UpsertTask(root, adapter.Task{
+		TaskID:             "T-10",
+		ThreadKey:          "thread-10",
+		Title:              "ready",
+		Summary:            "ready",
+		Status:             "completed",
+		VerificationStatus: "passed",
+	}); err != nil {
+		t.Fatalf("upsert ready task: %v", err)
+	}
+	if err := adapter.UpsertTask(root, adapter.Task{
+		TaskID:             "T-11",
+		ThreadKey:          "thread-11",
+		Title:              "awaiting gate",
+		Summary:            "awaiting gate",
+		Status:             "running",
+		VerificationStatus: "passed",
+	}); err != nil {
+		t.Fatalf("upsert awaiting gate task: %v", err)
+	}
+	if err := adapter.UpsertTask(root, adapter.Task{
+		TaskID:     "T-12",
+		ThreadKey:  "thread-12",
+		Title:      "needs slices",
+		Summary:    "needs slices",
+		Status:     "queued",
+		OwnedPaths: []string{"internal/query/**"},
+	}); err != nil {
+		t.Fatalf("upsert remaining slices task: %v", err)
+	}
+
+	paths, err := adapter.Resolve(root)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if _, err := state.WriteSnapshot(paths.CompletionGatePath, &verify.CompletionGate{
+		Status:     "satisfied",
+		Satisfied:  true,
+		TaskID:     "T-10",
+		DispatchID: "dispatch-10",
+	}, "test", 0); err != nil {
+		t.Fatalf("write completion gate: %v", err)
+	}
+	if _, err := state.WriteSnapshot(paths.GuardStatePath, &verify.GuardState{
+		Status:                  "retire_ready",
+		TaskID:                  "T-10",
+		DispatchID:              "dispatch-10",
+		SafeToArchive:           true,
+		CompletionGateStatus:    "satisfied",
+		CompletionGateSatisfied: true,
+		RetireEligible:          true,
+	}, "test", 0); err != nil {
+		t.Fatalf("write guard state: %v", err)
+	}
+	if err := orchestration.WriteAcceptedPacket(orchestration.AcceptedPacketPath(root, "T-12"), orchestration.AcceptedPacket{
+		SchemaVersion: "kh.accepted-packet.v1",
+		Generator:     "test",
+		GeneratedAt:   "2026-03-26T10:00:00Z",
+		TaskID:        "T-12",
+		ThreadKey:     "thread-12",
+		PlanEpoch:     1,
+		PacketID:      "packet_T-12_1",
+		Objective:     "Expose release board",
+		SelectedPlan:  "Run slices in order",
+		ExecutionTasks: []orchestration.ExecutionTask{
+			{ID: "T-12.slice.1", Title: "slice 1", Summary: "one"},
+			{ID: "T-12.slice.2", Title: "slice 2", Summary: "two"},
+		},
+		VerificationPlan:  map[string]any{},
+		DecisionRationale: "test packet",
+		AcceptedAt:        "2026-03-26T10:00:00Z",
+		AcceptedBy:        "test",
+	}); err != nil {
+		t.Fatalf("write accepted packet: %v", err)
+	}
+
+	board, err := ReleaseStatus(root)
+	if err != nil {
+		t.Fatalf("release status: %v", err)
+	}
+	if board.ReadyCount != 1 || board.AwaitingGateCount != 1 || board.RemainingSliceCount != 1 {
+		t.Fatalf("unexpected release board counters: %+v", board)
+	}
+	if len(board.Items) != 3 {
+		t.Fatalf("expected three board items, got %+v", board.Items)
+	}
+}
+
+func TestBuildReleaseSnapshotMarksDirtyBoardAsNotReady(t *testing.T) {
+	board := ReleaseBoard{
+		ReadyCount:        1,
+		AwaitingGateCount: 1,
+	}
+	snapshot := buildReleaseSnapshot("/repo", "v0.2-24-g04a8e73-dirty", "v0.2.3", true, board)
+	if snapshot.Ready {
+		t.Fatalf("expected dirty snapshot with awaiting gate to remain not ready: %+v", snapshot)
+	}
+	if len(snapshot.BlockingReasons) < 2 {
+		t.Fatalf("expected blocking reasons in release snapshot: %+v", snapshot)
+	}
+}

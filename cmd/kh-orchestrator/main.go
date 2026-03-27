@@ -5,11 +5,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"klein-harness/internal/a2a"
 	"klein-harness/internal/adapter"
 	"klein-harness/internal/dispatch"
 	"klein-harness/internal/route"
+	runtimepkg "klein-harness/internal/runtime"
 	"klein-harness/internal/state"
 	"klein-harness/internal/verify"
 )
@@ -90,25 +92,11 @@ func runRoute(args []string) error {
 		currentAttempt = count + 1
 	}
 	requiredSummaryVersion := runtimeSummaryVersion(paths.RuntimePath)
-	decision := route.Evaluate(route.Input{
-		TaskID:                    task.TaskID,
-		RoleHint:                  task.RoleHint,
-		Kind:                      task.Kind,
-		Title:                     task.Title,
-		Summary:                   task.Summary + "\n" + task.Description,
-		WorkerMode:                task.WorkerMode,
-		PlanEpoch:                 task.PlanEpoch,
-		LatestPlanEpoch:           latestPlanEpoch,
-		ResumeStrategy:            task.ResumeStrategy,
-		PreferredResumeSessionID:  task.PreferredResumeSessionID,
-		CandidateResumeSessionIDs: task.CandidateResumeSessionIDs,
-		SessionContested:          sessionContested,
-		CheckpointRequired:        task.CheckpointRequired,
-		CheckpointFresh:           checkpointFresh,
-		WorktreePath:              adapter.TaskCWD(paths, task),
-		OwnedPaths:                task.OwnedPaths,
-		RequiredSummaryVersion:    requiredSummaryVersion,
-	})
+	routeInput, err := runtimepkg.BuildRouteInput(*root, task, latestPlanEpoch, checkpointFresh, sessionContested, requiredSummaryVersion)
+	if err != nil {
+		return err
+	}
+	decision := route.Evaluate(routeInput)
 	payload, err := a2a.NewPayload(decision)
 	if err != nil {
 		return err
@@ -163,6 +151,18 @@ func runRoute(args []string) error {
 		}
 		ticket = &issued
 	}
+	task.Status = statusForRouteDecision(decision.Route, decision.DispatchReady)
+	task.StatusReason = fmt.Sprintf("route=%s reasons=%s", decision.Route, strings.Join(decision.ReasonCodes, ", "))
+	task.UpdatedAt = state.NowUTC()
+	if ticket != nil {
+		task.LastDispatchID = ticket.DispatchID
+	}
+	if err := adapter.UpsertTask(*root, task); err != nil {
+		return err
+	}
+	if err := runtimepkg.RefreshExecutionIndexesForTask(*root, task); err != nil {
+		return err
+	}
 	return writeStdout(map[string]any{
 		"decision": decision,
 		"dispatch": ticket,
@@ -201,6 +201,13 @@ func runIngestVerification(args []string) error {
 		VerificationResultPath: *resultPath,
 		FollowUp:               *followUp,
 	})
+	finalFollowUp := ""
+	if err == nil {
+		finalFollowUp = result.FollowUpEvent
+	}
+	if _, finalizeErr := runtimepkg.FinalizeTaskAfterVerification(*root, *taskID, *dispatchID, *status, *summary, *resultPath, finalFollowUp, err); finalizeErr != nil {
+		return finalizeErr
+	}
 	if err != nil {
 		return err
 	}
@@ -222,6 +229,17 @@ func runtimeSummaryVersion(path string) string {
 		return "runtime:" + payload.GeneratedAt
 	}
 	return "runtime:legacy"
+}
+
+func statusForRouteDecision(routeName string, dispatchReady bool) string {
+	switch {
+	case dispatchReady:
+		return "routing"
+	case routeName == "replan":
+		return "needs_replan"
+	default:
+		return "blocked"
+	}
 }
 
 func defaultWorkerClass(model string) string {

@@ -11,6 +11,7 @@ import (
 
 	"klein-harness/internal/adapter"
 	"klein-harness/internal/dispatch"
+	"klein-harness/internal/orchestration"
 	"klein-harness/internal/state"
 )
 
@@ -71,7 +72,7 @@ type CloseoutResult struct {
 	VerificationResultPath string   `json:"verificationResultPath,omitempty"`
 }
 
-func BuildHookPlan(root string, task adapter.Task, ticket dispatch.Ticket, verifyCommands []map[string]any) HookPlan {
+func BuildHookPlan(root string, task adapter.Task, ticket dispatch.Ticket, verifyCommands []map[string]any, constraintPath string, constraintSystem orchestration.ConstraintSystem) HookPlan {
 	learning, _ := loadLearningState(root)
 	acceptanceMarkers := uniqueNonEmpty(task.VerificationRuleIDs...)
 	if len(acceptanceMarkers) == 0 {
@@ -90,6 +91,7 @@ func BuildHookPlan(root string, task adapter.Task, ticket dispatch.Ticket, verif
 	if promotedCloseout {
 		preflightSummary = "promoted closeout guard: recent runs missed verification artifacts, so closeout completeness is now a blocking expectation"
 	}
+	_, hardRules := orchestration.SplitConstraintRules(constraintSystem)
 	hooks := []HookSpec{
 		{
 			Name:    "verification-preflight",
@@ -126,6 +128,13 @@ func BuildHookPlan(root string, task adapter.Task, ticket dispatch.Ticket, verif
 					Required: true,
 					Status:   "pass",
 					Detail:   "worker-result.json, verify.json, handoff.md",
+				},
+				{
+					ID:       "shared-hard-constraints",
+					Title:    "shared hard constraints are available for worker and verify",
+					Required: true,
+					Status:   passFail(strings.TrimSpace(constraintPath) != "" && len(hardRules) > 0),
+					Detail:   fmt.Sprintf("path=%s hardRules=%d", constraintPath, len(hardRules)),
 				},
 			},
 			LearnedPatterns: learnedPatterns(learning),
@@ -209,15 +218,26 @@ func EnsureCloseoutArtifacts(root string, task adapter.Task, ticket dispatch.Tic
 	}
 
 	if containsString(missing, "verify.json") {
+		scorecard := DefaultScorecard(status, summary)
 		verifyPayload := map[string]any{
-			"status":        status,
-			"overallStatus": status,
-			"summary":       summary,
+			"status":         status,
+			"overallStatus":  status,
+			"overallSummary": summary,
+			"summary":        summary,
+			"scorecard":      scorecard,
 			"commands": []map[string]any{
 				{
 					"name":   "git diff --name-only",
 					"status": "observed",
 					"output": changedPaths,
+				},
+			},
+			"evidenceLedger": []map[string]any{
+				{
+					"kind":      "artifact-check",
+					"summary":   "runtime synthesized verify artifact because closeout was incomplete",
+					"proves":    "closeout artifacts were missing at worker exit",
+					"artifacts": uniqueNonEmpty(logPath, required["worker-result.json"], required["handoff.md"]),
 				},
 			},
 			"evidenceRefs": uniqueNonEmpty(
@@ -232,6 +252,14 @@ func EnsureCloseoutArtifacts(root string, task adapter.Task, ticket dispatch.Tic
 					"kind":     "closeout_missing_artifacts",
 					"summary":  summary,
 					"missing":  missing,
+				},
+			},
+			"reviewChecklist": []map[string]any{
+				{
+					"id":       "closeout_artifacts",
+					"required": true,
+					"status":   "failed",
+					"summary":  "closeout artifacts missing at worker exit",
 				},
 			},
 			"hook": map[string]any{

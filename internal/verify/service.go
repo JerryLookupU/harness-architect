@@ -14,6 +14,13 @@ var ErrNoopWithoutEvidence = errors.New("noop completion requires verified accep
 var ErrCompletionGateOpen = errors.New("completion gate is not satisfied")
 var ErrVerifiedWithoutEvidence = errors.New("verified completion requires evidence")
 var ErrReviewEvidenceRequired = errors.New("review-required task is missing review evidence")
+var ErrAcceptedPacketRequired = errors.New("accepted packet is required before completion")
+var ErrTaskContractRequired = errors.New("task contract is required before completion")
+var ErrVerificationScorecardRequired = errors.New("verification scorecard is required before completion")
+var ErrEvidenceLedgerRequired = errors.New("evidence ledger is required before completion")
+var ErrBlockingVerificationFindings = errors.New("blocking verification findings must be cleared before completion")
+var ErrTaskContractIncomplete = errors.New("task contract definition is incomplete")
+var ErrExecutionTasksRemaining = errors.New("accepted packet still has remaining execution slices")
 
 type Request struct {
 	Root                   string
@@ -77,6 +84,11 @@ func Ingest(request Request) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	if passedVerificationStatus(request.Status) {
+		if err := recordCompletedExecutionSlice(request.Root, request.TaskID, request.DispatchID); err != nil {
+			return Result{}, err
+		}
+	}
 	result := Result{VerificationEvent: verificationResult.Event.Kind}
 	gate, err := updateCompletionState(paths, request, task, taskFound, ticket, ticketFound)
 	if err != nil {
@@ -90,6 +102,34 @@ func Ingest(request Request) (Result, error) {
 			}
 		}
 		if !gate.Satisfied {
+			if executionTasksRemainingOnly(gate) {
+				payload, err := a2a.NewPayload(map[string]any{
+					"sourceTaskId": request.TaskID,
+					"followUpKind": "replan",
+					"summary":      "current execution slice verified; additional execution slices remain",
+				})
+				if err != nil {
+					return Result{}, err
+				}
+				if _, err := a2a.AppendEvent(paths.EventLogPath, a2a.Envelope{
+					Kind:           "replan.emitted",
+					IdempotencyKey: fmt.Sprintf("replan:%s:%d", request.TaskID, request.Attempt),
+					TraceID:        request.RequestID,
+					CausationID:    verificationResult.Event.MessageID,
+					From:           "orchestrator-node",
+					To:             "worker-supervisor-node",
+					RequestID:      request.RequestID,
+					TaskID:         request.TaskID,
+					PlanEpoch:      request.PlanEpoch,
+					Attempt:        request.Attempt,
+					ReasonCodes:    request.ReasonCodes,
+					Payload:        payload,
+				}); err != nil {
+					return Result{}, err
+				}
+				result.FollowUpEvent = "replan.emitted"
+				return result, nil
+			}
 			return Result{}, completionGateError(request, gate)
 		}
 		completionMode := "verified"
@@ -204,4 +244,20 @@ func Ingest(request Request) (Result, error) {
 	}
 	result.FollowUpEvent = "replan.emitted"
 	return result, nil
+}
+
+func executionTasksRemainingOnly(gate CompletionGate) bool {
+	if gate.Satisfied {
+		return false
+	}
+	failed := 0
+	for name, check := range gate.Checks {
+		if !check.OK {
+			failed++
+			if name != "executionTasks" {
+				return false
+			}
+		}
+	}
+	return failed == 1
 }

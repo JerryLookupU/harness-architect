@@ -83,6 +83,9 @@ func Init(root string) (adapter.Paths, error) {
 	}); err != nil {
 		return adapter.Paths{}, err
 	}
+	if err := writeSnapshotIfMissing(paths.ReleaseSnapshotPath, &emptySummary{}); err != nil {
+		return adapter.Paths{}, err
+	}
 	if err := writeSnapshotIfMissing(paths.TmuxSummaryPath, &tmux.Summary{
 		Sessions:     map[string]tmux.SessionState{},
 		LatestByTask: map[string]string{},
