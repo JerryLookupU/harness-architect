@@ -17,22 +17,26 @@ type DiffStats struct {
 }
 
 type CheckpointRecord struct {
-	DispatchID    string   `json:"dispatchId"`
-	TaskID        string   `json:"taskId"`
-	ThreadKey     string   `json:"threadKey,omitempty"`
-	PlanEpoch     int      `json:"planEpoch"`
-	Attempt       int      `json:"attempt"`
-	LeaseID       string   `json:"leaseId,omitempty"`
-	CheckpointRef string   `json:"checkpointRef"`
-	Status        string   `json:"status"`
-	Summary       string   `json:"summary"`
-	ReasonCodes   []string `json:"reasonCodes,omitempty"`
-	UpdatedAt     string   `json:"updatedAt"`
+	DispatchID     string   `json:"dispatchId"`
+	TaskID         string   `json:"taskId"`
+	ProjectID      string   `json:"projectId,omitempty"`
+	ProjectSpaceID string   `json:"projectSpaceId,omitempty"`
+	ThreadKey      string   `json:"threadKey,omitempty"`
+	PlanEpoch      int      `json:"planEpoch"`
+	Attempt        int      `json:"attempt"`
+	LeaseID        string   `json:"leaseId,omitempty"`
+	CheckpointRef  string   `json:"checkpointRef"`
+	Status         string   `json:"status"`
+	Summary        string   `json:"summary"`
+	ReasonCodes    []string `json:"reasonCodes,omitempty"`
+	UpdatedAt      string   `json:"updatedAt"`
 }
 
 type OutcomeRecord struct {
 	DispatchID        string    `json:"dispatchId"`
 	TaskID            string    `json:"taskId"`
+	ProjectID         string    `json:"projectId,omitempty"`
+	ProjectSpaceID    string    `json:"projectSpaceId,omitempty"`
 	ThreadKey         string    `json:"threadKey,omitempty"`
 	PlanEpoch         int       `json:"planEpoch"`
 	Attempt           int       `json:"attempt"`
@@ -100,6 +104,7 @@ func IngestCheckpoint(request IngestCheckpointRequest) (CheckpointRecord, error)
 	if err != nil {
 		return CheckpointRecord{}, err
 	}
+	task, _ := adapter.LoadTask(request.Root, request.TaskID)
 	summary, err := loadSummary(paths.CheckpointSummaryPath)
 	if err != nil {
 		return CheckpointRecord{}, err
@@ -113,17 +118,19 @@ func IngestCheckpoint(request IngestCheckpointRequest) (CheckpointRecord, error)
 		}
 	}
 	record := CheckpointRecord{
-		DispatchID:    request.DispatchID,
-		TaskID:        request.TaskID,
-		ThreadKey:     request.ThreadKey,
-		PlanEpoch:     request.PlanEpoch,
-		Attempt:       request.Attempt,
-		LeaseID:       request.LeaseID,
-		CheckpointRef: request.CheckpointRef,
-		Status:        request.Status,
-		Summary:       request.Summary,
-		ReasonCodes:   request.ReasonCodes,
-		UpdatedAt:     state.NowUTC(),
+		DispatchID:     request.DispatchID,
+		TaskID:         request.TaskID,
+		ProjectID:      task.ProjectID,
+		ProjectSpaceID: task.ProjectSpaceID,
+		ThreadKey:      request.ThreadKey,
+		PlanEpoch:      request.PlanEpoch,
+		Attempt:        request.Attempt,
+		LeaseID:        request.LeaseID,
+		CheckpointRef:  request.CheckpointRef,
+		Status:         request.Status,
+		Summary:        request.Summary,
+		ReasonCodes:    request.ReasonCodes,
+		UpdatedAt:      state.NowUTC(),
 	}
 	taskState := summary.Tasks[request.TaskID]
 	taskState.TaskID = request.TaskID
@@ -140,6 +147,8 @@ func IngestCheckpoint(request IngestCheckpointRequest) (CheckpointRecord, error)
 	if _, err := a2a.AppendEvent(paths.EventLogPath, a2a.Envelope{
 		Kind:           "worker.checkpoint",
 		IdempotencyKey: fmt.Sprintf("checkpoint:%s:%d", request.TaskID, request.Attempt),
+		ProjectID:      record.ProjectID,
+		ProjectSpaceID: record.ProjectSpaceID,
 		TraceID:        request.RequestID,
 		CausationID:    request.CausationID,
 		From:           "worker-supervisor-node",
@@ -161,6 +170,7 @@ func IngestOutcome(request IngestOutcomeRequest) (OutcomeRecord, error) {
 	if err != nil {
 		return OutcomeRecord{}, err
 	}
+	task, _ := adapter.LoadTask(request.Root, request.TaskID)
 	summary, err := loadSummary(paths.CheckpointSummaryPath)
 	if err != nil {
 		return OutcomeRecord{}, err
@@ -174,6 +184,8 @@ func IngestOutcome(request IngestOutcomeRequest) (OutcomeRecord, error) {
 	record := OutcomeRecord{
 		DispatchID:        request.DispatchID,
 		TaskID:            request.TaskID,
+		ProjectID:         task.ProjectID,
+		ProjectSpaceID:    task.ProjectSpaceID,
 		ThreadKey:         request.ThreadKey,
 		PlanEpoch:         request.PlanEpoch,
 		Attempt:           request.Attempt,
@@ -202,6 +214,8 @@ func IngestOutcome(request IngestOutcomeRequest) (OutcomeRecord, error) {
 	if _, err := a2a.AppendEvent(paths.EventLogPath, a2a.Envelope{
 		Kind:           "worker.outcome",
 		IdempotencyKey: fmt.Sprintf("outcome:%s:%d", request.TaskID, request.Attempt),
+		ProjectID:      record.ProjectID,
+		ProjectSpaceID: record.ProjectSpaceID,
 		TraceID:        request.RequestID,
 		CausationID:    request.CausationID,
 		From:           "worker-supervisor-node",

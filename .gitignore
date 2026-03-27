@@ -3,3 +3,10 @@
 __pycache__/
 .harness/
 .codex-tmp/
+.tmp/
+.tmp-smoke-harness
+harness
+internal/dashboard/web/node_modules/
+test/**/.git/
+test/**/.harness/
+test/

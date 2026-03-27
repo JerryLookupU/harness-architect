@@ -6,6 +6,7 @@ import (
 
 	"klein-harness/internal/adapter"
 	"klein-harness/internal/bootstrap"
+	"klein-harness/internal/route"
 	"klein-harness/internal/state"
 )
 
@@ -189,6 +190,74 @@ func TestSubmitCarriesForwardMatchedThreadPlanEpoch(t *testing.T) {
 	}
 	if result.Task.ThreadKey != "thread-7" {
 		t.Fatalf("expected matched thread key, got %+v", result.Task)
+	}
+}
+
+func TestSubmitContextEnrichmentReadOnlyAvoidsReplan(t *testing.T) {
+	root := t.TempDir()
+	if _, err := bootstrap.Init(root); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	goal := "Refine runtime intake"
+	ctx := "展示：只需读面分析，不修改代码"
+
+	first, err := Submit(SubmitRequest{
+		Root: root,
+		Goal: goal,
+		Kind: "",
+	})
+	if err != nil {
+		t.Fatalf("first submit: %v", err)
+	}
+
+	second, err := Submit(SubmitRequest{
+		Root:     root,
+		Goal:     goal,
+		Contexts: []string{ctx},
+	})
+	if err != nil {
+		t.Fatalf("second submit: %v", err)
+	}
+
+	if tri := frontDoorTriage(goal, []string{ctx}); tri != "advisory_read_only" {
+		t.Fatalf("frontDoorTriage mismatch: expected advisory_read_only, got %s", tri)
+	}
+
+	pool, err := adapter.LoadTaskPool(root)
+	if err != nil {
+		t.Fatalf("load task pool: %v", err)
+	}
+	classification := classifySubmission(SubmitRequest{
+		Root:     root,
+		Goal:     goal,
+		Contexts: []string{ctx},
+	}, pool.Tasks)
+	if classification.FrontDoorTriage != "advisory_read_only" {
+		t.Fatalf("classifySubmission mismatch: expected advisory_read_only, got %s", classification.FrontDoorTriage)
+	}
+
+	if second.Task.TaskID != first.Task.TaskID {
+		t.Fatalf("expected context enrichment to bind to reused task: first=%s second=%s", first.Task.TaskID, second.Task.TaskID)
+	}
+	if second.Request.NormalizedIntentClass != "context_enrichment" {
+		t.Fatalf("expected context enrichment classification: %+v", second.Request)
+	}
+	if second.Request.FrontDoorTriage != "advisory_read_only" {
+		t.Fatalf("expected advisory_read_only for read-only context enrichment, got FrontDoorTriage=%s", second.Request.FrontDoorTriage)
+	}
+
+	routeInput, err := BuildRouteInput(root, second.Task, second.Task.PlanEpoch, false, false, "state.v9")
+	if err != nil {
+		t.Fatalf("build route input: %v", err)
+	}
+	if routeInput.ChangeAffectsExecution {
+		t.Fatalf("expected read-only context enrichment to not affect execution, got ChangeAffectsExecution=true")
+	}
+
+	decision := route.Evaluate(routeInput)
+	if decision.Route == "replan" || !decision.DispatchReady {
+		t.Fatalf("expected route dispatch for read-only context enrichment, got decision=%+v", decision)
 	}
 }
 

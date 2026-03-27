@@ -4,9 +4,13 @@ import "klein-harness/internal/state"
 
 type RequestRecord struct {
 	RequestID             string   `json:"requestId"`
+	ProjectID             string   `json:"projectId,omitempty"`
+	ProjectSpaceID        string   `json:"projectSpaceId,omitempty"`
 	TaskID                string   `json:"taskId,omitempty"`
 	BindingAction         string   `json:"bindingAction,omitempty"`
 	ReusedTaskID          string   `json:"reusedTaskId,omitempty"`
+	AppendToTaskID        string   `json:"appendToTaskId,omitempty"`
+	AppendToThreadKey     string   `json:"appendToThreadKey,omitempty"`
 	ThreadKey             string   `json:"threadKey,omitempty"`
 	TargetThreadKey       string   `json:"targetThreadKey,omitempty"`
 	TargetPlanEpoch       int      `json:"targetPlanEpoch,omitempty"`
@@ -71,6 +75,8 @@ type IntakeSummary struct {
 
 type ThreadEntry struct {
 	ThreadKey            string   `json:"threadKey"`
+	ProjectID            string   `json:"projectId,omitempty"`
+	ProjectSpaceID       string   `json:"projectSpaceId,omitempty"`
 	CanonicalGoalHash    string   `json:"canonicalGoalHash,omitempty"`
 	LatestRequestID      string   `json:"latestRequestId,omitempty"`
 	LatestTaskID         string   `json:"latestTaskId,omitempty"`

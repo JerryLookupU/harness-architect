@@ -197,6 +197,8 @@ func run(request Request, resume bool) (Result, error) {
 	if _, err := a2a.AppendEvent(paths.EventLogPath, a2a.Envelope{
 		Kind:           "route.decided",
 		IdempotencyKey: fmt.Sprintf("route:%s:%s:%d", session.ID, task.TaskID, task.PlanEpoch),
+		ProjectID:      task.ProjectID,
+		ProjectSpaceID: task.ProjectSpaceID,
 		TraceID:        session.ID,
 		CausationID:    newID("route"),
 		From:           "kh-codex",

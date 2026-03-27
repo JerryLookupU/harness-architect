@@ -55,6 +55,8 @@ type DispatchProfile struct {
 
 type Task struct {
 	TaskID                    string          `json:"taskId"`
+	ProjectID                 string          `json:"projectId,omitempty"`
+	ProjectSpaceID            string          `json:"projectSpaceId,omitempty"`
 	ThreadKey                 string          `json:"threadKey"`
 	Kind                      string          `json:"kind"`
 	RoleHint                  string          `json:"roleHint"`

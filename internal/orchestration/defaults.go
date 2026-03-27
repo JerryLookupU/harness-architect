@@ -440,6 +440,17 @@ func DefaultConstraintSystem(root string, reasonCodes []string) ConstraintSystem
 			Rule:         "repeated failures should first be observed, then suggested, and only later promoted into enforced constraints",
 			Source:       filepath.Join(PromptDir(root), "methodology.md"),
 		},
+		{
+			ID:               "evolution-owned-paths-nonempty-after-path-conflict",
+			Layer:            "evolution",
+			Category:         "failure_tightening",
+			Enforcement:      "soft",
+			Level:            "enforced",
+			TargetSignal:     "feedback-summary recentFailures[path_conflict] x>=2",
+			VerificationMode: "owned_path_nonempty_gate",
+			Rule:             "when repeated path_conflict is observed, require worker-result.json.changedPaths to be non-empty and remain inside ownedPaths",
+			Source:           filepath.Join(PromptDir(root), "methodology.md"),
+		},
 	}
 	codes := uniqueStrings(reasonCodes)
 	if containsString(codes, "policy_bug_rca_first") {

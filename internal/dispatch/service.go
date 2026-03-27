@@ -25,6 +25,8 @@ type Ticket struct {
 	IdempotencyKey         string   `json:"idempotencyKey,omitempty"`
 	RequestID              string   `json:"requestId,omitempty"`
 	TaskID                 string   `json:"taskId"`
+	ProjectID              string   `json:"projectId,omitempty"`
+	ProjectSpaceID         string   `json:"projectSpaceId,omitempty"`
 	ThreadKey              string   `json:"threadKey,omitempty"`
 	PlanEpoch              int      `json:"planEpoch"`
 	Attempt                int      `json:"attempt"`
@@ -93,6 +95,7 @@ func Issue(request IssueRequest) (Ticket, bool, error) {
 	if err != nil {
 		return Ticket{}, false, err
 	}
+	projectTask, _ := adapter.LoadTask(request.Root, request.TaskID)
 	summary, err := loadSummary(paths.DispatchSummaryPath)
 	if err != nil {
 		return Ticket{}, false, err
@@ -113,6 +116,8 @@ func Issue(request IssueRequest) (Ticket, bool, error) {
 		IdempotencyKey:         request.IdempotencyKey,
 		RequestID:              request.RequestID,
 		TaskID:                 request.TaskID,
+		ProjectID:              projectTask.ProjectID,
+		ProjectSpaceID:         projectTask.ProjectSpaceID,
 		ThreadKey:              request.ThreadKey,
 		PlanEpoch:              request.PlanEpoch,
 		Attempt:                request.Attempt,
@@ -156,6 +161,8 @@ func Issue(request IssueRequest) (Ticket, bool, error) {
 	if _, err := a2a.AppendEvent(paths.EventLogPath, a2a.Envelope{
 		Kind:           "dispatch.issued",
 		IdempotencyKey: request.IdempotencyKey,
+		ProjectID:      ticket.ProjectID,
+		ProjectSpaceID: ticket.ProjectSpaceID,
 		TraceID:        request.RequestID,
 		CausationID:    request.CausationID,
 		From:           "orchestrator-node",
@@ -219,6 +226,8 @@ func Claim(request ClaimRequest) (Ticket, error) {
 	if _, err := a2a.AppendEvent(paths.EventLogPath, a2a.Envelope{
 		Kind:           "worker.claimed",
 		IdempotencyKey: fmt.Sprintf("claim:%s:%s", ticket.DispatchID, request.LeaseID),
+		ProjectID:      ticket.ProjectID,
+		ProjectSpaceID: ticket.ProjectSpaceID,
 		TraceID:        ticket.RequestID,
 		CausationID:    request.CausationID,
 		From:           "worker-supervisor-node",

@@ -15,17 +15,19 @@ var ErrLeaseNotActive = errors.New("lease is not active")
 var ErrLeaseStale = errors.New("lease is stale for current execution")
 
 type Record struct {
-	LeaseID     string   `json:"leaseId"`
-	TaskID      string   `json:"taskId"`
-	DispatchID  string   `json:"dispatchId"`
-	WorkerID    string   `json:"workerId"`
-	Status      string   `json:"status"`
-	ReasonCodes []string `json:"reasonCodes,omitempty"`
-	CausationID string   `json:"causationId"`
-	AcquiredAt  string   `json:"acquiredAt"`
-	ExpiresAt   string   `json:"expiresAt"`
-	RenewedAt   string   `json:"renewedAt,omitempty"`
-	ReleasedAt  string   `json:"releasedAt,omitempty"`
+	LeaseID        string   `json:"leaseId"`
+	TaskID         string   `json:"taskId"`
+	ProjectID      string   `json:"projectId,omitempty"`
+	ProjectSpaceID string   `json:"projectSpaceId,omitempty"`
+	DispatchID     string   `json:"dispatchId"`
+	WorkerID       string   `json:"workerId"`
+	Status         string   `json:"status"`
+	ReasonCodes    []string `json:"reasonCodes,omitempty"`
+	CausationID    string   `json:"causationId"`
+	AcquiredAt     string   `json:"acquiredAt"`
+	ExpiresAt      string   `json:"expiresAt"`
+	RenewedAt      string   `json:"renewedAt,omitempty"`
+	ReleasedAt     string   `json:"releasedAt,omitempty"`
 }
 
 type Summary struct {
@@ -51,6 +53,7 @@ func Acquire(request AcquireRequest) (Record, error) {
 	if err != nil {
 		return Record{}, err
 	}
+	projectTask, _ := adapter.LoadTask(request.Root, request.TaskID)
 	summary, err := loadSummary(paths.LeaseSummaryPath)
 	if err != nil {
 		return Record{}, err
@@ -72,15 +75,17 @@ func Acquire(request AcquireRequest) (Record, error) {
 	}
 	now := state.NowUTC()
 	record := Record{
-		LeaseID:     request.LeaseID,
-		TaskID:      request.TaskID,
-		DispatchID:  request.DispatchID,
-		WorkerID:    request.WorkerID,
-		Status:      "active",
-		ReasonCodes: request.ReasonCodes,
-		CausationID: request.CausationID,
-		AcquiredAt:  now,
-		ExpiresAt:   expiresAt(request.TTLSeconds),
+		LeaseID:        request.LeaseID,
+		TaskID:         request.TaskID,
+		ProjectID:      projectTask.ProjectID,
+		ProjectSpaceID: projectTask.ProjectSpaceID,
+		DispatchID:     request.DispatchID,
+		WorkerID:       request.WorkerID,
+		Status:         "active",
+		ReasonCodes:    request.ReasonCodes,
+		CausationID:    request.CausationID,
+		AcquiredAt:     now,
+		ExpiresAt:      expiresAt(request.TTLSeconds),
 	}
 	summary.Leases[record.LeaseID] = record
 	summary.ByTask[record.TaskID] = record.LeaseID
@@ -122,6 +127,8 @@ func Renew(root, leaseID, causationID string, ttlSeconds int, reasonCodes []stri
 	if _, err := a2a.AppendEvent(paths.EventLogPath, a2a.Envelope{
 		Kind:           "worker.heartbeat",
 		IdempotencyKey: fmt.Sprintf("heartbeat:%s:%s", record.LeaseID, record.RenewedAt),
+		ProjectID:      record.ProjectID,
+		ProjectSpaceID: record.ProjectSpaceID,
 		CausationID:    causationID,
 		From:           "worker-supervisor-node",
 		To:             "orchestrator-node",
@@ -219,6 +226,8 @@ func RecoverStale(root, causationID string) ([]Record, error) {
 			Kind:           "worker.outcome",
 			IdempotencyKey: fmt.Sprintf("stale:%s:%s", record.LeaseID, now),
 			CausationID:    causationID,
+			ProjectID:      record.ProjectID,
+			ProjectSpaceID: record.ProjectSpaceID,
 			From:           "worker-supervisor-node",
 			To:             "orchestrator-node",
 			TaskID:         record.TaskID,

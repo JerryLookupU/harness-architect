@@ -554,6 +554,18 @@ func evaluateHardConstraintChecks(paths adapter.Paths, request Request, task ada
 			ok, detail := ownedPathAuditCheck(artifactDir, task.OwnedPaths)
 			check.OK = ok
 			check.Detail = detail
+		case "owned_path_nonempty_gate":
+			if !taskFound || len(task.OwnedPaths) == 0 {
+				check.OK = false
+				check.Detail = "task ownedPaths unavailable; evolution gate requires ownedPaths"
+				break
+			}
+			ok, detail, err := ownedPathNonEmptyAuditCheck(artifactDir, task.OwnedPaths)
+			if err != nil {
+				return constraintPath, nil, err
+			}
+			check.OK = ok
+			check.Detail = detail
 		case "closeout_artifact_gate":
 			ok, detail, err := closeoutArtifactCheck(artifactDir)
 			if err != nil {
@@ -619,6 +631,35 @@ func ownedPathAuditCheck(artifactDir string, ownedPaths []string) (bool, string)
 		}
 	}
 	return true, fmt.Sprintf("changedPaths=%d", len(decoded.ChangedPaths))
+}
+
+func ownedPathNonEmptyAuditCheck(artifactDir string, ownedPaths []string) (bool, string, error) {
+	payload, err := os.ReadFile(filepath.Join(artifactDir, "worker-result.json"))
+	if err != nil {
+		return false, "worker-result.json missing for owned path evolution gate", err
+	}
+	var decoded struct {
+		ChangedPaths []string `json:"changedPaths"`
+	}
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		return false, "worker-result.json unreadable for owned path evolution gate", err
+	}
+	if len(decoded.ChangedPaths) == 0 {
+		return false, "changedPaths is empty; path_conflict evolution gate requires non-empty evidence", nil
+	}
+	for _, changedPath := range decoded.ChangedPaths {
+		allowed := false
+		for _, ownedPath := range ownedPaths {
+			if worktree.PathOverlap(ownedPath, changedPath) || worktree.PathOverlap(changedPath, ownedPath) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return false, "changed path outside ownedPaths: " + changedPath, nil
+		}
+	}
+	return true, fmt.Sprintf("changedPaths=%d nonEmpty=true", len(decoded.ChangedPaths)), nil
 }
 
 func closeoutArtifactCheck(artifactDir string) (bool, string, error) {

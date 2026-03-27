@@ -23,6 +23,7 @@ import (
 	executorcodex "klein-harness/internal/executor/codex"
 	"klein-harness/internal/lease"
 	"klein-harness/internal/orchestration"
+	"klein-harness/internal/projectspace"
 	"klein-harness/internal/route"
 	"klein-harness/internal/state"
 	"klein-harness/internal/tmux"
@@ -32,10 +33,12 @@ import (
 )
 
 type SubmitRequest struct {
-	Root     string
-	Goal     string
-	Kind     string
-	Contexts []string
+	Root           string
+	Goal           string
+	Kind           string
+	Contexts       []string
+	ProjectID      string
+	ProjectSpaceID string
 }
 
 type SubmitResult struct {
@@ -99,15 +102,23 @@ func Submit(request SubmitRequest) (SubmitResult, error) {
 		kind = inferKind(request.Goal)
 	}
 	classification := classifySubmission(request, pool.Tasks)
+	projectID, projectSpaceID, err := projectspace.ResolveProjectSpace(paths.Root, request.ProjectID, request.ProjectSpaceID)
+	if err != nil {
+		return SubmitResult{}, err
+	}
 	binding, err := resolveSubmissionBinding(paths.Root, requestID, now, kind, request, pool.Tasks, classification)
 	if err != nil {
 		return SubmitResult{}, err
 	}
+	binding.Task.ProjectID = projectID
+	binding.Task.ProjectSpaceID = projectSpaceID
 	if err := adapter.UpsertTask(paths.Root, binding.Task); err != nil {
 		return SubmitResult{}, err
 	}
 	record := RequestRecord{
 		RequestID:             requestID,
+		ProjectID:             projectID,
+		ProjectSpaceID:        projectSpaceID,
 		TaskID:                binding.Task.TaskID,
 		BindingAction:         binding.Action,
 		ThreadKey:             binding.Task.ThreadKey,
@@ -126,6 +137,10 @@ func Submit(request SubmitRequest) (SubmitResult, error) {
 		ClassificationReason:  classification.ClassificationReason,
 		CreatedAt:             now,
 		UpdatedAt:             now,
+	}
+	if classification.FusionDecision == "accepted_existing_thread" {
+		record.AppendToTaskID = binding.Task.TaskID
+		record.AppendToThreadKey = binding.Task.ThreadKey
 	}
 	if binding.Action == "reused_existing_task" {
 		record.ReusedTaskID = binding.Task.TaskID
@@ -628,7 +643,11 @@ func classifySubmission(request SubmitRequest, tasks []adapter.Task) submitClass
 			targetThreadKey = match.TaskID
 		}
 		targetPlanEpoch = maxInt(match.PlanEpoch, 1)
-		frontDoorTriage = "duplicate_or_context"
+		// When reusing the same canonical goal thread, keep inspection/advisory triage semantics
+		// (e.g. read-only context enrichment) so route decisions can avoid unnecessary replan.
+		if frontDoorTriage != "inspection" && frontDoorTriage != "advisory_read_only" {
+			frontDoorTriage = "duplicate_or_context"
+		}
 		if len(contexts) > 0 {
 			intentClass = "context_enrichment"
 			fusionDecision = "accepted_existing_thread"
@@ -1220,7 +1239,17 @@ func frontDoorTriage(goal string, contexts []string) string {
 	case matchesSignal(signal, "advice", "recommendation", "compare options", "trade-off", "tradeoff"):
 		return "advisory_read_only"
 	case len(contexts) > 0:
-		return "duplicate_or_context"
+		// Context can carry read-only / display-only semantics even when the goal itself is a work-order.
+		// This helps incremental "append requirements" avoid forcing a full replan when changes only affect operator surface.
+		contextSignal := strings.ToLower(strings.Join(contexts, "\n"))
+		switch {
+		case matchesSignal(contextSignal, "inspect", "status", "show", "list", "what is", "what's", "read only"):
+			return "inspection"
+		case matchesSignal(contextSignal, "advice", "recommendation", "展示", "显示", "只做读面", "读面", "分析", "不修改", "不改", "无需修改", "不需要修改"):
+			return "advisory_read_only"
+		default:
+			return "duplicate_or_context"
+		}
 	default:
 		return "work_order"
 	}
@@ -1285,6 +1314,8 @@ func refreshThreadState(paths adapter.Paths, task adapter.Task, latestRequestID,
 	}
 	threadEntry := threadState.Threads[threadKey]
 	threadEntry.ThreadKey = threadKey
+	threadEntry.ProjectID = firstString(task.ProjectID, threadEntry.ProjectID)
+	threadEntry.ProjectSpaceID = firstString(task.ProjectSpaceID, threadEntry.ProjectSpaceID)
 	if canonicalGoalHash != "" {
 		threadEntry.CanonicalGoalHash = canonicalGoalHash
 	}

@@ -70,6 +70,8 @@ func Ingest(request Request) (Result, error) {
 	verificationResult, err := a2a.AppendEvent(paths.EventLogPath, a2a.Envelope{
 		Kind:           "verification.completed",
 		IdempotencyKey: verificationKey,
+		ProjectID:      task.ProjectID,
+		ProjectSpaceID: task.ProjectSpaceID,
 		TraceID:        request.RequestID,
 		CausationID:    request.CausationID,
 		From:           "orchestrator-node",
@@ -114,6 +116,8 @@ func Ingest(request Request) (Result, error) {
 				if _, err := a2a.AppendEvent(paths.EventLogPath, a2a.Envelope{
 					Kind:           "replan.emitted",
 					IdempotencyKey: fmt.Sprintf("replan:%s:%d", request.TaskID, request.Attempt),
+					ProjectID:      task.ProjectID,
+					ProjectSpaceID: task.ProjectSpaceID,
 					TraceID:        request.RequestID,
 					CausationID:    verificationResult.Event.MessageID,
 					From:           "orchestrator-node",
@@ -147,6 +151,8 @@ func Ingest(request Request) (Result, error) {
 		if _, err := a2a.AppendEvent(paths.EventLogPath, a2a.Envelope{
 			Kind:           "task.completed",
 			IdempotencyKey: fmt.Sprintf("completed:%s:%d", request.TaskID, request.Attempt),
+			ProjectID:      task.ProjectID,
+			ProjectSpaceID: task.ProjectSpaceID,
 			TraceID:        request.RequestID,
 			CausationID:    verificationResult.Event.MessageID,
 			From:           "orchestrator-node",
@@ -170,6 +176,8 @@ func Ingest(request Request) (Result, error) {
 		if _, err := a2a.AppendEvent(paths.EventLogPath, a2a.Envelope{
 			Kind:           "task.blocked",
 			IdempotencyKey: fmt.Sprintf("blocked:%s:%d", request.TaskID, request.Attempt),
+			ProjectID:      task.ProjectID,
+			ProjectSpaceID: task.ProjectSpaceID,
 			TraceID:        request.RequestID,
 			CausationID:    verificationResult.Event.MessageID,
 			From:           "orchestrator-node",
@@ -201,6 +209,8 @@ func Ingest(request Request) (Result, error) {
 		if _, err := a2a.AppendEvent(paths.EventLogPath, a2a.Envelope{
 			Kind:           "rca.allocated",
 			IdempotencyKey: fmt.Sprintf("rca:%s:%d", request.TaskID, request.Attempt),
+			ProjectID:      task.ProjectID,
+			ProjectSpaceID: task.ProjectSpaceID,
 			TraceID:        request.RequestID,
 			CausationID:    verificationResult.Event.MessageID,
 			From:           "orchestrator-node",
@@ -229,6 +239,8 @@ func Ingest(request Request) (Result, error) {
 	if _, err := a2a.AppendEvent(paths.EventLogPath, a2a.Envelope{
 		Kind:           "replan.emitted",
 		IdempotencyKey: fmt.Sprintf("replan:%s:%d", request.TaskID, request.Attempt),
+		ProjectID:      task.ProjectID,
+		ProjectSpaceID: task.ProjectSpaceID,
 		TraceID:        request.RequestID,
 		CausationID:    verificationResult.Event.MessageID,
 		From:           "orchestrator-node",

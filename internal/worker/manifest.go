@@ -82,6 +82,10 @@ func Prepare(root string, ticket dispatch.Ticket, leaseID string) (DispatchBundl
 		return DispatchBundle{}, err
 	}
 	constraintSystem := orchestration.DefaultConstraintSystem(paths.Root, unique(ticket.ReasonCodes))
+	constraintSystem, err = verify.EvolveConstraintSystemFromFeedback(paths.Root, task, constraintSystem)
+	if err != nil {
+		return DispatchBundle{}, err
+	}
 	constraintPath := orchestration.ConstraintSnapshotPath(paths.Root, task.TaskID)
 	softRules, hardRules := orchestration.SplitConstraintRules(constraintSystem)
 	if err := orchestration.WriteConstraintSnapshot(constraintPath, orchestration.ConstraintSnapshot{

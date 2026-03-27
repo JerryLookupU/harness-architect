@@ -11,24 +11,26 @@ import (
 )
 
 type Envelope struct {
-	SchemaVersion string          `json:"schemaVersion"`
-	MessageID     string          `json:"messageId"`
-	Kind          string          `json:"kind"`
-	IdempotencyKey string         `json:"idempotencyKey"`
-	TraceID       string          `json:"traceId,omitempty"`
-	CausationID   string          `json:"causationId,omitempty"`
-	From          string          `json:"from"`
-	To            string          `json:"to"`
-	CreatedAt     string          `json:"createdAt"`
-	RequestID     string          `json:"requestId,omitempty"`
-	TaskID        string          `json:"taskId,omitempty"`
-	PlanEpoch     int             `json:"planEpoch,omitempty"`
-	Attempt       int             `json:"attempt,omitempty"`
-	SessionID     string          `json:"sessionId,omitempty"`
-	WorkerID      string          `json:"workerId,omitempty"`
-	LeaseID       string          `json:"leaseId,omitempty"`
-	ReasonCodes   []string        `json:"reasonCodes,omitempty"`
-	Payload       json.RawMessage `json:"payload"`
+	SchemaVersion  string          `json:"schemaVersion"`
+	MessageID      string          `json:"messageId"`
+	Kind           string          `json:"kind"`
+	IdempotencyKey string          `json:"idempotencyKey"`
+	ProjectID      string          `json:"projectId,omitempty"`
+	ProjectSpaceID string          `json:"projectSpaceId,omitempty"`
+	TraceID        string          `json:"traceId,omitempty"`
+	CausationID    string          `json:"causationId,omitempty"`
+	From           string          `json:"from"`
+	To             string          `json:"to"`
+	CreatedAt      string          `json:"createdAt"`
+	RequestID      string          `json:"requestId,omitempty"`
+	TaskID         string          `json:"taskId,omitempty"`
+	PlanEpoch      int             `json:"planEpoch,omitempty"`
+	Attempt        int             `json:"attempt,omitempty"`
+	SessionID      string          `json:"sessionId,omitempty"`
+	WorkerID       string          `json:"workerId,omitempty"`
+	LeaseID        string          `json:"leaseId,omitempty"`
+	ReasonCodes    []string        `json:"reasonCodes,omitempty"`
+	Payload        json.RawMessage `json:"payload"`
 }
 
 type AppendResult struct {
@@ -72,7 +74,10 @@ func AppendEvent(path string, event Envelope) (AppendResult, error) {
 		return AppendResult{}, err
 	}
 	for _, existing := range events {
-		if existing.Kind == event.Kind && existing.IdempotencyKey == event.IdempotencyKey {
+		if existing.Kind == event.Kind &&
+			existing.IdempotencyKey == event.IdempotencyKey &&
+			existing.ProjectID == event.ProjectID &&
+			existing.ProjectSpaceID == event.ProjectSpaceID {
 			return AppendResult{Event: existing, Duplicate: true}, nil
 		}
 	}
