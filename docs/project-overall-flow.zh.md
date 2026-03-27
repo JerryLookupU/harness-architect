@@ -23,7 +23,7 @@
 ```mermaid
 flowchart TD
     A["用户执行 harness submit"] --> B["runtime.Submit 写入请求与任务"]
-    B --> C["daemon run-once / loop 取下一个可运行任务"]
+    B --> C["daemon loop 取下一个可运行任务"]
     C --> D["route.Evaluate 做路由判断"]
     D --> E["dispatch.Issue 生成 dispatch ticket"]
     E --> F["lease.Acquire / dispatch.Claim 领取执行权"]
@@ -42,7 +42,7 @@ flowchart TD
 对应 README 中描述的 canonical path：
 
 1. `harness submit`
-2. `harness daemon run-once`
+2. `harness daemon loop`
 3. route task
 4. issue dispatch
 5. acquire and claim lease
@@ -79,7 +79,7 @@ flowchart TD
 
 入口命令：
 
-- `harness daemon run-once <ROOT>`
+- `harness daemon loop <ROOT>`
 - `harness daemon loop <ROOT>`
 
 这一阶段由 `internal/runtime.RunOnce` 驱动。
@@ -313,7 +313,7 @@ runtime 会先从 artifact 目录推导验证状态：
 - `internal/bootstrap`
   - 初始化 `.harness` 结构
 - `internal/runtime`
-  - 主调度器，串起 submit / run-once / loop / control
+  - 主调度器，串起 submit / loop / control
 - `internal/route`
   - 路由决策，判断 dispatch / resume / replan / block
 - `internal/dispatch`
@@ -344,7 +344,7 @@ runtime 会先从 artifact 目录推导验证状态：
 如果从使用者角度看，最短链路就是：
 
 1. `harness submit` 提任务
-2. `harness daemon run-once` 或 `loop` 跑调度
+2. `harness daemon loop` 跑调度
 3. runtime 自动 route / dispatch / execute / verify
 4. 用 `harness tasks` / `harness task` / `harness control` 查看与控制状态
 

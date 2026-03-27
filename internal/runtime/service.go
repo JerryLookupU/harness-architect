@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -74,6 +75,11 @@ type submitClassification struct {
 	ClassificationReason  string
 }
 
+type submissionBinding struct {
+	Action string
+	Task   adapter.Task
+}
+
 func Submit(request SubmitRequest) (SubmitResult, error) {
 	if strings.TrimSpace(request.Goal) == "" {
 		return SubmitResult{}, errors.New("goal is required")
@@ -87,58 +93,30 @@ func Submit(request SubmitRequest) (SubmitResult, error) {
 		return SubmitResult{}, err
 	}
 	now := state.NowUTC()
-	taskID := nextTaskID(pool.Tasks)
 	requestID := nextRequestID(paths.QueuePath)
 	kind := strings.TrimSpace(request.Kind)
 	if kind == "" {
 		kind = inferKind(request.Goal)
 	}
 	classification := classifySubmission(request, pool.Tasks)
-	if strings.TrimSpace(classification.TargetThreadKey) == "" {
-		classification.TargetThreadKey = requestID
+	binding, err := resolveSubmissionBinding(paths.Root, requestID, now, kind, request, pool.Tasks, classification)
+	if err != nil {
+		return SubmitResult{}, err
 	}
-	task := adapter.Task{
-		TaskID:                 taskID,
-		ThreadKey:              classification.TargetThreadKey,
-		Kind:                   kind,
-		RoleHint:               "worker",
-		Title:                  shortTitle(request.Goal),
-		Summary:                request.Goal,
-		Description:            strings.Join(uniqueNonEmpty(request.Contexts), "\n"),
-		WorkerMode:             "execution",
-		Status:                 "queued",
-		StatusReason:           "submitted",
-		PlanEpoch:              maxInt(classification.TargetPlanEpoch, 1),
-		OwnedPaths:             defaultOwnedPaths(paths.Root),
-		ForbiddenPaths:         []string{".git/**", ".harness/**"},
-		VerificationRuleIDs:    []string{},
-		ResumeStrategy:         "fresh",
-		RoutingModel:           "gpt-5.4",
-		ExecutionModel:         "gpt-5.3-codex",
-		OrchestrationSessionID: "runtime",
-		PromptStages:           []string{"route", "dispatch", "execute", "verify"},
-		Dispatch: adapter.DispatchProfile{
-			WorkspaceRoot: paths.Root,
-			WorktreePath:  ".",
-			BranchName:    "main",
-			BaseRef:       "HEAD",
-			DiffBase:      "HEAD",
-		},
-		UpdatedAt: now,
-	}
-	if err := adapter.UpsertTask(paths.Root, task); err != nil {
+	if err := adapter.UpsertTask(paths.Root, binding.Task); err != nil {
 		return SubmitResult{}, err
 	}
 	record := RequestRecord{
 		RequestID:             requestID,
-		TaskID:                taskID,
-		ThreadKey:             classification.TargetThreadKey,
-		TargetThreadKey:       classification.TargetThreadKey,
+		TaskID:                binding.Task.TaskID,
+		BindingAction:         binding.Action,
+		ThreadKey:             binding.Task.ThreadKey,
+		TargetThreadKey:       firstString(classification.TargetThreadKey, binding.Task.ThreadKey),
 		TargetPlanEpoch:       classification.TargetPlanEpoch,
 		Kind:                  kind,
 		Goal:                  request.Goal,
 		Contexts:              uniqueNonEmpty(request.Contexts),
-		Status:                "queued",
+		Status:                firstString(binding.Task.Status, "queued"),
 		FrontDoorTriage:       classification.FrontDoorTriage,
 		NormalizedIntentClass: classification.NormalizedIntentClass,
 		FusionDecision:        classification.FusionDecision,
@@ -149,15 +127,21 @@ func Submit(request SubmitRequest) (SubmitResult, error) {
 		CreatedAt:             now,
 		UpdatedAt:             now,
 	}
+	if binding.Action == "reused_existing_task" {
+		record.ReusedTaskID = binding.Task.TaskID
+	}
 	if err := appendRequest(paths.QueuePath, record); err != nil {
 		return SubmitResult{}, err
 	}
-	if err := updateIntakeState(paths, record, task); err != nil {
+	if err := writeRequestHotState(paths, record, binding.Task); err != nil {
+		return SubmitResult{}, err
+	}
+	if err := updateIntakeState(paths, record, binding.Task); err != nil {
 		return SubmitResult{}, err
 	}
 	if err := updateRuntime(paths.RuntimePath, func(current RuntimeState) RuntimeState {
-		current.Status = "queued"
-		current.ActiveTaskID = taskID
+		current.Status = firstString(binding.Task.Status, "queued")
+		current.ActiveTaskID = binding.Task.TaskID
 		current.LastRunAt = now
 		return current
 	}); err != nil {
@@ -166,7 +150,7 @@ func Submit(request SubmitRequest) (SubmitResult, error) {
 	return SubmitResult{
 		Initialized: true,
 		Request:     record,
-		Task:        task,
+		Task:        binding.Task,
 	}, nil
 }
 
@@ -199,7 +183,7 @@ func RunOnce(root string, options RunOptions) (RunResult, error) {
 	now := state.NowUTC()
 	if err := updateTask(paths.Root, task.TaskID, func(current *adapter.Task) {
 		current.Status = "routing"
-		current.StatusReason = "daemon run-once"
+		current.StatusReason = "daemon cycle"
 		current.UpdatedAt = now
 	}); err != nil {
 		return RunResult{}, err
@@ -368,6 +352,7 @@ func RunOnce(root string, options RunOptions) (RunResult, error) {
 		WorkerID:       workerID,
 		Cwd:            ticket.Cwd,
 		Command:        resolveCommand(ticket.Command, map[string]string{"LAST_MESSAGE_PATH": filepath.Join(bundle.ArtifactDir, "last-message.txt")}),
+		CommandBanner:  bundle.CommandBanner,
 		PromptPath:     bundle.PromptPath,
 		Budget:         ticket.Budget,
 		CheckpointPath: checkpointPath,
@@ -415,7 +400,7 @@ func RunOnce(root string, options RunOptions) (RunResult, error) {
 		LeaseID:       leaseRecord.LeaseID,
 		CheckpointRef: checkpointPath,
 		Status:        "checkpointed",
-		Summary:       "daemon run-once checkpoint persisted",
+		Summary:       "daemon cycle checkpoint persisted",
 	}); err != nil {
 		return RunResult{}, err
 	}
@@ -596,14 +581,31 @@ func RunOnce(root string, options RunOptions) (RunResult, error) {
 }
 
 func Loop(root string, interval time.Duration, options RunOptions) error {
+	return LoopContext(context.Background(), root, interval, options)
+}
+
+func LoopContext(ctx context.Context, root string, interval time.Duration, options RunOptions) error {
 	if interval <= 0 {
 		interval = 30 * time.Second
 	}
+	timer := time.NewTimer(0)
+	defer timer.Stop()
 	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-timer.C:
+		}
 		if _, err := RunOnce(root, options); err != nil {
 			return err
 		}
-		time.Sleep(interval)
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(interval)
 	}
 }
 
@@ -700,6 +702,128 @@ func updateIntakeState(paths adapter.Paths, record RequestRecord, task adapter.T
 		return err
 	}
 	if err := refreshTodoSummary(paths, threadKey, record.RequestID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func resolveSubmissionBinding(root, requestID, now, kind string, request SubmitRequest, tasks []adapter.Task, classification submitClassification) (submissionBinding, error) {
+	threadKey := firstString(classification.TargetThreadKey, requestID)
+	if match, ok := latestMatchingTask(tasks, classification.CanonicalGoalHash); ok && canReuseSubmissionTask(match) {
+		match.ThreadKey = firstString(match.ThreadKey, threadKey, match.TaskID)
+		match.Title = firstString(match.Title, shortTitle(request.Goal))
+		if strings.TrimSpace(request.Goal) != "" {
+			match.Summary = request.Goal
+		}
+		match.Description = mergeTaskDescription(match.Description, request.Contexts)
+		match.StatusReason = "request reused by submit"
+		match.PlanEpoch = maxInt(match.PlanEpoch, classification.TargetPlanEpoch, 1)
+		match.UpdatedAt = now
+		return submissionBinding{
+			Action: "reused_existing_task",
+			Task:   match,
+		}, nil
+	}
+	return submissionBinding{
+		Action: "created_new_task",
+		Task: adapter.Task{
+			TaskID:                 nextTaskID(tasks),
+			ThreadKey:              threadKey,
+			Kind:                   kind,
+			RoleHint:               "worker",
+			Title:                  shortTitle(request.Goal),
+			Summary:                request.Goal,
+			Description:            strings.Join(uniqueNonEmpty(request.Contexts), "\n"),
+			WorkerMode:             "execution",
+			Status:                 "queued",
+			StatusReason:           "submitted",
+			PlanEpoch:              maxInt(classification.TargetPlanEpoch, 1),
+			OwnedPaths:             defaultOwnedPaths(root),
+			ForbiddenPaths:         []string{".git/**", ".harness/**"},
+			VerificationRuleIDs:    []string{},
+			ResumeStrategy:         "fresh",
+			RoutingModel:           "gpt-5.4",
+			ExecutionModel:         "gpt-5.3-codex",
+			OrchestrationSessionID: "runtime",
+			PromptStages:           []string{"route", "dispatch", "execute", "verify"},
+			Dispatch: adapter.DispatchProfile{
+				WorkspaceRoot: root,
+				WorktreePath:  ".",
+				BranchName:    "main",
+				BaseRef:       "HEAD",
+				DiffBase:      "HEAD",
+			},
+			UpdatedAt: now,
+		},
+	}, nil
+}
+
+func canReuseSubmissionTask(task adapter.Task) bool {
+	switch task.Status {
+	case "", "queued", "needs_replan", "recoverable":
+		return task.LastDispatchID == "" && task.LastLeaseID == "" && task.TmuxSession == ""
+	default:
+		return false
+	}
+}
+
+func mergeTaskDescription(existing string, contexts []string) string {
+	lines := []string{}
+	if strings.TrimSpace(existing) != "" {
+		lines = append(lines, strings.Split(existing, "\n")...)
+	}
+	lines = append(lines, contexts...)
+	return strings.Join(uniqueNonEmpty(lines), "\n")
+}
+
+func writeRequestHotState(paths adapter.Paths, record RequestRecord, task adapter.Task) error {
+	threadKey := firstString(task.ThreadKey, record.TargetThreadKey, record.ThreadKey, task.TaskID)
+	requestSummary, err := loadRequestSummary(paths.RequestSummaryPath)
+	if err != nil {
+		return err
+	}
+	requestSummary.LatestRequestID = record.RequestID
+	requestSummary.LatestTaskID = task.TaskID
+	requestSummary.LatestThreadKey = threadKey
+	requestSummary.FrontDoorTriage = record.FrontDoorTriage
+	requestSummary.NormalizedIntentClass = record.NormalizedIntentClass
+	requestSummary.FusionDecision = record.FusionDecision
+	requestSummary.BindingAction = record.BindingAction
+	requestSummary.TargetPlanEpoch = record.TargetPlanEpoch
+	requestSummary.RequestCount++
+	if record.BindingAction == "reused_existing_task" {
+		requestSummary.ReusedTaskCount++
+	} else {
+		requestSummary.CreatedTaskCount++
+	}
+	if _, err := state.WriteSnapshot(paths.RequestSummaryPath, &requestSummary, "harness-runtime", requestSummary.Revision); err != nil {
+		return err
+	}
+
+	requestIndex, err := loadRequestIndex(paths.RequestIndexPath)
+	if err != nil {
+		return err
+	}
+	requestIndex.RequestsByID[record.RequestID] = record
+	requestIndex.LatestRequestByTaskID[task.TaskID] = record.RequestID
+	requestIndex.LatestRequestByThreadKey[threadKey] = record.RequestID
+	if record.IdempotencyKey != "" {
+		requestIndex.LatestRequestByIdempotencyKey[record.IdempotencyKey] = record.RequestID
+	}
+	if _, err := state.WriteSnapshot(paths.RequestIndexPath, &requestIndex, "harness-runtime", requestIndex.Revision); err != nil {
+		return err
+	}
+
+	requestTaskMap, err := loadRequestTaskMap(paths.RequestTaskMapPath)
+	if err != nil {
+		return err
+	}
+	requestTaskMap.RequestToTask[record.RequestID] = task.TaskID
+	requestTaskMap.RequestToThread[record.RequestID] = threadKey
+	requestTaskMap.TaskToRequests[task.TaskID] = appendUnique(requestTaskMap.TaskToRequests[task.TaskID], record.RequestID)
+	requestTaskMap.ThreadToRequests[threadKey] = appendUnique(requestTaskMap.ThreadToRequests[threadKey], record.RequestID)
+	requestTaskMap.ThreadToTasks[threadKey] = appendUnique(requestTaskMap.ThreadToTasks[threadKey], task.TaskID)
+	if _, err := state.WriteSnapshot(paths.RequestTaskMapPath, &requestTaskMap, "harness-runtime", requestTaskMap.Revision); err != nil {
 		return err
 	}
 	return nil
@@ -806,7 +930,7 @@ func BuildRouteInput(root string, task adapter.Task, latestPlanEpoch int, checkp
 	if err != nil {
 		return route.Input{}, err
 	}
-	requestRecord, _, err := loadLatestRequestForTask(paths.QueuePath, task.TaskID)
+	requestRecord, _, err := loadLatestRequestForTask(paths, task.TaskID)
 	if err != nil {
 		return route.Input{}, err
 	}
@@ -848,7 +972,20 @@ func RefreshExecutionIndexesForTask(root string, task adapter.Task) error {
 	return refreshExecutionIndexes(paths, task, "", "")
 }
 
-func loadLatestRequestForTask(queuePath, taskID string) (RequestRecord, bool, error) {
+func loadLatestRequestForTask(paths adapter.Paths, taskID string) (RequestRecord, bool, error) {
+	requestIndex, err := loadRequestIndex(paths.RequestIndexPath)
+	if err != nil {
+		return RequestRecord{}, false, err
+	}
+	if requestID := requestIndex.LatestRequestByTaskID[taskID]; requestID != "" {
+		if record, ok := requestIndex.RequestsByID[requestID]; ok {
+			return record, true, nil
+		}
+	}
+	return loadLatestRequestForTaskFromQueue(paths.QueuePath, taskID)
+}
+
+func loadLatestRequestForTaskFromQueue(queuePath, taskID string) (RequestRecord, bool, error) {
 	file, err := os.Open(queuePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -876,6 +1013,68 @@ func loadLatestRequestForTask(queuePath, taskID string) (RequestRecord, bool, er
 		return RequestRecord{}, false, err
 	}
 	return latest, found, nil
+}
+
+func loadRequestSummary(path string) (RequestSummary, error) {
+	summary := RequestSummary{}
+	if _, err := state.LoadJSONIfExists(path, &summary); err != nil {
+		return RequestSummary{}, err
+	}
+	return summary, nil
+}
+
+func loadRequestIndex(path string) (RequestIndex, error) {
+	index := RequestIndex{
+		RequestsByID:                  map[string]RequestRecord{},
+		LatestRequestByTaskID:         map[string]string{},
+		LatestRequestByThreadKey:      map[string]string{},
+		LatestRequestByIdempotencyKey: map[string]string{},
+	}
+	if _, err := state.LoadJSONIfExists(path, &index); err != nil {
+		return RequestIndex{}, err
+	}
+	if index.RequestsByID == nil {
+		index.RequestsByID = map[string]RequestRecord{}
+	}
+	if index.LatestRequestByTaskID == nil {
+		index.LatestRequestByTaskID = map[string]string{}
+	}
+	if index.LatestRequestByThreadKey == nil {
+		index.LatestRequestByThreadKey = map[string]string{}
+	}
+	if index.LatestRequestByIdempotencyKey == nil {
+		index.LatestRequestByIdempotencyKey = map[string]string{}
+	}
+	return index, nil
+}
+
+func loadRequestTaskMap(path string) (RequestTaskMap, error) {
+	mapping := RequestTaskMap{
+		RequestToTask:    map[string]string{},
+		RequestToThread:  map[string]string{},
+		TaskToRequests:   map[string][]string{},
+		ThreadToRequests: map[string][]string{},
+		ThreadToTasks:    map[string][]string{},
+	}
+	if _, err := state.LoadJSONIfExists(path, &mapping); err != nil {
+		return RequestTaskMap{}, err
+	}
+	if mapping.RequestToTask == nil {
+		mapping.RequestToTask = map[string]string{}
+	}
+	if mapping.RequestToThread == nil {
+		mapping.RequestToThread = map[string]string{}
+	}
+	if mapping.TaskToRequests == nil {
+		mapping.TaskToRequests = map[string][]string{}
+	}
+	if mapping.ThreadToRequests == nil {
+		mapping.ThreadToRequests = map[string][]string{}
+	}
+	if mapping.ThreadToTasks == nil {
+		mapping.ThreadToTasks = map[string][]string{}
+	}
+	return mapping, nil
 }
 
 func updateTask(root, taskID string, update func(*adapter.Task)) error {
@@ -1094,7 +1293,9 @@ func refreshThreadState(paths adapter.Paths, task adapter.Task, latestRequestID,
 		threadEntry.RequestIDs = appendUnique(threadEntry.RequestIDs, latestRequestID)
 	}
 	threadEntry.LatestTaskID = task.TaskID
-	threadEntry.PlanEpoch = maxInt(threadEntry.PlanEpoch, task.PlanEpoch)
+	threadEntry.CurrentPlanEpoch = maxInt(threadEntry.CurrentPlanEpoch, threadEntry.PlanEpoch, task.PlanEpoch)
+	threadEntry.PlanEpoch = threadEntry.CurrentPlanEpoch
+	threadEntry.LatestValidPlanEpoch = maxInt(threadEntry.LatestValidPlanEpoch, threadEntry.CurrentPlanEpoch)
 	threadEntry.TaskIDs = appendUnique(threadEntry.TaskIDs, task.TaskID)
 	threadEntry.Status = task.Status
 	threadEntry.UpdatedAt = task.UpdatedAt

@@ -1,64 +1,98 @@
-# Klein-Harness 架构补完与收口实施方案
+# Klein-Harness 架构收口文档
 
 ## 0. 文档定位
 
-本文是面向当前 `Klein-Harness` 的一份**可直接落地执行**的架构补完方案。
+本文不是“准备怎么改”的讨论稿，而是面向 `Klein-Harness` 当前方向的**架构收口文档**。
 
-目标不是推翻现有设计，而是在当前已经成立的：
+本文用于冻结以下内容：
 
-- `route-first-dispatch-second`
-- `repo-local state plane`
-- `runtime-owned completion gate`
-- `worker task-local authority`
+- 运行时主链路的 authoritative 对象边界
+- contract-first 的 done definition 闭环
+- evaluator-gated 的验收与完成闭环
+- derived summary 的可重建规则
+- 渐进迁移顺序、阶段验收口径与稳定状态
 
-这些核心原则之上，补齐长任务 harness 最关键的三个闭环：
+本文的作用不是扩张系统，而是收紧系统。本文明确规定：
 
-1. **contract-first 闭环**
-2. **independent evaluator 闭环**
-3. **authoritative vs derived 真相边界闭环**
+- 不引入第二调度器
+- 不把 skill / methodology / prompt layer 扩写成新的 runtime
+- 不把 summary、prompt、trace、markdown 继续抬升为 authority
+- 不通过重构重写追求“整洁感”，而通过对象边界冻结和读取方切换完成收口
 
-本文同时满足以下要求：
+本文覆盖的 canonical runtime 仍然是：
 
-- 提供**最小可执行任务**定义
-- 方案按**原子任务**拆解
-- 提供**谱系式 to-do / checklist**
-- 提供**最终效果描述**与验收口径
-- 作为后续实现、评审、迁移、验收的统一文档
+- `cmd/harness`
+- `internal/runtime`
+- `internal/route`
+- `internal/dispatch`
+- `internal/lease`
+- `internal/worker`
+- `internal/verify`
+- repo-local control plane `.harness/`
 
 ---
 
 ## 1. 当前架构判断
 
-当前架构不是缺乏骨架，而是已经具备强控制面基础，但仍存在几个尚未完全收口的关键点：
+当前系统已经具备可收口的骨架，不需要再发明新的骨架。
 
-### 已成立的优势
+### 1.1 已经成立的部分
 
-- runtime / worker authority split 明确
-- `.harness/` repo-local state plane 已成型
-- route / dispatch / lease / verify / completion gate 分层清楚
-- task-local artifact 与 global runtime summary 已有边界
-- worker 不拥有 completion / archive / merge 决策权
+当前方向已经成立的判断如下：
 
-### 尚未完全收口的缺口
+- `harness` 是唯一 canonical CLI
+- Go runtime 已经拥有 route / dispatch / lease / burst / verify / control 主链路
+- `tmux` 只是执行承载，不是调度器，不是 authority
+- `codex` 只是模型执行后端，不是控制面
+- `.harness/` 已经形成 repo-local state plane
+- worker 只拥有 task-local execution，不拥有 completion / archive / merge 决策权
+- completion 已经不再等价于“worker 说自己做完了”
 
-1. `verify` 仍偏向结果摄入，尚未完全成为独立 evaluator
-2. `task-contract` 语义存在，但尚未成为 dispatch 前后的绝对主合同
-3. `accepted-packet / task-contract / worker-spec` 三者边界需要进一步硬化
-4. `submit -> classify -> fuse -> bind -> selective replan` 已有文档定义，但还需完全硬化成 canonical 前置链路
-5. `derived summaries` 必须持续证明可从 authoritative truth 重建，避免偷偷承载 authority
+这意味着系统的主要问题不是“能力缺失”，而是“对象边界和闭环定义还不够硬”。
+
+### 1.2 当前未收紧的地方
+
+需要继续收口的点集中在五类：
+
+1. `accepted-packet / task-contract / worker-spec` 三者边界还不够硬
+2. `verify` 仍带有 ingest 色彩，独立 evaluator 身份不够硬
+3. `completion-gate` 还需要完全升级为 contract + evidence + scorecard 驱动
+4. `submit -> classify -> fuse -> bind -> selective replan` 需要从“已有设计”升级为“唯一前置链路”
+5. 部分 summary 仍存在偷偷承载 authority 的风险
+
+### 1.3 当前改造方向的正确结论
+
+当前正确方向不是：
+
+- 重写 runtime
+- 发明新的 planning runtime
+- 把 spec workflow 重新外置
+- 用更复杂的 orchestration 替代当前链路
+
+当前正确方向是：
+
+- 冻结真相对象
+- 让读取方统一只读这些对象
+- 让 verify 成为 evaluator
+- 让 completion gate 成为最终裁决面
+- 让所有 derived summary 明确降权并可重建
 
 ---
 
 ## 2. 改造总目标
 
-把当前 harness 从“控制面已强、验收面偏弱、对象边界尚在收敛中”的状态，演进到：
+本次收口的总目标是把当前系统收紧为一套**对象真相源唯一、合同优先、评估独立、完成判定可解释、summary 可重建**的 runtime。
 
-- **packet-owned**：accepted epoch 只有一个 packet truth
-- **contract-backed**：每次 dispatch 都有清晰、可验证的 task contract
-- **evaluator-gated**：verify 不是 ingest，而是独立评估面
-- **gate-explained**：completion gate 明确解释为什么未完成
-- **summary-rebuildable**：所有 summary 都能从 authoritative truth 重建
-- **thread-aware intake**：新输入进入 thread / epoch / selective replan 体系，而不是简单等于新 task
+完成后，系统必须满足以下状态：
+
+- **task truth 唯一**：任务身份、状态、epoch、thread 绑定只由 task truth 持有
+- **accepted packet 唯一**：一个 accepted epoch 只有一个 packet truth
+- **dispatch contract 唯一**：一个 dispatch 只有一个当前有效的 task contract，且它是这次 dispatch 的唯一 done definition
+- **verify judgment 唯一**：verify 输出的是独立 judgment，而不是 worker 结果翻译
+- **completion gate 唯一**：是否 completed 只由 completion gate 决定
+- **summary 全部降级**：summary 只能投影 authoritative truth，不能重新定义 truth
+- **submit 前置链路唯一**：任何新输入都必须进入 classify / fuse / bind / selective replan，而不是直接偷写 task truth
+- **target repo 验收闭环成立**：phase-1 必须能在目标仓中验证真实 requirement，而不是只在 body repo 自测自证
 
 ---
 
@@ -66,2669 +100,1098 @@
 
 ### 3.1 单一真相源原则
 
-任何一个语义只允许一个主要 authoritative owner：
+同一种语义只允许一个 authoritative owner。
 
-- task truth：`task-pool.json`
-- accepted epoch truth：`accepted-packet-<task>.json`
-- current dispatch contract truth：`task-contract.json`
-- verification judgment truth：`verify.json` + `verify-scorecard`
-- completion decision truth：`completion-gate.json`
+如果两个对象都能回答同一个问题，系统迟早漂移。
 
-### 3.2 合同优先原则
+### 3.2 contract-first 原则
 
-worker 不应直接执行“模糊目标”，而应执行当前 dispatch 对应的明确合同。
+worker 不执行“模糊目标”，只执行当前 dispatch 对应的 task contract。
 
-### 3.3 评估独立原则
+verify 不验证“worker 自述”，只验证 contract fulfillment。
 
-verify 必须能否决“看起来像完成”的执行结果。
+completion gate 不消费“passed / failed 口头结论”，只消费 contract-aware judgment。
 
-### 3.4 summary 可重建原则
+### 3.3 evaluator-gated 原则
 
-所有 hot summary 都必须视为可重建投影，不能变成隐藏 authority。
+verify 不是 ingest 的别名。
+
+verify 的职责是：
+
+- 基于 contract 做独立评估
+- 产出 scorecard / findings / reasons / next action
+- 否决看起来像完成但证据不足、范围偏移、评审未闭环的执行结果
+
+### 3.4 authority 与 derived 严格分层原则
+
+authoritative truth 参与主链路决策。
+
+derived summary 只服务读取性能、operator 视图和紧凑上下文，不参与重新定义主链路语义。
 
 ### 3.5 渐进替换原则
 
-先补 runtime object，再让现有 runtime 节点逐步消费新对象；
-不先引入第二套调度器，不先大改 loop choreography。
+收口顺序必须是：
 
-### 3.6 最小增量原则
+1. 先冻结定义
+2. 再写入对象
+3. 再切换读取方
+4. 再切换 gate 判定
+5. 再做真实世界 target 验证
 
-每一步改造都必须：
+不允许跳过定义冻结，直接靠运行时行为“自然收敛”。
 
-- 可单独实施
-- 可单独测试
-- 可单独回滚
-- 不破坏 canonical surface
+### 3.6 最小扩张原则
+
+本次收口允许新增的，只能是：
+
+- 缺失的 authoritative object
+- 缺失的 evaluator output
+- 缺失的 rebuild metadata
+- 缺失的 rollout acceptance rule
+
+本次收口不允许新增的，是第二套 runtime 语义层。
 
 ---
 
-## 4. 目标架构效果
+## 4. 收口目标图
 
-改造完成后，系统应具备以下结构：
+### 4.1 主链路目标图
 
 ```text
 submit
-  -> intake classification
-  -> request fusion
-  -> thread bind
+  -> classify
+  -> fuse
+  -> bind thread/epoch
   -> selective replan if needed
   -> route
-  -> issue dispatch
-  -> acquire lease
-  -> prepare accepted packet + task contract + worker spec
-  -> run bounded burst
-  -> ingest outcome
-  -> evaluator verify against contract
-  -> refresh completion gate
-  -> emit next action / complete / blocked / replan
-  -> refresh summaries
+  -> dispatch
+  -> lease
+  -> prepare accepted-packet
+  -> prepare task-contract
+  -> prepare worker-spec
+  -> bounded burst
+  -> ingest worker-result
+  -> build evidence ledger
+  -> verify as evaluator against contract
+  -> completion gate against contract + scorecard + evidence + review
+  -> emit next action / completed / blocked / needs_replan / needs_review
+  -> rebuild summaries
 ```
 
-运行期对象关系应稳定为：
+### 4.2 对象层级目标图
 
 ```text
-accepted-packet = accepted epoch 的战略真相
- task-contract  = 当前 dispatch / slice 的战术合同
-   worker-spec  = 执行边界与操作约束
-verify-scorecard = 独立评估结论
-completion-gate  = runtime 最终完成裁决
+Task Truth
+  -> owns task identity / thread binding / plan epoch / lifecycle
+
+Accepted Packet Truth
+  -> owns accepted-epoch intent, plan selection, acceptance markers, replan triggers
+
+Task Contract Truth
+  -> owns current dispatch done definition
+
+Worker Spec
+  -> owns execution boundary, write budget, path scope, operational constraints
+
+Worker Result
+  -> owns this burst's claimed outcome only
+
+Verify Judgment
+  -> owns evaluator scorecard / findings / reasons / next action
+
+Completion Gate
+  -> owns final completion decision
+
+Summaries / Projections
+  -> own nothing authoritative; rebuild only
 ```
 
----
+### 4.3 闭环目标
 
-## 5. 最小可执行任务清单
+闭环不是“worker 跑完”。
 
-以下任务全部采用统一格式：
+闭环必须同时成立：
 
-- **[task:任务名]**
-- 任务描述
-- 任务要求
-- 任务目标
-- 输入
-- 输出
-- 完成定义（DoD）
-- 依赖
-- 验证方式
-- 回滚边界
-
-这些任务被设计为**原子可执行**，每项任务只解决一个明确问题。
+- 输入进入统一 intake 前置链路
+- dispatch 之前已有 accepted packet
+- dispatch 之时已有 task contract
+- worker 只按 contract 执行
+- verify 独立评估 contract fulfillment
+- completion gate 独立裁决 completed 与否
+- 所有摘要都可从 truth 重建
+- 真实 target repo 能复现相同闭环
 
 ---
 
-### [task:T01 固化 Accepted Packet Authority]
+## 5. 真相对象边界
 
-**任务描述**
+本节是本文最重要的收口部分。每个关键对象都必须明确：谁拥有它、谁引用它、谁不能重定义它、坏了会影响什么。
 
-将 `accepted-packet-<task>.json` 硬化为 accepted epoch 的唯一 packet truth，禁止 route / dispatch / verify / query 在其他对象中重新拼装 packet 真相。
+### 5.1 对象边界总表
 
-**任务要求**
+| 对象 | authoritative owner | 写入方 | 核心语义 | 谁只能引用不能重定义 | 对主链路影响 |
+| --- | --- | --- | --- | --- | --- |
+| task truth | runtime task ledger | `internal/runtime` / control actions | task 身份、thread、epoch、生命周期、当前状态 | query / verify / summaries / worker | 坏了会直接影响主链路 |
+| accepted packet truth | runtime accepted-packet ledger | orchestration prepare / runtime accepted epoch write | accepted epoch 的目标、约束、选定方案、acceptance markers、replan triggers | route / dispatch / verify / gate / query / worker | 坏了会直接影响主链路 |
+| task contract truth | current dispatch artifact | worker prepare under runtime control | 当前 dispatch 的 done definition、verification checklist、required evidence | worker / verify / gate / query | 坏了会直接影响主链路 |
+| worker spec | current dispatch artifact | worker prepare under runtime control | 操作边界、写入范围、预算、blocked paths、执行约束 | worker / query | 坏了会影响执行边界，但不应重定义 done |
+| worker result | current dispatch artifact | worker burst | 本次执行结果、产出声明、运行结论 | verify / query / audits | 坏了会影响该次评估输入 |
+| verify judgment truth | verify artifact / latest verification ledger | `internal/verify` | evaluator scorecard、findings、reasons、recommended next action | gate / query / control | 坏了会直接影响验收链 |
+| completion gate truth | completion-gate ledger | `internal/verify` or dedicated gate step within runtime | completed / incomplete / blocked / needs_review / needs_replan 的最终判定 | archive / query / control | 坏了会直接影响完成与归档 |
+| summaries / projections | derived only | summary generators | operator read model、compact machine read surface | 所有读取方都不得回写 authority | 坏了可重建，不应破坏主链路 |
 
-- 明确 accepted packet 的 schema
-- 明确 `taskId + planEpoch` 唯一对应当前 accepted packet
-- 明确 query / verify / gate 都从 accepted packet 读取 packet truth
-- 明确 planning trace 仅为解释材料，不再承担 packet truth
+### 5.2 task truth
 
-**任务目标**
+`task truth` 是任务主链路的根对象。它回答：
 
-让 packet 从“存在的对象”升级为“被全系统依赖的真相对象”。
+- 这是不是同一个 task
+- 属于哪个 thread
+- 当前 plan epoch 是多少
+- 当前状态是什么
+- 当前是否 queued / routing / dispatched / blocked / needs_replan / completed
 
-**输入**
+规则：
 
-- 当前 runtime task
-- route 决策结果
-- orchestration synthesis 输出
+- task truth 只能由 runtime ledger 定义
+- 任何 summary 都不能重新定义 task status
+- worker 不能直接回写 task status 成 completed
+- verify 可以提出 `recommendedNextAction`，但不能直接替代 task truth
 
-**输出**
+### 5.3 accepted packet truth
 
-- `.harness/state/accepted-packet-<task>.json`
-- schema 约束
-- 读取方引用切换
+`accepted packet truth` 是 accepted epoch 的唯一战略真相。
 
-**完成定义（DoD）**
+它回答：
 
-- accepted packet 包含完整关键字段
-- query 展示 packet 摘要时只读此对象
-- verify 与 completion gate 不再从 worker prompt / planning trace 反推 packet
-- stale packet 不会覆盖新 epoch truth
+- 这个 epoch 到底接受了什么目标
+- 接受了哪些约束和 owned paths
+- 当前选定方案是什么
+- acceptance markers 是什么
+- 什么变化会触发 replan
 
-**依赖**
+规则：
 
-- 无前置硬依赖
+- 一个 `taskId + planEpoch` 只有一个 accepted packet truth
+- planning trace、prompt、中间 synthesis 产物都不是 packet truth
+- route、verify、completion gate、query 一律只引用 accepted packet，不得自行拼装 packet 语义
+- 旧 epoch packet 不能覆盖新 epoch packet
 
-**验证方式**
+`accepted packet` 是 authoritative，不是 derived。坏了会影响 route / verify / gate 主链路。
 
-- 同一 task bump epoch 后，旧 packet 不再被视为当前 truth
-- query 可直接展示 packet 核心字段
-- verify 日志能标识其消费的 packet identity
+### 5.4 task contract truth
 
-**回滚边界**
+`task contract truth` 是当前 dispatch 的唯一 done definition。
 
-- 只影响 packet truth 读取路径
-- 不改 canonical CLI surface
+它回答：
+
+- 这次 dispatch 到底要完成什么
+- 哪些属于 `inScope`
+- 哪些属于 `outOfScope`
+- 完成标准 `doneCriteria` 是什么
+- verify 要检查什么 `verificationChecklist`
+- 必须提供什么 `requiredEvidence`
+- 哪些 finding 会阻止判定完成
+
+规则：
+
+- 一个 `dispatchId` 只能绑定一个当前有效 contract
+- contract 来自 accepted packet 的切片，不是 worker 自由发挥
+- worker 执行时消费 contract
+- verify 验收时消费同一 contract
+- completion gate 判定时消费同一 contract
+- repair / selective replan 如果改变 done definition，必须回到 contract 层，而不是只改 worker prompt
+
+`task contract` 是 authoritative，不是 worker note，也不是 summary。
+
+### 5.5 worker spec
+
+`worker spec` 不是 done definition，它只是执行边界对象。
+
+它回答：
+
+- worker 这次能写哪里
+- 不能碰哪里
+- 预算是多少
+- worktree / sandbox / tool boundary 是什么
+- checkpoint / rollback / resume 的执行约束是什么
+
+规则：
+
+- worker spec 可以约束“怎么做”，不能重定义“做成什么算完成”
+- worker spec 可以细化执行预算，不能改写 contract 的 done criteria
+- verify 不应把 worker spec 当成 done truth
+- completion gate 不应根据 worker spec 判定完成，只能用它辅助判断是否越界执行
+
+### 5.6 verify judgment truth
+
+`verify judgment truth` 是 evaluator 输出，不是 ingest 归档。
+
+它回答：
+
+- contract fulfillment 是否成立
+- 哪些 criteria 满足，哪些未满足
+- evidence 是否足够
+- review readiness 是否成立
+- 当前最重要的 findings 是什么
+- 下一步应该 repair / replan / review / complete
+
+规则：
+
+- verify 必须引用 accepted packet + task contract + worker result + evidence ledger
+- verify 不能只翻译 worker 的 success / fail
+- verify 成功不等于 completed
+- verify 必须输出结构化 reasons，而不是只输出自然语言总结
+
+### 5.7 completion gate truth
+
+`completion gate truth` 是最终完成裁决面。
+
+它回答：
+
+- 当前是否可以标记 completed
+- 如果不能，阻塞原因是什么
+- 是 `incomplete`、`blocked`、`needs_review` 还是 `needs_replan`
+- 如果需要 review，缺的是哪类 review evidence
+- 如果需要 replan，触发源是什么
+
+规则：
+
+- completion gate 必须消费 contract + verify scorecard + evidence ledger + review evidence
+- completion gate 不能只消费 verify 的 `passed/failed`
+- archive、closeout、operator 完成视图一律服从 completion gate
+
+### 5.8 summaries / projections
+
+summary 是派生层，不是 authority。
+
+规则：
+
+- 所有 summary 必须显式标记 `schemaVersion / generator / generatedAt / sourceTruths`
+- summary 损坏时必须允许直接重建
+- summary 不得保存只有自己知道、authoritative source 中不存在的关键字段
+- markdown 只能是 JSON summary 的投影，不得成为机器依赖
+
+坏了可以重建的是 summary；坏了影响主链路的是 truth object。这个边界必须长期保持清晰。
 
 ---
 
-### [task:T02 固化 Task Contract Authority]
+## 6. contract-first 闭环
 
-**任务描述**
+### 6.1 为什么 task-contract 是当前 dispatch 的唯一 done definition
 
-将 `task-contract.json` 提升为当前 dispatch / execution slice 的唯一 done definition，明确它不是附属工件，而是本轮执行合同。
+因为 dispatch 不是在实现“整个 packet”，而是在实现 packet 中当前被挑出的执行切片。
 
-**任务要求**
+因此：
 
-- 明确 `dispatchId` 与 contract 的唯一绑定
-- 明确 contract 必须包含 `inScope / outOfScope / doneCriteria / verificationChecklist / requiredEvidence`
-- 明确 worker 执行依据与 verify 验收依据都来自同一 contract
+- `accepted-packet` 定义的是 accepted epoch 的战略真相
+- `task-contract` 定义的是当前 dispatch 的战术完成标准
+- `worker-spec` 定义的是这次执行的操作边界
 
-**任务目标**
+如果没有 `task-contract` 这一层，系统就会退化成：
 
-把“这轮到底算做完什么”从隐含语义变成 runtime 可检查对象。
+- worker 根据 packet 自己解释 done
+- verify 根据 worker 结果反推 done
+- completion gate 根据 passed / failed 近似判断 done
 
-**输入**
+这不是 contract-first，而是语义漂移。
 
-- accepted packet
-- 当前 dispatch
-- execution slice selection
+### 6.2 task-contract 与 accepted-packet 的边界
 
-**输出**
+边界如下：
 
-- `.harness/artifacts/<task>/<dispatch>/task-contract.json`
+| 对象 | 层级 | 回答的问题 |
+| --- | --- | --- |
+| accepted-packet | 战略层 | 这个 epoch 接受了什么目标、方案、约束、验收标记 |
+| task-contract | 战术层 | 这次 dispatch 到底要交付什么才算 done |
+| worker-spec | 执行层 | worker 这次可以怎么做、不能怎么做 |
 
-**完成定义（DoD）**
+收口规则：
 
-- 每个 dispatch 都有唯一 contract
-- verify 明确引用 contract id
-- completion gate 可逐项判断 done criteria 是否满足
-- worker-spec 不再重复主合同定义
+- packet 不能被 worker-spec 稀释
+- contract 不能被 worker prompt 替代
+- worker-spec 不能篡改 contract 的 scope 和 done criteria
 
-**依赖**
+### 6.3 task-contract 必须包含的最小字段
 
-- T01
-
-**验证方式**
-
-- 多 dispatch 同 task 场景下，各自 contract 独立存在
-- verify 失败时可精确指出未满足的 contract 条款
-
-**回滚边界**
-
-- 主要影响 worker prepare / verify / gate 消费关系
-
----
-
-### [task:T03 收敛 Packet / Contract / Worker-Spec 边界]
-
-**任务描述**
-
-显式规定三类对象的语义边界，防止字段重复与 authority 漂移。
-
-**任务要求**
-
-- `accepted-packet`：战略层与 accepted epoch truth
-- `task-contract`：当前 dispatch 的验收合同
-- `worker-spec`：执行约束、操作边界、资源预算
-- 同一字段不可在三者中重复定义不同版本
-
-**任务目标**
-
-消除对象重叠导致的未来复杂度失控风险。
-
-**输入**
-
-- 当前三类对象定义
-
-**输出**
-
-- 边界表
-- schema ownership 规则
-- 重复字段清理方案
-
-**完成定义（DoD）**
-
-- 三者 owner 清单清楚
-- query / verify / worker 各自只读自己应读的对象
-- 不存在需要“综合三份文档才知道 done definition”的情况
-
-**依赖**
-
-- T01
-- T02
-
-**验证方式**
-
-- 抽样任意 dispatch，可一眼识别战略、战术、执行边界分别来自哪个对象
-
-**回滚边界**
-
-- 文档和 schema 层改动为主，逻辑切换可渐进
-
----
-
-### [task:T04 建立 Verify Scorecard Schema]
-
-**任务描述**
-
-把 verify 从单一 passed/failed 结果，升级为多维度 scorecard。
-
-**任务要求**
-
-固定至少以下维度：
-
-- `scopeCompletion`
-- `behaviorCorrectness`
-- `packetAlignment`
-- `evidenceQuality`
-- `reviewReadiness`
-
-每个维度必须包含：
-
-- `score`
-- `threshold`
-- `status`
-- `summary`
-
-**任务目标**
-
-让 verify 可以表达“哪里不够、差多少、下一步补什么”，而不是单句总结。
-
-**输入**
-
-- accepted packet
-- task contract
-- worker-result
-- verify evidence
-
-**输出**
-
-- 增强版 `verify.json`
-- 或独立 `verify-scorecard` 结构
-
-**完成定义（DoD）**
-
-- verify 产物能表达多维结论
-- completion gate 可读取 scorecard
-- query 可展示 scorecard 摘要
-
-**依赖**
-
-- T01
-- T02
-
-**验证方式**
-
-- 同一个任务可以出现“功能完成但 review 未达标”的独立失败结论
-- verify 不再只输出单一总体状态
-
-**回滚边界**
-
-- scorecard 字段可增量加入，保留旧 status 兼容期
-
----
-
-### [task:T05 建立 Evidence Ledger]
-
-**任务描述**
-
-为 verify 引入标准化 evidence ledger，明确“验证证据”不是自由文本，而是结构化引用集合。
-
-**任务要求**
-
-证据至少支持以下类别：
-
-- command result
-- file diff / changed paths
-- test output
-- artifact existence
-- review evidence
-- runtime checkpoint reference
-
-**任务目标**
-
-让 verify 结论可被追溯、可审计、可解释。
-
-**输入**
-
-- worker-result
-- verify 阶段收集的证据
-
-**输出**
-
-- `evidenceLedger`
-- 标准引用字段
-
-**完成定义（DoD）**
-
-- verify findings 均可追溯到 evidence ledger
-- completion gate 可判断证据是否完整
-- reviewRequired 场景可检查 review evidence 是否存在
-
-**依赖**
-
-- T04
-
-**验证方式**
-
-- 随机抽一个 verify finding，可定位到具体 evidence 引用
-
-**回滚边界**
-
-- 主要是 verify artifact 增强
-
----
-
-### [task:T06 让 Verify 成为 Independent Evaluator]
-
-**任务描述**
-
-在不新增新 binary 的前提下，先把 `internal/verify` 的职责升级为独立 evaluator，而不仅是 ingest 模块。
-
-**任务要求**
-
-verify 必须做到：
-
-- 对照 accepted packet
-- 对照 task contract
-- 对照 worker-result claims
-- 对照 evidence ledger
-- 输出 findings / scorecard / recommendedNextAction
-
-**任务目标**
-
-使 verify 能对“看起来完成”的执行结果做真正否决。
-
-**输入**
-
-- T01/T02/T04/T05 产物
-
-**输出**
-
-- evaluator 风格 verify 结果
-- `recommendedNextAction`
-
-**完成定义（DoD）**
-
-- worker 成功不等于 verify 成功
-- verify 成功不等于 completion gate 完成
-- verify fail 时能生成可执行的 repair / replan 建议
-
-**依赖**
-
-- T01
-- T02
-- T04
-- T05
-
-**验证方式**
-
-- 构造一个“代码修改存在但 evidence 不足”的任务，verify 应判失败
-- 构造一个“功能达标但 review 未达标”的任务，verify 应输出 needs_review 倾向
-
-**回滚边界**
-
-- 只增强 verify 权限，不新增调度环
-
----
-
-### [task:T07 让 Completion Gate 消费 Contract 与 Scorecard]
-
-**任务描述**
-
-将 completion gate 从主要消费 verify 总结果，升级为消费 packet / contract / scorecard / evidence bundle 的组合裁决面。
-
-**任务要求**
-
-gate 至少判断：
-
-- accepted packet 是否有效
-- 当前 dispatch 是否拥有有效 contract
-- done criteria 是否全部满足
-- evidence ledger 是否完整
-- high priority findings 是否未清除
-- reviewRequired 时 review evidence 是否满足阈值
-
-**任务目标**
-
-让 completion 决策成为可解释、可审计、可复现的 runtime 判定。
-
-**输入**
-
-- accepted packet
-- task contract
-- verify scorecard
-- evidence ledger
-
-**输出**
-
-- 强化后的 `completion-gate.json`
-
-**完成定义（DoD）**
-
-- gate 输出原因清单而不是单个 bool
-- gate 能区分 `completed / incomplete / blocked / needs_replan / needs_review`
-- archive 仍严格依赖 gate，而不是仅依赖 verify status
-
-**依赖**
-
-- T02
-- T04
-- T05
-- T06
-
-**验证方式**
-
-- 同一个 verify status 下，gate 能根据 evidence 完整度给出不同结论
-
-**回滚边界**
-
-- 主要影响 verify/gate 层，外部 CLI 保持不变
-
----
-
-### [task:T08 统一 Failure Reason Taxonomy]
-
-**任务描述**
-
-统一 verify 与 completion gate 的 failure reason taxonomy，避免 operator 看到模糊失败。
-
-**任务要求**
-
-至少覆盖：
-
-- `missing_contract`
-- `missing_packet`
-- `missing_evidence`
-- `failed_done_criteria`
-- `review_pending`
-- `high_risk_finding_open`
-- `stale_dispatch`
-- `stale_lease`
-- `needs_replan_due_to_scope_change`
-
-**任务目标**
-
-把“为什么没完成”从人脑推理改成结构化 runtime 输出。
-
-**输入**
-
-- gate / verify 当前失败场景
-
-**输出**
-
-- taxonomy
-- reason code 使用规范
-
-**完成定义（DoD）**
-
-- query 能清晰展示 failure reasons
-- operator 不需要读多个文件才能知道阻塞原因
-
-**依赖**
-
-- T06
-- T07
-
-**验证方式**
-
-- 抽样 blocked / incomplete / replan 场景，可被 reason code 唯一解释
-
-**回滚边界**
-
-- reason code 可渐进扩展
-
----
-
-### [task:T09 升级 Submit 为 Single-Entry Intake]
-
-**任务描述**
-
-把 `submit` 从“默认创建新 task”升级为 thread-aware 的 single-entry intake。
-
-**任务要求**
-
-`submit` 必须支持：
-
-- append-only request
-- intake classification
-- request fusion
-- thread correlation
-- inflight impact analysis
-- selective replan
-
-**任务目标**
-
-让新增输入进入 thread/epoch 系统，而不是永远产生新 task。
-
-**输入**
-
-- 新 submission
-- 当前 thread state
-- 当前 task pool
-
-**输出**
-
-- 更新后的 request / task / thread / change / todo summaries
-
-**完成定义（DoD）**
-
-- 新 context 不一定 bump epoch
-- 只有实际影响 execution scope / acceptance 才 bump epoch
-- queued 老 epoch 任务不会继续 dispatch
-
-**依赖**
-
-- 无硬前置，但建议在 contract/evaluator 闭环后实施
-
-**验证方式**
-
-- 同 thread 的 context enrichment 不会错误地产生全新独立 task
-- 影响执行范围的补充输入会触发 selective replan
-
-**回滚边界**
-
-- 重点影响 runtime.Submit 与 summary refresh
-
----
-
-### [task:T10 硬化 Thread / Epoch / Selective Replan]
-
-**任务描述**
-
-把 thread key、plan epoch、impact class、selective replan 的规则从文档定义变成硬 runtime 规则。
-
-**任务要求**
-
-支持 impact class：
-
-- `continue_safe`
-- `continue_with_note`
-- `checkpoint_then_replan`
-- `supersede_queued`
-- `inspection_only_overlay`
-
-**任务目标**
-
-避免长任务中“上下文到了，但执行层没同步”的漂移。
-
-**输入**
-
-- 新 request
-- 当前 inflight/queued task 状态
-
-**输出**
-
-- 更新后的 `thread-state.json`
-- 变更后的 `todo-summary.json`
-- 需要时更新的 `planEpoch`
-
-**完成定义（DoD）**
-
-- active task 是否继续 / checkpoint / replan 有明确规则
-- queued task 在旧 epoch 下不会误发 dispatch
-- inspection overlay 不会无故阻塞无关工作
-
-**依赖**
-
-- T09
-
-**验证方式**
-
-- 构造补充需求、澄清需求、完全改目标三类输入，观察 epoch 和 todo 是否正确变化
-
-**回滚边界**
-
-- 不影响已存在的 dispatch / lease 机制
-
----
-
-### [task:T11 强化 Query 为 Operator Truth Surface]
-
-**任务描述**
-
-强化 `harness task` / `harness tasks` 视图，使 operator 看到的不是散文件拼装结果，而是聚合后的 runtime truth surface。
-
-**任务要求**
-
-视图至少展示：
-
-- accepted packet 摘要
-- current task contract 摘要
-- verify scorecard 摘要
-- completion gate 原因
-- recommended next action
-- active lease / latest dispatch / current epoch
-
-**任务目标**
-
-让 operator 在不读 planning trace 的情况下掌握当前状态。
-
-**输入**
-
-- packet / contract / verify / gate / dispatch / lease / thread summaries
-
-**输出**
-
-- query 读模型增强
-
-**完成定义（DoD）**
-
-- operator 看 task 详情时能直接知道：现在做什么、为什么没完成、下一步是什么
-- 失败/阻塞原因无需二次 grep
-
-**依赖**
-
-- T01
-- T02
-- T04
-- T07
-- T08
-
-**验证方式**
-
-- 随机抽一个任务，通过单次 task view 能读懂当前状态
-
-**回滚边界**
-
-- 只改 query surface
-
----
-
-### [task:T12 建立 Summary Rebuildability 审计]
-
-**任务描述**
-
-逐个确认所有 summary 是否真可从 authoritative 层重建，并消除隐藏 authority。
-
-**任务要求**
-
-为每个 summary 标记：
-
-- authoritative 来源
-- generator
-- rebuild 方法
-- 是否允许 operator 直接依赖
-- 是否存在隐藏 authority 风险
-
-**任务目标**
-
-防止 derived summary 逐步腐化成真正真相源。
-
-**输入**
-
-- 当前 `.harness/state/*.json` 列表
-
-**输出**
-
-- summary inventory
-- rebuildability matrix
-- 隐藏 authority 清理清单
-
-**完成定义（DoD）**
-
-- 每个 summary 都能回答“谁生成”“从哪来”“坏了怎么重建”
-- 高风险 summary 被降权或重构
-
-**依赖**
-
-- 无硬前置，建议与 query 增强同步推进
-
-**验证方式**
-
-- 人工删除任意 derived summary 后，runtime 可从 authoritative 层重建
-
-**回滚边界**
-
-- 以审计与整理为主，低风险
-
----
-
-### [task:T13 建立 Phase-1 真实目标仓验证回路]
-
-**任务描述**
-
-将 body repo 与 target repo 的 phase-1 验证机制固化为常规回归路径。
-
-**任务要求**
-
-- body repo 只修 harness 本体
-- target repo 通过安装后的 harness 执行真实需求
-- 每次失败必须抽象为 harness capability gap
-- 不允许 operator 直接手修 target business code 来伪造成功
-
-**任务目标**
-
-让验证不只停留在 body repo 自测，而是对真实 target requirement 闭环负责。
-
-**输入**
-
-- body repo 变更
-- target repo 真实需求
-
-**输出**
-
-- target control-plane evidence
-- success/failure lineage
-- harness gap 抽象记录
-
-**完成定义（DoD）**
-
-- 至少一条真实 requirement 能由 target repo 中的 harness 流程完成
-- 失败时能清楚区分 prompt gap / system gap / target genuine work
-
-**依赖**
-
-- T06
-- T07
-- T09
-- T11
-
-**验证方式**
-
-- 重跑同一真实需求，不会反复触发同一 control-plane bug
-
-**回滚边界**
-
-- 不改 body runtime 主链路，只增强验收回归方式
-
----
-
-## 6. 扩展原子任务池（Atomic Task Pool）
-
-上面的 T01 ~ T13 是**能力层任务**，用于定义改造范围。
-
-为了便于真正排期、逐步编码、逐步验证，下面把它们进一步细化为一组**原子可执行任务**。
-
-设计要求：
-
-- 每个任务尽量只改一个明确点
-- 每个任务都应能单独落地、单独测试、单独回滚
-- 每个任务都必须能回答：改什么、为什么改、完成后如何判断完成
-- 原子任务完成后，必须能挂回上层能力任务 T01 ~ T13
-
-说明：
-
-- `Txx`：能力层任务（epic / capability）
-- `Axx`：原子执行任务（atomic implementation unit）
-
----
-
-### 6.1 L1 真相对象收口：Atomic Tasks
-
-#### [task:A01 定义 Accepted Packet Identity]
-
-**任务描述**
-
-定义 accepted packet 的身份模型，明确它的主键、版本边界和 accepted epoch 绑定关系。
-
-**任务要求**
-
-- 明确 `taskId + planEpoch` 是当前 packet truth 的主识别面
-- 明确 packet 是否需要 `packetId`
-- 明确 accepted / superseded / stale 的状态判定规则
-
-**任务目标**
-
-让 accepted packet 的身份关系先于 schema 落地，避免后续读写方各自发明 identity 语义。
-
-**完成定义（DoD）**
-
-- 身份字段与状态字段被明确写入文档与实现约束
-- 任意读取方都能确定“当前 packet 是哪一个”
-
-**前置**
-
-- 无
-
----
-
-#### [task:A02 冻结 Accepted Packet Schema]
-
-**任务描述**
-
-确定 accepted packet 的最小必要字段与可选字段。
-
-**任务要求**
-
-至少覆盖：
-
-- `taskId`
-- `threadKey`
-- `planEpoch`
-- `packetId`
-- `objective`
-- `constraints`
-- `selectedPlan`
-- `executionTasks`
-- `verificationPlan`
-- `acceptanceMarkers`
-- `ownedPaths`
-- `replanTriggers`
-- `acceptedAt`
-- `acceptedBy`
-
-**任务目标**
-
-建立稳定 packet schema，使 route / query / verify / gate 可依赖统一结构。
-
-**完成定义（DoD）**
-
-- schema 最小集冻结
-- 可选字段和强制字段边界明确
-
-**前置**
-
-- A01
-
----
-
-#### [task:A03 写入 Accepted Packet Artifact]
-
-**任务描述**
-
-在 worker prepare / orchestration 阶段写出 accepted packet 实体文件。
-
-**任务要求**
-
-- 输出路径固定
-- 写入行为幂等
-- 对同一 `taskId + planEpoch` 可稳定覆盖当前 truth
-
-**任务目标**
-
-让 accepted packet 从设计对象变成真实落盘对象。
-
-**完成定义（DoD）**
-
-- `.harness/state/accepted-packet-<task>.json` 稳定生成
-- 没有 accepted packet 时，后续模块能明确感知缺失
-
-**前置**
-
-- A01
-- A02
-
----
-
-#### [task:A04 增加 Accepted Packet Stale Protection]
-
-**任务描述**
-
-阻止旧 epoch packet 或旧 dispatch 对新 packet truth 的覆盖。
-
-**任务要求**
-
-- 比较 plan epoch
-- 必要时比较 accepted timestamp / revision
-- 对 stale 写入给出显式拒绝或丢弃语义
-
-**任务目标**
-
-防止 packet truth 在 resume、replan、多轮执行中回退。
-
-**完成定义（DoD）**
-
-- 旧 packet 无法覆盖新 epoch truth
-- 发生 stale 写入时有可观察 reason
-
-**前置**
-
-- A03
-
----
-
-#### [task:A05 Query 迁移到 Accepted Packet 读取]
-
-**任务描述**
-
-把 query 视图中的 packet 摘要来源切换为 accepted packet。
-
-**任务要求**
-
-- 不再从 planning trace 或 worker prompt 反推 packet
-- query 缺失 packet 时给出明确状态
-
-**任务目标**
-
-让 operator 视角首先收敛到 packet truth。
-
-**完成定义（DoD）**
-
-- `harness task` 可直接展示 accepted packet 摘要
-- 摘要来源唯一
-
-**前置**
-
-- A03
-
----
-
-#### [task:A06 Verify 与 Gate 迁移到 Accepted Packet 读取]
-
-**任务描述**
-
-让 verify 与 completion gate 都把 accepted packet 当作 packet truth 来源。
-
-**任务要求**
-
-- verify 不再自行拼 packet 语义
-- gate 不再依赖 prompt / trace 间接推理 packet
-
-**任务目标**
-
-把 packet authority 全面收口。
-
-**完成定义（DoD）**
-
-- verify / gate 的 packet 来源唯一
-- packet 缺失会成为结构化失败原因
-
-**前置**
-
-- A03
-- A04
-
----
-
-#### [task:A07 定义 Task Contract Identity]
-
-**任务描述**
-
-定义 task contract 的身份模型，明确它和 dispatch / execution slice 的绑定关系。
-
-**任务要求**
-
-- 明确 `dispatchId` 是 contract 主绑定面
-- 必要时定义 `contractId`
-- 明确一个 dispatch 只能有一个当前有效 contract
-
-**任务目标**
-
-避免 contract 变成可有可无的附属文件。
-
-**完成定义（DoD）**
-
-- 任意 dispatch 都能定位唯一 contract
-- contract 的 superseded 规则清楚
-
-**前置**
-
-- 无
-
----
-
-#### [task:A08 冻结 Task Contract Schema]
-
-**任务描述**
-
-确定 task contract 的最小 schema。
-
-**任务要求**
-
-至少覆盖：
+当前 dispatch 的 contract 至少必须包含：
 
 - `contractId`
 - `taskId`
 - `dispatchId`
 - `planEpoch`
-- `executionSliceId`
-- `objective`
+- `packetRef`
 - `inScope`
 - `outOfScope`
 - `doneCriteria`
 - `verificationChecklist`
 - `requiredEvidence`
 - `reviewRequired`
-- `acceptedAt`
+- `failureSeverityRules`
+- `replanTriggers`
 
-**任务目标**
+这些字段的意义是：
 
-让 contract 具备明确的执行与验收边界。
+- worker 知道必须交什么
+- verify 知道必须查什么
+- gate 知道必须凭什么批准完成
+- query 知道必须展示什么给 operator
 
-**完成定义（DoD）**
+### 6.4 worker 如何消费它
 
-- contract 字段最小集冻结
-- worker / verify / gate 能共享理解
+worker 只能把 contract 视为本次执行的任务合同。
 
-**前置**
+worker 的职责是：
 
-- A07
+- 按 `inScope` 执行
+- 避免触碰 `outOfScope`
+- 围绕 `doneCriteria` 组织产出
+- 围绕 `requiredEvidence` 留下证据
+- 遇到 `replanTriggers` 时停止把模糊变更强行做完
 
----
+worker 不允许：
 
-#### [task:A09 在 Worker Prepare 输出 Task Contract]
+- 自行扩大 contract scope
+- 用“顺手改了更多”替代 contract fulfillment
+- 只留下 free-text 自述而不留下 evidence
 
-**任务描述**
+### 6.5 verify 如何消费它
 
-让 worker prepare 阶段输出 `task-contract.json`。
+verify 不是拿 contract 做背景阅读，而是拿 contract 做主判据。
 
-**任务要求**
+verify 至少必须逐项回答：
 
-- 输出路径稳定
-- contract 与 dispatch 一起生成
-- 当前 execution slice 写入 contract
+- `doneCriteria` 是否满足
+- `verificationChecklist` 是否被验证
+- `requiredEvidence` 是否齐全
+- `reviewRequired` 是否仍未闭环
+- worker 是否发生 scope drift
 
-**任务目标**
+换句话说，verify 的主问题不是“worker 跑成功了吗”，而是“contract fulfillment 成立了吗”。
 
-让 contract 成为 dispatch 启动前即可使用的对象。
+### 6.6 completion gate 如何消费它
 
-**完成定义（DoD）**
+completion gate 不是再次解释 packet，而是依据 contract 判定：
 
-- 每个 dispatch 都有唯一 contract 文件
-- 缺失 contract 会被后续模块识别为异常
+- contract 是否存在且是当前 dispatch 的有效 contract
+- contract 条款是否全部满足
+- scorecard 是否达到阈值
+- required evidence 是否全部满足
+- review evidence 是否满足 reviewRequired
+- 是否仍存在阻断型 findings
 
-**前置**
+### 6.7 repair / replan 如何回到它
 
-- A08
+repair 和 replan 的回流原则如下：
 
----
+- 只修实现、不改完成定义：回到同一个 contract 下继续执行
+- 完成定义变了：生成新 contract
+- accepted 目标或 acceptance markers 变了：回到 accepted packet 并 bump epoch
 
-#### [task:A10 明确 Contract 与 Execution Slice 绑定规则]
-
-**任务描述**
-
-明确当前 dispatch 对应哪个 execution slice，以及 contract 如何表达这一点。
-
-**任务要求**
-
-- 支持 slice identity
-- 支持 slice 完成状态写回
-- 不允许多个 slice 混入同一 contract
-
-**任务目标**
-
-让 contract 真正对应“本轮要完成什么”，而不是泛泛而谈。
-
-**完成定义（DoD）**
-
-- verify 可以基于 contract 精确判断本轮是否完成
-
-**前置**
-
-- A09
+这条规则非常关键。否则系统会把本应回到 contract / packet 层的问题，偷偷塞回 worker prompt。
 
 ---
 
-#### [task:A11 Verify 迁移到 Contract 读取]
+## 7. evaluator-gated 闭环
 
-**任务描述**
+### 7.1 为什么 verify 不是 ingest，而是 evaluator
 
-让 verify 的验收依据明确来自 task contract。
+ingest 的职责是把 task-local 结果收进 runtime。
 
-**任务要求**
+evaluator 的职责是独立判断这些结果是否满足 contract。
 
-- verify 对照 `doneCriteria`
-- verify 对照 `verificationChecklist`
-- verify 对照 `requiredEvidence`
+`verify` 必须属于后者，原因只有一个：
 
-**任务目标**
+如果 verify 只是 ingest，那么系统就没有独立的完成前评估层，worker 的自述会被动变成事实。
 
-把“本轮 done definition”收口到 contract。
+因此 verify 的输入不是“日志文件”，而是一个评估包：
 
-**完成定义（DoD）**
+- accepted packet
+- task contract
+- worker result
+- evidence ledger
+- review evidence
+- 当前 route / dispatch / lease identity
 
-- verify failure 能指向具体 contract 条款
+verify 的输出也不是“收到了什么”，而是：
 
-**前置**
+- scorecard
+- findings
+- reasons
+- recommended next action
+- reviewRequired closure state
 
-- A09
-- A10
+### 7.2 verify 与 completion gate 的职责边界
 
----
+二者边界必须长期保持硬分离：
 
-#### [task:A12 Completion Gate 迁移到 Contract 读取]
+| 对象 | 职责 |
+| --- | --- |
+| verify | 评估 contract fulfillment，给出 judgment、findings、scorecard、next action |
+| completion gate | 在 verify judgment 基础上，结合 gate 规则做最终 completed / not completed 裁决 |
 
-**任务描述**
+verify 回答的是：**质量与满足度怎么样**。
 
-让 completion gate 明确消费 task contract，而不是只消费 verify 总结果。
+completion gate 回答的是：**现在能不能正式算完成**。
 
-**任务要求**
+### 7.3 为什么 verify 成功不等于 completed
 
-- gate 能逐项判断 contract 是否满足
-- gate 缺失 contract 时输出 `missing_contract`
+因为 verify 只证明“评估通过”，不证明“所有 gate 条件都已闭环”。
 
-**任务目标**
+以下场景都可能出现“verify 成功但不应 completed”：
 
-让完成判定直接对齐 dispatch contract。
+- `reviewRequired=true`，但 review evidence 不足
+- contract fulfillment 成立，但 archive prerequisite 未满足
+- 当前 dispatch 不是最新 authoritative dispatch
+- evidence 足够证明功能成立，但缺少要求中的 target validation evidence
+- 存在高优先级 open finding 被标记为必须在 close 前清除
 
-**完成定义（DoD）**
+因此 `verification passed` 只是 gate 输入，不是 gate 结论。
 
-- gate 能解释哪个 contract 条件未满足
+### 7.4 scorecard、evidence ledger、completion gate 的关系
 
-**前置**
+三者关系如下：
 
-- A09
-- A11
+- `scorecard` 负责表达多维 judgment
+- `evidence ledger` 负责证明 judgment 来自什么证据
+- `completion gate` 负责将 judgment 与制度规则转成最终完成裁决
 
----
+任何缺一个，闭环都会塌：
 
-#### [task:A13 输出 Packet / Contract / Worker-Spec 边界矩阵]
+- 没有 scorecard：只能得到模糊 passed / failed
+- 没有 evidence ledger：无法追溯 judgment 来源
+- 没有 completion gate：verify judgment 无法转成最终完成制度
 
-**任务描述**
+### 7.5 verify scorecard 最小维度
 
-整理三类对象的职责边界矩阵。
-
-**任务要求**
-
-- packet 管战略真相
-- contract 管当前轮次合同
-- worker-spec 管执行约束与预算
-
-**任务目标**
-
-避免对象边界继续模糊化。
-
-**完成定义（DoD）**
-
-- 文档中存在可直接引用的边界矩阵
-
-**前置**
-
-- A02
-- A08
-
----
-
-#### [task:A14 清理三类对象中的重复字段]
-
-**任务描述**
-
-识别并清理 packet / contract / worker-spec 中重复定义的字段。
-
-**任务要求**
-
-- 每个字段有唯一 owner
-- 重复字段要删除、降级或改为引用
-
-**任务目标**
-
-降低长期复杂度和语义冲突风险。
-
-**完成定义（DoD）**
-
-- 三类对象不存在相互冲突的同名字段定义
-
-**前置**
-
-- A13
-
----
-
-#### [task:A15 建立对象 Ownership 校验用例]
-
-**任务描述**
-
-为对象边界建立测试或校验规则。
-
-**任务要求**
-
-- 至少覆盖 packet/contract/spec 三类对象
-- 校验核心字段是否落在正确 owner 上
-
-**任务目标**
-
-防止未来演进重新引入重复 authority。
-
-**完成定义（DoD）**
-
-- 新增或变更字段时可被校验
-
-**前置**
-
-- A14
-
----
-
-### 6.2 L2 独立验收收口：Atomic Tasks
-
-#### [task:A16 定义 Verify Scorecard Schema]
-
-**任务描述**
-
-定义 verify scorecard 的结构与维度。
-
-**任务要求**
-
-至少包含：
+scorecard 至少固定以下维度：
 
 - `scopeCompletion`
 - `behaviorCorrectness`
 - `packetAlignment`
 - `evidenceQuality`
 - `reviewReadiness`
+- `targetValidation`（当该 dispatch 要求真实目标验证时）
 
-**任务目标**
+每个维度至少包含：
 
-让 verify 能表达多维结论，而不是单句通过/失败。
+- `status`
+- `threshold`
+- `summary`
+- `blocking`
+- `evidenceRefs`
 
-**完成定义（DoD）**
+### 7.6 evidence ledger 最小结构
 
-- 每个维度都有 `score / threshold / status / summary`
-
-**前置**
-
-- A06
-- A11
-
----
-
-#### [task:A17 定义 Evidence Ledger Schema]
-
-**任务描述**
-
-定义 evidence ledger 结构，规范证据的引用方式。
-
-**任务要求**
-
-支持：
+evidence ledger 至少支持：
 
 - command result
-- file diff / changed paths
 - test output
+- file diff / changed paths
 - artifact existence
 - checkpoint reference
 - review evidence
+- target repo validation evidence
 
-**任务目标**
+规则：
 
-让 verify 结论可以溯源。
+- findings 必须能反向追溯到 evidence refs
+- gate 拒绝理由必须能反向追溯到 evidence refs 或缺失项
+- free-text 不是证据本体，只能是证据摘要
 
-**完成定义（DoD）**
+### 7.7 reviewRequired 场景如何闭环
 
-- 证据结构统一，支持引用与分类
+`reviewRequired` 不是一个提示词，而是 contract/gate 规则。
 
-**前置**
+闭环方式：
 
-- A16
+1. contract 声明 `reviewRequired`
+2. verify 评估 `reviewReadiness`
+3. evidence ledger 收集 review evidence
+4. completion gate 检查 review evidence 是否达到阈值
+5. 未达到时输出 `needs_review`，而不是 completed
 
----
+### 7.8 findings / reasons / next action 的结构化回流
 
-#### [task:A18 实现 Command / Test / File Evidence Collector]
+verify 和 gate 的回流必须结构化，不允许只写自然语言段落。
 
-**任务描述**
+最小结构：
 
-实现对命令输出、测试结果、文件变化等证据的结构化采集。
+- `findings[]`
+  - `code`
+  - `severity`
+  - `summary`
+  - `evidenceRefs[]`
+  - `blocking`
+- `reasons[]`
+  - `code`
+  - `ownerObject`
+  - `summary`
+- `recommendedNextAction`
+  - `type`：`repair | review | replan | complete | block`
+  - `owner`：`worker | runtime | operator`
+  - `basedOn[]`
 
-**任务要求**
+这保证系统能自动说明：
 
-- 明确 evidence type
-- 引用路径或摘要而非堆大文本
-- 保持 task-local
-
-**任务目标**
-
-把常见验证证据纳入统一 ledger。
-
-**完成定义（DoD）**
-
-- 至少三类常见证据可被稳定收集
-
-**前置**
-
-- A17
-
----
-
-#### [task:A19 实现 Review Evidence Collector]
-
-**任务描述**
-
-对 reviewRequired 场景收集 review evidence。
-
-**任务要求**
-
-- 支持 review artifact 存在性校验
-- 支持 review 结论阈值表达
-
-**任务目标**
-
-让 review 不再只是人工口头前提，而成为 gate 可消费证据。
-
-**完成定义（DoD）**
-
-- 无 review evidence 时可稳定阻止 completed
-
-**前置**
-
-- A17
+- 为什么没完成
+- 缺的是什么
+- 下一步谁来补
+- 应该回到哪一层闭环
 
 ---
 
-#### [task:A20 定义 Findings Schema]
+## 8. summary rebuildability
 
-**任务描述**
+### 8.1 rebuildability 的硬规则
 
-定义 verify findings 的结构。
+所有 summary 都必须能明确回答四个问题：
 
-**任务要求**
+1. 从哪些 authoritative truths 生成
+2. 由哪个 generator 生成
+3. 损坏后如何重建
+4. operator 是否可以直接依赖它读取，但不能依赖它定义 truth
 
-至少覆盖：
+### 8.2 authoritative 与 derived 的分层
 
-- finding id
-- severity
-- category
-- related criteria
-- related evidence
-- remediation hint
+#### authoritative 层
 
-**任务目标**
+以下对象属于 authoritative 层，直接参与主链路：
 
-让 verify 输出从“摘要”升级为“问题清单”。
+- request queue
+- task truth
+- accepted packet truth
+- dispatch ticket / lease truth
+- task contract truth
+- worker result
+- verify judgment truth
+- completion gate truth
 
-**完成定义（DoD）**
+#### derived 层
 
-- findings 支持和 contract/evidence 建立引用关系
+以下对象属于 derived 层：
 
-**前置**
+- runtime summary
+- task summary
+- queue summary
+- todo summary
+- current.json
+- progress.json
+- progress.md
+- markdown projections
+- packet progress / compact operator surfaces
 
-- A16
-- A17
+### 8.3 哪些坏了可重建，哪些坏了会打断主链路
 
----
+| 类别 | 损坏后果 | 处理原则 |
+| --- | --- | --- |
+| authoritative truth | 会直接影响 route / verify / gate / archive | 视为主链路故障，禁止用 summary 补真相 |
+| derived summary | 不应阻断主链路，只影响可读性或读取性能 | 直接重建，不得手工补 authority |
 
-#### [task:A21 定义 RecommendedNextAction Schema]
+### 8.4 rebuild metadata 要求
 
-**任务描述**
+每个 summary 必须带：
 
-定义 verify / gate 推荐下一步动作的结构。
+- `schemaVersion`
+- `generator`
+- `generatedAt`
+- `sourceTruths`
+- `rebuildable: true`
 
-**任务要求**
+`progress.md` 这类 markdown 投影必须明确：
 
-至少支持：
+- 来源是 JSON summary
+- 自己不是 authority
+- 删除后可以从 JSON 重渲染
 
-- `continue`
-- `repair`
-- `needs_review`
-- `needs_replan`
-- `block`
+### 8.5 高风险 derived summary 清单
 
-**任务目标**
+以下 summary 最容易偷偷长成 authority，必须重点降权：
 
-把“下一步该干什么”收敛为结构化输出，而不是靠人读总结猜。
-
-**完成定义（DoD）**
-
-- next action 可被 query 直接展示
-
-**前置**
-
-- A20
-
----
-
-#### [task:A22 Verify 消费 Packet + Contract]
-
-**任务描述**
-
-让 verify 同时以 accepted packet 和 task contract 为输入对象。
-
-**任务要求**
-
-- packet 用于看全局对齐
-- contract 用于看当前 dispatch 达成情况
-
-**任务目标**
-
-建立 evaluator 的双输入面。
-
-**完成定义（DoD）**
-
-- verify 的输入对象明确且固定
-
-**前置**
-
-- A06
-- A11
-
----
-
-#### [task:A23 Verify 产出 Scorecard + Evidence + Findings]
-
-**任务描述**
-
-让 verify 真正输出 scorecard、evidence ledger、findings、recommended next action。
-
-**任务要求**
-
-- 产物结构稳定
-- 产物可被 gate/query 消费
-
-**任务目标**
-
-把 verify 从 ingest 升级为 evaluator 产物生成器。
-
-**完成定义（DoD）**
-
-- verify 结果至少包含四类结构化输出
-
-**前置**
-
-- A18
-- A19
-- A20
-- A21
-- A22
-
----
-
-#### [task:A24 Completion Gate 消费 Contract Satisfaction]
-
-**任务描述**
-
-让 gate 逐项检查 contract satisfaction。
-
-**任务要求**
-
-- 对 `doneCriteria` 做明确判断
-- 对缺失项输出结构化原因
-
-**任务目标**
-
-让 gate 的完成判断对齐 contract。
-
-**完成定义（DoD）**
-
-- gate 可列出未满足的 contract 条目
-
-**前置**
-
-- A12
-- A23
-
----
-
-#### [task:A25 Completion Gate 消费 Evidence Completeness]
-
-**任务描述**
-
-让 gate 把 evidence completeness 纳入判定。
-
-**任务要求**
-
-- contract requiredEvidence 必须有对应证据
-- reviewRequired 时 review evidence 必须被检查
-
-**任务目标**
-
-防止“看起来完成，但没有证据”通过 gate。
-
-**完成定义（DoD）**
-
-- 缺失 evidence 时 gate 不会放行 completed
-
-**前置**
-
-- A17
-- A19
-- A24
-
----
-
-#### [task:A26 定义 Gate Outcome Taxonomy]
-
-**任务描述**
-
-统一 gate 结果分类。
-
-**任务要求**
-
-至少支持：
-
-- `completed`
-- `incomplete`
-- `blocked`
-- `needs_replan`
-- `needs_review`
-
-**任务目标**
-
-让 gate 结果具备稳定语义。
-
-**完成定义（DoD）**
-
-- gate 输出不再只是 bool 或 passed/failed
-
-**前置**
-
-- A24
-- A25
-
----
-
-#### [task:A27 统一 Failure Reason Codes]
-
-**任务描述**
-
-统一 verify/gate 的 reason codes。
-
-**任务要求**
-
-至少包含：
-
-- `missing_packet`
-- `missing_contract`
-- `missing_evidence`
-- `failed_done_criteria`
-- `review_pending`
-- `high_risk_finding_open`
-- `stale_dispatch`
-- `stale_lease`
-- `needs_replan_due_to_scope_change`
-
-**任务目标**
-
-让阻塞原因具备标准化输出。
-
-**完成定义（DoD）**
-
-- query 能直接展示统一 reason code
-
-**前置**
-
-- A26
-
----
-
-#### [task:A28 在 Query 暴露 Verify / Gate 结构化原因]
-
-**任务描述**
-
-把 verify findings、gate reasons、recommended next action 接入 query。
-
-**任务要求**
-
-- operator 一次读取可看到主要结论
-- 不要求人工 grep 多个工件
-
-**任务目标**
-
-提升 operator surface 的解释力。
-
-**完成定义（DoD）**
-
-- `harness task` 能直接展示主要失败原因与下一步动作
-
-**前置**
-
-- A23
-- A27
-
----
-
-#### [task:A29 建立 Evaluator / Gate 回归测试]
-
-**任务描述**
-
-围绕 verify/gate 建立回归测试样例。
-
-**任务要求**
-
-至少覆盖：
-
-- worker success 但 evidence 不足
-- review pending
-- stale dispatch / stale lease
-- contract 条款未完成
-
-**任务目标**
-
-保证 evaluator/gate 收口后可长期稳定演进。
-
-**完成定义（DoD）**
-
-- 关键验收分支有自动化测试覆盖
-
-**前置**
-
-- A23
-- A24
-- A25
-- A26
-- A27
-
----
-
-### 6.3 L3 输入与线程收口：Atomic Tasks
-
-#### [task:A30 定义 Intake Classification Rules]
-
-**任务描述**
-
-为新 submission 定义 intake 分类规则。
-
-**任务要求**
-
-至少支持：
-
-- 新任务
-- 上下文补充
-- 目标变更
-- 检查类 overlay
-- 需要 replan 的变更
-
-**任务目标**
-
-让 submit 不再简单等于新 task。
-
-**完成定义（DoD）**
-
-- 任意输入都能被归到明确 intake class
-
-**前置**
-
-- 无
-
----
-
-#### [task:A31 定义 Request Fusion Rules]
-
-**任务描述**
-
-定义 request fusion 规则，明确哪些输入应合入现有 thread。
-
-**任务要求**
-
-- 支持 append-only request record
-- 支持 merged context 引用
-- 支持 selective merge，而不是全文混入
-
-**任务目标**
-
-避免新输入被粗暴拆成新 task 或完全吞进历史。
-
-**完成定义（DoD）**
-
-- 同 thread 的补充信息可被稳定融合
-
-**前置**
-
-- A30
-
----
-
-#### [task:A32 定义 Thread Correlation Rules]
-
-**任务描述**
-
-定义 request 与 thread 的关联规则。
-
-**任务要求**
-
-- threadKey 生成/匹配逻辑明确
-- 支持已有 thread 复用
-- 支持无法关联时创建新 thread
-
-**任务目标**
-
-让 thread 成为真正的工作流载体。
-
-**完成定义（DoD）**
-
-- 新输入可以明确说明自己属于哪个 thread
-
-**前置**
-
-- A31
-
----
-
-#### [task:A33 定义 Impact Analysis Classes]
-
-**任务描述**
-
-定义 inflight impact analysis 类别。
-
-**任务要求**
-
-至少支持：
-
-- `continue_safe`
-- `continue_with_note`
-- `checkpoint_then_replan`
-- `supersede_queued`
-- `inspection_only_overlay`
-
-**任务目标**
-
-让新输入对现有执行的影响可结构化表达。
-
-**完成定义（DoD）**
-
-- 每个新输入都能产生 impact class
-
-**前置**
-
-- A32
-
----
-
-#### [task:A34 建立 Selective Replan Trigger Engine]
-
-**任务描述**
-
-建立 selective replan 触发规则。
-
-**任务要求**
-
-- 仅在影响 execution scope / acceptance 时 bump epoch
-- 普通 context enrichment 不自动 bump epoch
-
-**任务目标**
-
-减少不必要 replan，同时避免 scope drift。
-
-**完成定义（DoD）**
-
-- epoch bump 有清晰触发条件
-
-**前置**
-
-- A33
-
----
-
-#### [task:A35 Submit 写入 Intake / Thread / Change / Todo Summaries]
-
-**任务描述**
-
-让 submit 阶段产出四类关键 summary。
-
-**任务要求**
-
-- `intake-summary.json`
-- `thread-state.json`
-- `change-summary.json`
 - `todo-summary.json`
+- `task-summary.json`
+- `current.json`
+- 任何展示“当前目标 / 下一步 / 为什么阻塞”的紧凑视图
+- 任何 markdown closeout / progress 文档
 
-**任务目标**
-
-把文档里的 intake/fusion/bind 语义落成 runtime state。
-
-**完成定义（DoD）**
-
-- submit 后 operator 能看到输入影响摘要
-
-**前置**
-
-- A30
-- A31
-- A32
-- A33
-- A34
+这些对象只能摘要，不得比 authoritative truth 多出独有语义。
 
 ---
 
-#### [task:A36 Route 强制检查 Epoch Freshness]
+## 9. 复杂度风险与防腐规则
 
-**任务描述**
+### 9.1 最容易语义重叠的对象
 
-让 route 以当前 epoch freshness 为硬前置。
+长期最容易重叠的对象只有四组：
 
-**任务要求**
+1. `accepted-packet` vs `task-contract` vs `worker-spec`
+2. `worker-result` vs `verify judgment`
+3. `verify judgment` vs `completion gate`
+4. `task truth` vs `todo-summary` / `task-summary`
 
-- 旧 epoch queued task 不得 dispatch
-- 需要 replan 的任务要被 route 阻止
+防腐规则：
 
-**任务目标**
+- strategic truth 只能在 packet
+- done definition 只能在 contract
+- execution boundary 只能在 worker-spec
+- evaluator judgment 只能在 verify
+- final completion decision 只能在 gate
+- operator convenience text 只能在 summary
 
-防止旧计划继续推进执行。
+### 9.2 最容易偷偷长成 authority 的 summary
 
-**完成定义（DoD）**
+必须长期警惕以下腐化模式：
 
-- route decision 明确受 epoch freshness 影响
+- summary 持有 authoritative object 中没有的阻塞原因
+- markdown 写出比 JSON truth 更详细的“真实状态”
+- query 为了方便直接综合多个 summary，绕开 truth object
+- prompt / trace 被拿来补 authoritative 缺口
 
-**前置**
+禁止规则：
 
-- A34
-- A35
+- 不允许用 prompt、trace、handoff 反推 packet truth
+- 不允许用 worker note 反推 contract truth
+- 不允许用 query 拼装结果替代 gate truth
 
----
+### 9.3 最容易 drift 的流程
 
-#### [task:A37 抑制旧 Epoch Queued Task 的继续派发]
+以下流程最容易长期漂移：
 
-**任务描述**
+- `submit -> classify -> fuse -> bind -> selective replan`
+- `reviewRequired` 触发后的闭环
+- `needs_replan` 与 `needs_review` 的分流
+- 旧 epoch queued task 的抑制
+- target repo phase-1 validation 的证据回流
 
-确保 queued task 在旧 epoch 下不会被继续派发。
+防漂移规则：
 
-**任务要求**
+- 每个流程节点都必须有明确 owner object
+- 每个流程切换点都必须有 reason codes
+- 每个流程最终状态都必须能由 gate 或 task truth 直接解释
 
-- 支持 superseded 状态或等价阻断语义
-- query 可解释为何未派发
+### 9.4 禁止继续膨胀的区域
 
-**任务目标**
+以下区域必须明确停止膨胀：
 
-防止旧任务偷偷穿过 route。
+1. prompt layer
+   - prompt 只负责生成或消费 authoritative object，不得变成 runtime 语义宿主
+2. methodology layer
+   - proposal/spec/design/tasks 的旧外显流程不得重新长回 runtime 主链路
+3. summary layer
+   - 不再新增承载“真实状态”的 summary 类型来回避 truth object 缺口
+4. compatibility layer
+   - shell wrapper、旧命令、兼容输出不得继续承载 canonical 语义
 
-**完成定义（DoD）**
+### 9.5 新增对象前必须回答的问题
 
-- 被 supersede 的 queued task 不会进入 dispatch
+以后新增任何 runtime object，必须先回答：
 
-**前置**
+1. 它回答的是哪个唯一问题？
+2. 这个问题现有对象是否已经回答？
+3. 它是 authoritative 还是 derived？
+4. 谁写它，谁读它，谁不能重定义它？
+5. 它坏了是重建，还是主链路故障？
 
-- A36
-
----
-
-#### [task:A38 实现 Active Task 的 Checkpoint-Then-Replan 路径]
-
-**任务描述**
-
-实现 active task 受新输入影响时的 checkpoint-then-replan 分支。
-
-**任务要求**
-
-- 必须先 checkpoint 再切 replan
-- 不允许正在执行的状态被直接抹掉
-
-**任务目标**
-
-让 inflight task 在 scope 变化时优雅收束，而不是粗暴中断。
-
-**完成定义（DoD）**
-
-- active task 在受影响时有明确且可恢复的迁移路径
-
-**前置**
-
-- A33
-- A34
-- A35
-
----
-
-### 6.4 L4 可读性与可维护性收口：Atomic Tasks
-
-#### [task:A39 强化 Query Task Detail Surface]
-
-**任务描述**
-
-增强 task 详情视图，聚合 packet/contract/verify/gate 关键信息。
-
-**任务要求**
-
-至少展示：
-
-- accepted packet 摘要
-- current contract 摘要
-- scorecard 摘要
-- gate 结果
-- next action
-
-**任务目标**
-
-让单次 task 查询即可读懂当前状态。
-
-**完成定义（DoD）**
-
-- operator 不必读取多个散文件
-
-**前置**
-
-- A05
-- A28
+只要这五个问题答不清，就不允许新增对象。
 
 ---
 
-#### [task:A40 强化 Query Task List Surface]
+## 10. 原子任务清单
 
-**任务描述**
+下列任务不是泛泛建议，而是本次收口的最小原子实施单元。
 
-增强任务列表视图，使 tasks 列表能显示关键执行状态。
+### A. 定义冻结层
 
-**任务要求**
+#### A01 冻结 truth object glossary
 
-至少展示：
+- 输出：统一术语表
+- 验收：task truth / accepted packet / task contract / worker spec / verify judgment / completion gate / summary 全部只有一个定义
 
-- current epoch
-- latest dispatch
-- gate 状态
-- next action 摘要
+#### A02 冻结 accepted packet schema 与 identity
 
-**任务目标**
+- 输出：`taskId + planEpoch` 唯一识别规则、最小 schema
+- 验收：route / verify / query 可引用同一 packet identity
 
-让 operator 在列表层就能判断哪些任务需要关注。
+#### A03 冻结 task contract schema 与 identity
 
-**完成定义（DoD）**
+- 输出：`dispatchId -> contractId` 绑定、最小 schema
+- 验收：每次 dispatch 都能定位唯一 contract
 
-- `harness tasks` 具备更强筛查能力
+#### A04 冻结 verify scorecard / findings / reasons schema
 
-**前置**
+- 输出：固定 scorecard 维度与 findings taxonomy
+- 验收：verify 不再只输出单一 passed / failed
 
-- A39
+#### A05 冻结 completion gate reason taxonomy
 
----
+- 输出：`missing_packet`、`missing_contract`、`missing_evidence`、`review_pending`、`failed_done_criteria`、`stale_dispatch`、`needs_replan_due_to_scope_change` 等 reason codes
+- 验收：operator 单次读取即可知道为什么没完成
 
-#### [task:A41 暴露 Operator Next Action 与 Reason Surface]
+### B. 写入对象层
 
-**任务描述**
+#### A06 写 accepted packet truth
 
-把 recommended next action 与核心 reason 以 operator-friendly 方式展示。
+- 输出：accepted epoch authoritative object
+- 验收：旧 epoch 不能覆盖新 epoch
 
-**任务要求**
+#### A07 写 task contract truth
 
-- 面向 operator 可读
-- 保留 machine-readable 值
+- 输出：dispatch 级 authoritative contract object
+- 验收：worker / verify / gate 共享同一 contract
 
-**任务目标**
+#### A08 写 evidence ledger
 
-把“现在应该做什么”直接呈现出来。
+- 输出：结构化证据账本
+- 验收：findings 可反查证据
 
-**完成定义（DoD）**
+#### A09 写 verify judgment
 
-- task/task list 均可看到 next action 摘要
+- 输出：scorecard + findings + reasons + recommendedNextAction
+- 验收：verify 具备 evaluator 语义
 
-**前置**
+#### A10 写 completion gate truth
 
-- A21
-- A28
-- A39
+- 输出：结构化 completion decision
+- 验收：gate 可区分 completed / incomplete / blocked / needs_review / needs_replan
 
----
+### C. 读取方切换层
 
-#### [task:A42 建立 Summary Inventory]
+#### A11 query 切换到 packet / contract / gate
 
-**任务描述**
+- 输出：operator truth surface
+- 验收：单次 `task` 视图能回答现在做什么、为什么没完成、下一步是什么
 
-列举所有 runtime state 与 summary 文件，并标注属性。
+#### A12 verify 切换到 contract-aware evaluator
 
-**任务要求**
+- 输出：verify 只按 contract 判定 fulfillment
+- 验收：worker success 不再自动等于 verify success
 
-至少标注：
+#### A13 gate 切换到 contract + scorecard + evidence 组合判定
 
-- authoritative / derived
-- generator
-- consumer
-- rebuildability
+- 输出：新的 gate 读取链路
+- 验收：gate 不再只看 verify status
 
-**任务目标**
+### D. intake 与 replan 收紧层
 
-建立 summary 治理基线。
+#### A14 submit 前置链路硬化
 
-**完成定义（DoD）**
+- 输出：classify / fuse / bind / impact analysis / selective replan 规则
+- 验收：新输入不再默认生成新 task
 
-- 存在完整 inventory 文档或结构化清单
+#### A15 queued / inflight epoch 抑制规则落地
 
-**前置**
+- 输出：旧 epoch queued task 不再被错误 dispatch
+- 验收：superseded queued work 被正确抑制
 
-- 无
+### E. rebuild 与 target validation 层
 
----
+#### A16 summary rebuildability inventory
 
-#### [task:A43 建立 Rebuildability Matrix]
+- 输出：每个 summary 的 sourceTruths / generator / rebuild rule
+- 验收：删除 derived summary 后可重建
 
-**任务描述**
+#### A17 target-repo phase-1 validation 接入
 
-为所有 derived summary 建立可重建矩阵。
+- 输出：真实目标仓验证回路与证据模板
+- 验收：至少一条真实 requirement 在 target repo 中闭环
 
-**任务要求**
+#### A18 failure lineage 与 capability gap 回写
 
-- 明确 authoritative 来源
-- 明确重建方法
-- 明确高风险 hidden authority 点
-
-**任务目标**
-
-防止 summary 腐化成真相源。
-
-**完成定义（DoD）**
-
-- 每个 summary 都能回答“从哪来、怎么重建”
-
-**前置**
-
-- A42
+- 输出：target repo 失败可抽象回 harness capability gap
+- 验收：同类真实失败不会无限重复出现为“偶发问题”
 
 ---
 
-#### [task:A44 建立 Summary Rebuild Procedure / Tooling]
+## 11. 谱系方案
 
-**任务描述**
+本次收口按谱系推进，不按模块热闹程度推进。
 
-建立 summary 重建流程或工具化入口。
-
-**任务要求**
-
-- 支持人工触发重建
-- 支持 runtime 自恢复或运维手册
-
-**任务目标**
-
-让 derived summary 真的可以重建，而不只是理论可重建。
-
-**完成定义（DoD）**
-
-- 至少有一条明确重建路径可演示
-
-**前置**
-
-- A43
-
----
-
-#### [task:A45 建立 Summary Degraded Recovery Test]
-
-**任务描述**
-
-验证 summary 丢失或损坏时，系统可以从 authoritative 层恢复。
-
-**任务要求**
-
-- 至少覆盖 1~2 个关键 derived summary
-- 恢复后 query 结果可用
-
-**任务目标**
-
-把“可重建”从口号变成真实能力。
-
-**完成定义（DoD）**
-
-- 人工删除或破坏 summary 后可恢复
-
-**前置**
-
-- A44
-
----
-
-### 6.5 L5 真实世界验证收口：Atomic Tasks
-
-#### [task:A46 选择 Phase-1 Target Requirement 集合]
-
-**任务描述**
-
-选定 1~3 条真实 target requirement 作为外部验证样本。
-
-**任务要求**
-
-- 至少覆盖一个普通 feature
-- 至少覆盖一个失败后重规划或阻塞样本
-
-**任务目标**
-
-让架构验证不只发生在 body repo 自测里。
-
-**完成定义（DoD）**
-
-- 已选定 target repo 与 requirement 集合
-
-**前置**
-
-- 无
-
----
-
-#### [task:A47 标准化 Phase-1 Validation Protocol]
-
-**任务描述**
-
-把 body repo -> reinstall -> target repo 验证的 protocol 固化下来。
-
-**任务要求**
-
-- 不允许直接手修 target business code 伪造成功
-- 每次失败都要抽象为 harness gap
-
-**任务目标**
-
-让 phase-1 验证成为常规闭环。
-
-**完成定义（DoD）**
-
-- 验证 protocol 可重复执行
-
-**前置**
-
-- A46
-
----
-
-#### [task:A48 建立 Target Evidence Capture Template]
-
-**任务描述**
-
-建立 target repo 控制面证据采集模板。
-
-**任务要求**
-
-至少包含：
-
-- request/task state
-- packet/contract/gate evidence
-- failure reasons
-- success proof
-
-**任务目标**
-
-让 target 验证结果可归档、可比较、可复盘。
-
-**完成定义（DoD）**
-
-- 任一 target round 都能用统一模板采集证据
-
-**前置**
-
-- A47
-
----
-
-#### [task:A49 跑通一个 Target Success Scenario]
-
-**任务描述**
-
-在 target repo 中跑通至少一个真实需求的完整闭环成功样本。
-
-**任务要求**
-
-- 不人工手修 target 业务代码
-- 通过 harness 流程完成需求
-
-**任务目标**
-
-证明改造后的 harness 具备真实世界成功能力。
-
-**完成定义（DoD）**
-
-- 存在一条真实 requirement 的成功证据
-
-**前置**
-
-- A23
-- A25
-- A35
-- A39
-- A48
-
----
-
-#### [task:A50 跑通一个 Failure-to-Gap Abstraction Scenario]
-
-**任务描述**
-
-在 target repo 中验证一个失败样本，并将失败抽象为可复用 harness gap。
-
-**任务要求**
-
-- 区分 prompt gap / system gap / genuine target work
-- 不允许模糊归因
-
-**任务目标**
-
-证明失败也能被 runtime 清晰解释，而不是落回人工 rescue。
-
-**完成定义（DoD）**
-
-- 存在一条失败 -> gap 抽象 -> 修补方向的闭环记录
-
-**前置**
-
-- A48
-
----
-
-#### [task:A51 建立 Repeatability Regression]
-
-**任务描述**
-
-对同一 target requirement 执行重复验证，检查已修复问题不重复出现。
-
-**任务要求**
-
-- 至少重跑一次成功样本
-- 至少验证一个已修复 gap 不复发
-
-**任务目标**
-
-证明系统不是偶然跑通，而是具备稳定性。
-
-**完成定义（DoD）**
-
-- 同一 requirement 重跑不复现相同 control-plane bug
-
-**前置**
-
-- A49
-- A50
-
----
-
-#### [task:A52 完成 Rollout Review 与发布前评估]
-
-**任务描述**
-
-在完成阶段性改造后，进行 rollout review，决定是否进入下一阶段演进。
-
-**任务要求**
-
-- 评估 evaluator 收益
-- 评估 intake 收益
-- 评估复杂度是否可控
-- 判断是否需要 future evaluator node
-
-**任务目标**
-
-让架构演进在收益和复杂度之间保持优雅平衡。
-
-**完成定义（DoD）**
-
-- 有明确 review 结论与后续建议
-
-**前置**
-
-- A49
-- A50
-- A51
-
----
-
-## 7. 谱系方案（Expanded Lineage Plan）
+### 11.1 谱系主线
 
 ```text
-L0 目标：把 Klein-Harness 收口为 contract-backed / evaluator-gated / thread-aware runtime
-
-├─ L1 真相对象收口
-│  ├─ T01 固化 Accepted Packet Authority
-│  │  ├─ A01 定义 Accepted Packet Identity
-│  │  ├─ A02 冻结 Accepted Packet Schema
-│  │  ├─ A03 写入 Accepted Packet Artifact
-│  │  ├─ A04 增加 Accepted Packet Stale Protection
-│  │  ├─ A05 Query 迁移到 Accepted Packet 读取
-│  │  └─ A06 Verify 与 Gate 迁移到 Accepted Packet 读取
-│  ├─ T02 固化 Task Contract Authority
-│  │  ├─ A07 定义 Task Contract Identity
-│  │  ├─ A08 冻结 Task Contract Schema
-│  │  ├─ A09 在 Worker Prepare 输出 Task Contract
-│  │  ├─ A10 明确 Contract 与 Execution Slice 绑定规则
-│  │  ├─ A11 Verify 迁移到 Contract 读取
-│  │  └─ A12 Completion Gate 迁移到 Contract 读取
-│  └─ T03 收敛 Packet / Contract / Worker-Spec 边界
-│     ├─ A13 输出边界矩阵
-│     ├─ A14 清理重复字段
-│     └─ A15 建立对象 Ownership 校验用例
-│
-├─ L2 独立验收收口
-│  ├─ T04 建立 Verify Scorecard Schema
-│  │  └─ A16 定义 Verify Scorecard Schema
-│  ├─ T05 建立 Evidence Ledger
-│  │  ├─ A17 定义 Evidence Ledger Schema
-│  │  ├─ A18 实现 Command/Test/File Evidence Collector
-│  │  └─ A19 实现 Review Evidence Collector
-│  ├─ T06 让 Verify 成为 Independent Evaluator
-│  │  ├─ A20 定义 Findings Schema
-│  │  ├─ A21 定义 RecommendedNextAction Schema
-│  │  ├─ A22 Verify 消费 Packet + Contract
-│  │  └─ A23 Verify 产出 Scorecard + Evidence + Findings
-│  ├─ T07 让 Completion Gate 消费 Contract 与 Scorecard
-│  │  ├─ A24 Gate 消费 Contract Satisfaction
-│  │  ├─ A25 Gate 消费 Evidence Completeness
-│  │  └─ A26 定义 Gate Outcome Taxonomy
-│  └─ T08 统一 Failure Reason Taxonomy
-│     ├─ A27 统一 Failure Reason Codes
-│     ├─ A28 Query 暴露 Verify / Gate 原因
-│     └─ A29 建立 Evaluator / Gate 回归测试
-│
-├─ L3 输入与线程收口
-│  ├─ T09 升级 Submit 为 Single-Entry Intake
-│  │  ├─ A30 定义 Intake Classification Rules
-│  │  ├─ A31 定义 Request Fusion Rules
-│  │  ├─ A32 定义 Thread Correlation Rules
-│  │  ├─ A33 定义 Impact Analysis Classes
-│  │  ├─ A34 建立 Selective Replan Trigger Engine
-│  │  └─ A35 Submit 写入 Intake / Thread / Change / Todo Summaries
-│  └─ T10 硬化 Thread / Epoch / Selective Replan
-│     ├─ A36 Route 强制检查 Epoch Freshness
-│     ├─ A37 抑制旧 Epoch Queued Task 的继续派发
-│     └─ A38 实现 Active Task 的 Checkpoint-Then-Replan 路径
-│
-├─ L4 可读性与可维护性收口
-│  ├─ T11 强化 Query 为 Operator Truth Surface
-│  │  ├─ A39 强化 Query Task Detail Surface
-│  │  ├─ A40 强化 Query Task List Surface
-│  │  └─ A41 暴露 Operator Next Action 与 Reason Surface
-│  └─ T12 建立 Summary Rebuildability 审计
-│     ├─ A42 建立 Summary Inventory
-│     ├─ A43 建立 Rebuildability Matrix
-│     ├─ A44 建立 Summary Rebuild Procedure / Tooling
-│     └─ A45 建立 Summary Degraded Recovery Test
-│
-└─ L5 真实世界验证收口
-   └─ T13 建立 Phase-1 真实目标仓验证回路
-      ├─ A46 选择 Phase-1 Target Requirement 集合
-      ├─ A47 标准化 Phase-1 Validation Protocol
-      ├─ A48 建立 Target Evidence Capture Template
-      ├─ A49 跑通一个 Target Success Scenario
-      ├─ A50 跑通一个 Failure-to-Gap Abstraction Scenario
-      ├─ A51 建立 Repeatability Regression
-      └─ A52 完成 Rollout Review 与发布前评估
+L1 定义冻结
+  -> L2 truth object 写入
+    -> L3 evaluator 写入
+      -> L4 query / verify / gate 读取方切换
+        -> L5 intake / replan 硬化
+          -> L6 summary rebuild audit
+            -> L7 target repo validation
 ```
 
----
+### 11.2 能力谱系映射
 
-## 8. ToDo List（Expanded Execution Board）
+| 谱系层 | 目标 | 对应原子任务 |
+| --- | --- | --- |
+| L1 | 冻结对象与 reason taxonomy | A01-A05 |
+| L2 | 写入 packet / contract / evidence | A06-A08 |
+| L3 | 写入 verify judgment / gate truth | A09-A10 |
+| L4 | 切换 query / verify / gate 读取方 | A11-A13 |
+| L5 | 硬化 submit / selective replan | A14-A15 |
+| L6 | 证明 summary 可重建 | A16 |
+| L7 | 建立真实目标仓验收 | A17-A18 |
 
-### P0：对象定义冻结
+### 11.3 依赖规则
 
-- [ ] A01 定义 Accepted Packet Identity
-- [ ] A02 冻结 Accepted Packet Schema
-- [ ] A07 定义 Task Contract Identity
-- [ ] A08 冻结 Task Contract Schema
-- [ ] A13 输出 Packet / Contract / Worker-Spec 边界矩阵
-- [ ] A16 定义 Verify Scorecard Schema
-- [ ] A17 定义 Evidence Ledger Schema
-- [ ] A20 定义 Findings Schema
-- [ ] A21 定义 RecommendedNextAction Schema
-- [ ] A26 定义 Gate Outcome Taxonomy
-- [ ] A27 统一 Failure Reason Codes
+必须遵守以下依赖：
 
-### P1：对象落盘与读取切换
-
-- [ ] A03 写入 Accepted Packet Artifact
-- [ ] A04 增加 Accepted Packet Stale Protection
-- [ ] A05 Query 迁移到 Accepted Packet 读取
-- [ ] A06 Verify 与 Gate 迁移到 Accepted Packet 读取
-- [ ] A09 在 Worker Prepare 输出 Task Contract
-- [ ] A10 明确 Contract 与 Execution Slice 绑定规则
-- [ ] A11 Verify 迁移到 Contract 读取
-- [ ] A12 Completion Gate 迁移到 Contract 读取
-- [ ] A14 清理重复字段
-- [ ] A15 建立对象 Ownership 校验用例
-
-### P2：验证面增强
-
-- [ ] A18 实现 Command / Test / File Evidence Collector
-- [ ] A19 实现 Review Evidence Collector
-- [ ] A22 Verify 消费 Packet + Contract
-- [ ] A23 Verify 产出 Scorecard + Evidence + Findings
-- [ ] A24 Completion Gate 消费 Contract Satisfaction
-- [ ] A25 Completion Gate 消费 Evidence Completeness
-- [ ] A28 在 Query 暴露 Verify / Gate 结构化原因
-- [ ] A29 建立 Evaluator / Gate 回归测试
-
-### P3：single-entry intake 增强
-
-- [ ] A30 定义 Intake Classification Rules
-- [ ] A31 定义 Request Fusion Rules
-- [ ] A32 定义 Thread Correlation Rules
-- [ ] A33 定义 Impact Analysis Classes
-- [ ] A34 建立 Selective Replan Trigger Engine
-- [ ] A35 Submit 写入 Intake / Thread / Change / Todo Summaries
-- [ ] A36 Route 强制检查 Epoch Freshness
-- [ ] A37 抑制旧 Epoch Queued Task 的继续派发
-- [ ] A38 实现 Active Task 的 Checkpoint-Then-Replan 路径
-
-### P4：query 与 summary 治理增强
-
-- [ ] A39 强化 Query Task Detail Surface
-- [ ] A40 强化 Query Task List Surface
-- [ ] A41 暴露 Operator Next Action 与 Reason Surface
-- [ ] A42 建立 Summary Inventory
-- [ ] A43 建立 Rebuildability Matrix
-- [ ] A44 建立 Summary Rebuild Procedure / Tooling
-- [ ] A45 建立 Summary Degraded Recovery Test
-
-### P5：真实目标仓验证增强
-
-- [ ] A46 选择 Phase-1 Target Requirement 集合
-- [ ] A47 标准化 Phase-1 Validation Protocol
-- [ ] A48 建立 Target Evidence Capture Template
-- [ ] A49 跑通一个 Target Success Scenario
-- [ ] A50 跑通一个 Failure-to-Gap Abstraction Scenario
-- [ ] A51 建立 Repeatability Regression
-- [ ] A52 完成 Rollout Review 与发布前评估
+- 未冻结 schema，不切读取方
+- 未写 truth object，不让 summary 假装已有 truth
+- 未完成 verify evaluator 化，不切 gate 判定
+- 未完成 gate contract 化，不宣布 closure 完成
+- 未接入 target repo 验证，不宣布 phase-1 验收闭环完成
 
 ---
 
-## 9. Checklist（Expanded Acceptance Checklist）
+## 12. Todo / Checklist
 
-### 9.1 对象真相验收
+以下 checklist 用于实施与评审，不是愿望清单。
 
-- [ ] accepted packet 有稳定 identity、schema、stale protection
-- [ ] 每个 accepted epoch 恰有一个 accepted packet truth
-- [ ] task contract 与 dispatch 一一绑定
-- [ ] contract 明确表达 inScope / outOfScope / doneCriteria / requiredEvidence
-- [ ] worker-spec 不再承担主合同语义
-- [ ] packet / contract / worker-spec 字段 owner 单一且稳定
+### 12.1 定义冻结检查
 
-### 9.2 evaluator 验收
+- [ ] task truth 的 owner、输入、输出、边界已冻结
+- [ ] accepted packet truth 的 identity、schema、stale rule 已冻结
+- [ ] task contract truth 的 identity、schema、done definition 地位已冻结
+- [ ] worker spec 的执行边界定义已冻结
+- [ ] verify judgment 的 scorecard / findings / reasons / next action schema 已冻结
+- [ ] completion gate 的 reason taxonomy 与 decision schema 已冻结
 
-- [ ] verify 同时消费 packet 与 contract
-- [ ] verify 产出 scorecard、evidence ledger、findings、recommended next action
-- [ ] verify failure 可精确指向 contract 条款和证据缺口
-- [ ] verify success 不自动等于 completed
-- [ ] reviewRequired 且无 review evidence 时不会被误判为完成
+### 12.2 对象写入检查
 
-### 9.3 completion gate 验收
+- [ ] accepted packet 已成为 accepted epoch 的唯一 truth object
+- [ ] task contract 已成为 dispatch 的唯一 done definition
+- [ ] evidence ledger 已结构化落盘
+- [ ] verify judgment 已结构化落盘
+- [ ] completion gate 已结构化落盘
 
-- [ ] gate 逐项消费 contract satisfaction
-- [ ] gate 判断 evidence completeness
-- [ ] gate 结果为 `completed/incomplete/blocked/needs_replan/needs_review`
-- [ ] gate 输出结构化 reasons
-- [ ] archive 严格受 gate 控制
+### 12.3 读取方切换检查
 
-### 9.4 intake / thread / epoch 验收
+- [ ] query 已不再从 trace / prompt 反推 packet 或 contract
+- [ ] verify 已只按 contract 做 fulfillment 判定
+- [ ] gate 已消费 contract + scorecard + evidence + review
+- [ ] archive 已只服从 completion gate
 
-- [ ] submit 不再默认等于新 task
-- [ ] 新输入能被分类为明确 intake class
-- [ ] request 可融合到现有 thread
-- [ ] 只有影响 execution scope / acceptance 时才 bump epoch
-- [ ] queued 老 epoch task 不再继续 dispatch
-- [ ] active task 在受影响时具备 checkpoint-then-replan 路径
+### 12.4 intake / replan 检查
 
-### 9.5 operator surface 验收
+- [ ] submit 已固定经过 classify -> fuse -> bind -> selective replan
+- [ ] context enrichment 不再默认变成新 task
+- [ ] scope change 会显式触发 replan / epoch bump
+- [ ] queued 老 epoch work 不再误 dispatch
 
-- [ ] `harness task` 可直接显示 packet / contract / scorecard / gate / next action
-- [ ] `harness tasks` 可用于快速识别关注任务
-- [ ] operator 无需阅读 planning trace 也能理解当前状态
-- [ ] reason codes 与 operator-friendly 文案同时存在
+### 12.5 rebuildability 检查
 
-### 9.6 summary 治理验收
+- [ ] 每个 summary 都声明 sourceTruths / generator / rebuild rule
+- [ ] markdown projection 已明确不是 authority
+- [ ] 删除 derived summary 后能自动或受控重建
 
-- [ ] 每个 summary 都有 generator
-- [ ] 每个 summary 都有 authoritative 来源
-- [ ] 每个 derived summary 都有 rebuild 方法
-- [ ] summary 丢失后可恢复
-- [ ] 没有 summary 偷偷承担 authority
+### 12.6 target validation 检查
 
-### 9.7 真实目标仓验收
-
-- [ ] 至少一个 target success scenario 跑通
-- [ ] 至少一个 failure-to-gap scenario 被正确抽象
-- [ ] 重跑同一 requirement 不复现同一 control-plane bug
-- [ ] body repo 与 target repo 的边界保持干净
+- [ ] target repo phase-1 验证路径已存在
+- [ ] 真实 requirement 有 evidence ledger 记录
+- [ ] 失败能回写为 harness capability gap
+- [ ] 不通过手工修 target business code 伪造成功
 
 ---
 
-## 10. 建议实施节奏（Expanded Rollout Plan）
+## 13. 分阶段 rollout
 
-### Wave 1：冻结对象定义
+分阶段 rollout 的目的不是“方便排期”，而是确保每个阶段结束后系统进入新的稳定状态。
 
-目标：先把真相对象的 identity 和 schema 固定下来。
+### Phase 0：冻结定义
 
-建议完成：
+**目标**
 
-- A01
-- A02
-- A07
-- A08
-- A13
-- A16
-- A17
-- A20
-- A21
-- A26
-- A27
+冻结 truth object、contract schema、verify schema、gate taxonomy。
 
-**结果**
+**本阶段动作**
 
-这一波完成后，系统会先拥有稳定的对象契约，后续开发不再在漂浮语义上反复返工。
+- 完成 A01-A05
+- 冻结 packet / contract / verify / gate 最小字段与身份规则
+- 冻结 authoritative 与 derived 的边界定义
 
-### Wave 2：接入 packet / contract 真相对象
+**阶段验收**
 
-目标：让 accepted packet 与 task contract 真正写出来、读起来、挡起来。
+- 文档和 schema 一致
+- 每个关键对象都能回答“谁拥有它”
+- 每个 failure reason 都有结构化 code
 
-建议完成：
+**阶段结束后的新稳定状态**
 
-- A03
-- A04
-- A05
-- A06
-- A09
-- A10
-- A11
-- A12
-- A14
-- A15
+系统虽然仍可能沿旧读取路径运行，但对象定义不再模糊，不再允许多重解释。
 
-**结果**
+### Phase 1：写 truth objects
 
-这一波完成后，packet truth 与 dispatch contract 会成为真实运行时对象，而不是文档概念。
+**目标**
 
-### Wave 3：补强 evaluator 与 gate
+把 packet、contract、evidence、verify、gate 写成真实对象。
 
-目标：把 verify/gate 从轻验收升级为独立裁决面。
+**本阶段动作**
 
-建议完成：
+- 完成 A06-A10
+- 写 accepted packet truth
+- 写 task contract truth
+- 写 evidence ledger
+- 写 verify judgment
+- 写 completion gate truth
 
-- A18
-- A19
-- A22
-- A23
-- A24
-- A25
-- A28
-- A29
+**阶段验收**
 
-**结果**
+- dispatch 之后存在 contract truth
+- verify 之后存在 judgment truth
+- gate 之后存在 completion truth
+- 旧 epoch 无法覆盖新 epoch packet truth
 
-这一波完成后，系统会具备否决伪完成、输出结构化失败原因与下一步动作的能力。
+**阶段结束后的新稳定状态**
 
-### Wave 4：补强 intake / thread / replan
+truth objects 已存在，但部分读取方还可兼容旧路径；系统进入“新真相已写入”的稳定状态。
 
-目标：让输入不再被粗暴映射成新 task，并让 epoch/replan 具备硬规则。
+### Phase 2：切换读取方
 
-建议完成：
+**目标**
 
-- A30
-- A31
-- A32
-- A33
-- A34
-- A35
-- A36
-- A37
-- A38
+让 query、verify、gate 统一读取新 truth objects。
 
-**结果**
+**本阶段动作**
 
-这一波完成后，系统会更适合长任务和不断变化的需求流。
+- 完成 A11-A13
+- query 切到 packet / contract / gate
+- verify 切到 contract-aware evaluator
+- gate 切到 contract + scorecard + evidence 组合判定
 
-### Wave 5：补强 query 与 summary 治理
+**阶段验收**
 
-目标：提升 operator 可读性，并压住 summary 腐化风险。
+- operator 单次 task view 可读懂当前状态
+- verify 成功不再自动导出 completed
+- gate 不再只看 verify status
 
-建议完成：
+**阶段结束后的新稳定状态**
 
-- A39
-- A40
-- A41
-- A42
-- A43
-- A44
-- A45
+读取面和写入面已经统一到同一批 authoritative objects，系统进入“同源读取”的稳定状态。
 
-**结果**
+### Phase 3：切换 intake 与 replan 前置链路
 
-这一波完成后，operator surface 会变得清晰、稳定、可恢复。
+**目标**
 
-### Wave 6：跑真实 target 验证闭环
+把 submit -> classify -> fuse -> bind -> selective replan 硬化为唯一入口前置链路。
 
-目标：证明这不是只在 body repo 内部自洽，而是真正能作用于真实项目。
+**本阶段动作**
 
-建议完成：
+- 完成 A14-A15
+- 明确 impact class
+- 明确 epoch bump 与 queued supersede 规则
 
-- A46
-- A47
-- A48
-- A49
-- A50
-- A51
-- A52
+**阶段验收**
 
-**结果**
+- context enrichment 不再错误拆成新 task
+- scope change 会触发 selective replan
+- 老 epoch queued work 被正确抑制
 
-这一波完成后，架构改造会具备真实世界闭环证据，而不仅仅是理论完备。
+**阶段结束后的新稳定状态**
 
+新输入不再绕过 thread / epoch 系统，系统进入“前置硬化”的稳定状态。
 
-当本方案全部落地后，`Klein-Harness` 应呈现如下效果：
+### Phase 4：summary rebuild 审计
 
-### 11.1 对 operator 的效果
+**目标**
 
-operator 不再需要在多个散文件之间拼接心智模型，而是能直接从 `harness task` 看到：
+证明所有 derived surfaces 都可以重建，不再暗藏 authority。
 
-- 当前 accepted packet 是什么
-- 本轮 contract 要求完成什么
-- verify 认为哪里达标、哪里没达标
-- completion gate 为什么还没放行
-- 下一步推荐动作是什么
+**本阶段动作**
 
-### 11.2 对 runtime 的效果
+- 完成 A16
+- 为所有 summary 标记 sourceTruths / generator / rebuild rule
+- 清理高风险 summary 的隐藏 authority
 
-runtime 将从“能运行且状态较清楚”，升级到“能稳定解释长任务中为什么继续、为什么暂停、为什么重规划、为什么仍未完成”。
+**阶段验收**
 
-### 11.3 对 worker 的效果
+- 抽样删除 derived summary 可重建
+- markdown 不再被机器依赖为 truth
 
-worker 不再面对模糊目标，而是面对：
+**阶段结束后的新稳定状态**
 
-- 明确战略真相：accepted packet
-- 明确本轮合同：task contract
-- 明确执行边界：worker-spec
+control plane 的 authority / projection 分层稳定，系统进入“summary 降权完成”的稳定状态。
 
-这会显著降低：
+### Phase 5：引入真实世界 target 验证
 
-- scope drift
-- 伪完成
-- 任务越做越散
-- 对高层意图的误解
+**目标**
 
-### 11.4 对 verify 的效果
+把 target repo phase-1 validation 纳入常规验收闭环。
 
-verify 会从“结果摄入器”升级成真正 evaluator：
+**本阶段动作**
 
-- 能否决自我感觉良好的 worker 输出
-- 能用 evidence ledger 说明问题
-- 能用 scorecard 给出多维判断
-- 能输出结构化 repair / replan 建议
+- 完成 A17-A18
+- 选择真实 target requirement
+- 在 target repo 跑完整 harness 闭环
+- 把失败抽象回 capability gap
 
-### 11.5 对系统长期演进的效果
+**阶段验收**
 
-最重要的效果不是“对象更多”，而是：
+- 至少一条真实 requirement 在 target repo 中闭环
+- 同类失败不会再次以“偶发流程问题”形式重复出现
+- target validation evidence 已进入 evidence ledger / lineage
 
-- 对象边界更稳定
-- authority 更清楚
-- 复杂度更可控
-- summary 不再偷偷变真相源
-- future simplification 也更容易进行
+**阶段结束后的新稳定状态**
 
-最终，系统应达到一种更优雅的状态：
-
-> runtime 负责真相与裁决，worker 负责执行，verify 负责独立评估，summary 负责投影，而不是互相越界。
+系统不再只在 body repo 自测自证，进入“真实目标验收闭环成立”的稳定状态。
 
 ---
 
-## 12. 成功定义（Definition of Success）
+## 14. 最终效果描述
 
-如果以下条件同时成立，则可认为本轮架构补完成功：
+收口完成后，`Klein-Harness` 应呈现以下稳定特征：
 
-1. accepted packet 成为 accepted epoch 的唯一 packet truth
-2. task contract 成为当前 dispatch 的唯一 done definition
-3. verify 能独立基于 contract 和 evidence 否决执行结果
-4. completion gate 能清晰说明为什么没有 completed
-5. submit 成为真正的 single-entry intake，而不总是产生新 task
-6. query 成为 operator truth surface，而不是散文件入口
-7. derived summaries 均可从 authoritative truth 重建
-8. 至少一个真实 target requirement 通过 harness 流程独立闭环完成
+- operator 不必读 trace / prompt 才知道当前 task 真相
+- worker 不再拥有 done definition 的解释权
+- verify 不再是 ingest 的包装，而是独立 evaluator
+- completion gate 不再是 passed / failed 翻译器，而是最终完成裁决面
+- packet / contract / worker-spec 三层边界长期稳定
+- reviewRequired、needs_replan、blocked、completed 都有统一结构化闭环
+- summaries 全部可重建且明确降权
+- target repo phase-1 validation 成为真实验收链，而不是补充演示
+
+此时系统的“完整”不是因为文档写得全，而是因为任何关键问题都能被唯一对象直接回答：
+
+- 任务是谁：看 task truth
+- 当前 accepted 的是什么：看 accepted packet
+- 这次 dispatch 的 done definition 是什么：看 task contract
+- 这次执行做了什么：看 worker result
+- evaluator 怎么判断：看 verify judgment
+- 为什么还不能完成：看 completion gate
+- operator 快速视图怎么看：看 summaries，但知道它们可重建且非 authority
 
 ---
 
-## 13. 一句话结论
+## 15. 成功定义
 
-这份方案的核心不是“继续加更多节点”，而是：
+本次架构收口完成的成功定义如下。
 
-**把已经存在但尚未完全硬化的正确设计，收口成一套真正 contract-backed、evaluator-gated、thread-aware、可解释、可审计、可长期演进的 harness runtime。**
+### 15.1 对象成功定义
+
+- 每个关键对象都能明确回答“谁拥有它”
+- 每个关键对象都能明确回答“谁只能引用，不能重定义它”
+- 每个 derived 状态都能明确回答“从哪重建”
+- 每个 authoritative 状态都能明确回答“坏了为何会打断主链路”
+
+### 15.2 闭环成功定义
+
+- contract-first 闭环成立：dispatch done definition 唯一由 task contract 定义
+- evaluator-gated 闭环成立：verify 独立判断 contract fulfillment
+- completion-gated 闭环成立：completed 只由 completion gate 判定
+- intake 前置闭环成立：submit 必须经过 classify / fuse / bind / selective replan
+- target validation 闭环成立：至少一条真实 requirement 在 target repo 中完成闭环
+
+### 15.3 长期复杂度成功定义
+
+- 没有新的 summary 偷偷长成 authority
+- 没有新的 prompt / methodology 层偷偷变成 runtime 主链路
+- 没有新的对象和现有 truth object 争夺同一语义
+- 后续新增对象前都必须回答唯一问题、authority 类型、重建规则、失败影响
+
+### 15.4 最终判定
+
+只有当以下四件事同时成立，才能说本次收口完成：
+
+1. truth object 边界冻结并已切换到主读取路径
+2. verify 与 gate 已形成 evaluator-gated completion loop
+3. summaries 已证明可重建且不再承载 authority
+4. target repo phase-1 validation 已形成真实验收闭环
+
+少任一项，都只能算“局部优化”，不能算架构收口完成。

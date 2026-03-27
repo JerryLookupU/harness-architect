@@ -159,6 +159,20 @@ raw logs 只用于 operator debug、RCA 证据、或定向 detail retrieval。
 
 因此这份 skill 文档是 **Codex 的入口说明**，不是 runtime authority。
 
+## tmux Worker Prefix Protocol
+
+当 runtime 通过 tmux 启动 worker 时，pane/log 的首行应使用统一前缀：
+
+- `[harness:<task-id>] <node-task-description>`
+
+这个前缀用于：
+
+- 让 operator 一眼看清当前 session 属于哪条 task
+- 让 hook / grep / log-search 先按 harness 前缀聚焦，再下钻具体节点
+- 避免多个 worker 并行时只剩 session 名可看
+
+这里的 `<node-task-description>` 应尽量对应当前 execution slice，而不是笼统复述整条需求。
+
 # Minimal Read Order / Inputs
 
 Codex 在使用这份 skill 时，默认应优先读：
@@ -284,7 +298,6 @@ Codex 在使用这份 skill 时，默认应优先读：
 - `harness-log-search` -> `examples/harness-log-search.example.sh`
 - `harness-dashboard` -> `examples/harness-dashboard.example.sh`
 - `harness-install-tools` -> `examples/harness-install-tools.example.sh`
-- `release smoke` -> `examples/harness-release-smoke.example.sh`
 - `harness-route-session` -> `examples/harness-route-session.example.sh`
 - `harness-prepare-worktree` -> `examples/harness-prepare-worktree.example.sh`
 - `harness-diff-summary` -> `examples/harness-diff-summary.example.sh`

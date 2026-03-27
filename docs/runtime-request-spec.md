@@ -14,7 +14,7 @@ Canonical commands:
 - `harness tasks <ROOT>`
 - `harness task <ROOT> <TASK_ID>`
 - `harness control <ROOT> task <TASK_ID> <status|attach|restart-from-stage|stop|archive>`
-- `harness daemon run-once <ROOT>`
+- `harness daemon loop <ROOT>`
 - `harness daemon loop <ROOT>`
 
 Compatibility wrappers:

@@ -67,7 +67,7 @@ func TestSubmitWritesIntakeThreadChangeAndTodoSummaries(t *testing.T) {
 	}
 }
 
-func TestSubmitReusesExistingThreadForSameCanonicalGoal(t *testing.T) {
+func TestSubmitReusesQueuedTaskForSameCanonicalGoal(t *testing.T) {
 	root := t.TempDir()
 	if _, err := bootstrap.Init(root); err != nil {
 		t.Fatalf("init: %v", err)
@@ -97,14 +97,64 @@ func TestSubmitReusesExistingThreadForSameCanonicalGoal(t *testing.T) {
 	if second.Request.NormalizedIntentClass != "context_enrichment" {
 		t.Fatalf("expected context enrichment classification: %+v", second.Request)
 	}
+	if second.Request.BindingAction != "reused_existing_task" || second.Request.TaskID != first.Task.TaskID {
+		t.Fatalf("expected second request to reuse queued task: %+v", second.Request)
+	}
 
 	var threadState ThreadState
 	if err := state.LoadJSON(filepath.Join(root, ".harness", "state", "thread-state.json"), &threadState); err != nil {
 		t.Fatalf("load thread state: %v", err)
 	}
 	thread := threadState.Threads[first.Task.ThreadKey]
-	if len(thread.TaskIDs) != 2 || len(thread.RequestIDs) != 2 {
-		t.Fatalf("expected two requests/tasks on shared thread: %+v", thread)
+	if len(thread.TaskIDs) != 1 || len(thread.RequestIDs) != 2 {
+		t.Fatalf("expected one queued task and two requests on shared thread: %+v", thread)
+	}
+
+	pool, err := adapter.LoadTaskPool(root)
+	if err != nil {
+		t.Fatalf("load task pool: %v", err)
+	}
+	if len(pool.Tasks) != 1 || pool.Tasks[0].TaskID != first.Task.TaskID {
+		t.Fatalf("expected only reused task in pool: %+v", pool.Tasks)
+	}
+}
+
+func TestSubmitCreatesNewTaskWhenMatchedTaskRunning(t *testing.T) {
+	root := t.TempDir()
+	if _, err := bootstrap.Init(root); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	first, err := Submit(SubmitRequest{
+		Root: root,
+		Goal: "Fix runtime verify bug",
+	})
+	if err != nil {
+		t.Fatalf("first submit: %v", err)
+	}
+	if err := updateTask(root, first.Task.TaskID, func(current *adapter.Task) {
+		current.Status = "running"
+		current.LastDispatchID = "dispatch-1"
+		current.UpdatedAt = state.NowUTC()
+	}); err != nil {
+		t.Fatalf("mark running task: %v", err)
+	}
+
+	second, err := Submit(SubmitRequest{
+		Root: root,
+		Goal: "Fix runtime verify bug",
+	})
+	if err != nil {
+		t.Fatalf("second submit: %v", err)
+	}
+	if second.Task.ThreadKey != first.Task.ThreadKey {
+		t.Fatalf("expected follow-up task to stay on same thread: first=%+v second=%+v", first.Task, second.Task)
+	}
+	if second.Task.TaskID == first.Task.TaskID {
+		t.Fatalf("expected running task to force a new follow-up task: first=%+v second=%+v", first.Task, second.Task)
+	}
+	if second.Request.BindingAction != "created_new_task" {
+		t.Fatalf("expected follow-up request to create new task: %+v", second.Request)
 	}
 }
 
@@ -139,6 +189,59 @@ func TestSubmitCarriesForwardMatchedThreadPlanEpoch(t *testing.T) {
 	}
 	if result.Task.ThreadKey != "thread-7" {
 		t.Fatalf("expected matched thread key, got %+v", result.Task)
+	}
+}
+
+func TestSubmitWritesRequestSummaryIndexAndTaskMap(t *testing.T) {
+	root := t.TempDir()
+	if _, err := bootstrap.Init(root); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	first, err := Submit(SubmitRequest{
+		Root: root,
+		Goal: "Refine request hot state",
+	})
+	if err != nil {
+		t.Fatalf("first submit: %v", err)
+	}
+	second, err := Submit(SubmitRequest{
+		Root:     root,
+		Goal:     "Refine request hot state",
+		Contexts: []string{"docs/request.md"},
+	})
+	if err != nil {
+		t.Fatalf("second submit: %v", err)
+	}
+
+	var summary RequestSummary
+	if err := state.LoadJSON(filepath.Join(root, ".harness", "state", "request-summary.json"), &summary); err != nil {
+		t.Fatalf("load request summary: %v", err)
+	}
+	if summary.LatestRequestID != second.Request.RequestID || summary.LatestTaskID != first.Task.TaskID || summary.ReusedTaskCount != 1 || summary.CreatedTaskCount != 1 {
+		t.Fatalf("unexpected request summary: %+v", summary)
+	}
+
+	var index RequestIndex
+	if err := state.LoadJSON(filepath.Join(root, ".harness", "state", "request-index.json"), &index); err != nil {
+		t.Fatalf("load request index: %v", err)
+	}
+	if index.LatestRequestByTaskID[first.Task.TaskID] != second.Request.RequestID {
+		t.Fatalf("expected latest request by task id to point at reused request: %+v", index)
+	}
+	if index.RequestsByID[second.Request.RequestID].TaskID != first.Task.TaskID {
+		t.Fatalf("expected request index to store reused task binding: %+v", index.RequestsByID[second.Request.RequestID])
+	}
+
+	var mapping RequestTaskMap
+	if err := state.LoadJSON(filepath.Join(root, ".harness", "state", "request-task-map.json"), &mapping); err != nil {
+		t.Fatalf("load request-task map: %v", err)
+	}
+	if mapping.RequestToTask[second.Request.RequestID] != first.Task.TaskID {
+		t.Fatalf("expected request to task mapping for reused request: %+v", mapping)
+	}
+	if len(mapping.TaskToRequests[first.Task.TaskID]) != 2 || len(mapping.ThreadToTasks[first.Task.ThreadKey]) != 1 {
+		t.Fatalf("expected task/thread mappings to stay consistent under reuse: %+v", mapping)
 	}
 }
 
@@ -206,6 +309,35 @@ func TestRefreshExecutionIndexesUpdatesThreadStateAfterRuntimeTransition(t *test
 	entry := threadState.Threads["thread-9"]
 	if entry.Status != "completed" || entry.PlanEpoch != 2 || entry.LatestTaskID != "T-9" {
 		t.Fatalf("unexpected thread entry after refresh: %+v", entry)
+	}
+}
+
+func TestRefreshThreadStateWritesCurrentAndLatestValidPlanEpoch(t *testing.T) {
+	root := t.TempDir()
+	paths, err := bootstrap.Init(root)
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	task := adapter.Task{
+		TaskID:    "T-8",
+		ThreadKey: "thread-8",
+		Summary:   "refresh thread state",
+		PlanEpoch: 4,
+		Status:    "queued",
+		UpdatedAt: "2026-03-26T12:00:00Z",
+	}
+
+	if err := refreshThreadState(paths, task, "R-8", "goalhash-8"); err != nil {
+		t.Fatalf("refresh thread state: %v", err)
+	}
+
+	var threadState ThreadState
+	if err := state.LoadJSON(filepath.Join(root, ".harness", "state", "thread-state.json"), &threadState); err != nil {
+		t.Fatalf("load thread state: %v", err)
+	}
+	entry := threadState.Threads["thread-8"]
+	if entry.PlanEpoch != 4 || entry.CurrentPlanEpoch != 4 || entry.LatestValidPlanEpoch != 4 {
+		t.Fatalf("expected current/latest valid epoch fields to be written together: %+v", entry)
 	}
 }
 
@@ -292,14 +424,14 @@ func TestBuildRouteInputCarriesIntakeSignals(t *testing.T) {
 	if input.NormalizedIntentClass != "context_enrichment" {
 		t.Fatalf("expected context enrichment class, got %+v", input)
 	}
-	if input.PendingTaskCount != 2 {
+	if input.PendingTaskCount != 1 {
 		t.Fatalf("expected pending task count from todo summary, got %+v", input)
 	}
 	if input.RequiredSummaryVersion != "state.v9" {
 		t.Fatalf("expected required summary version passthrough, got %+v", input)
 	}
-	if input.TaskID != second.Task.TaskID || input.TaskID == first.Task.TaskID {
-		t.Fatalf("expected route input to bind to second task, got %+v", input)
+	if input.TaskID != second.Task.TaskID || input.TaskID != first.Task.TaskID {
+		t.Fatalf("expected route input to bind to reused task, got %+v", input)
 	}
 }
 

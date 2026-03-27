@@ -145,20 +145,31 @@ func ArchiveTask(root, taskID, reason string) (adapter.Task, error) {
 		return adapter.Task{}, err
 	}
 	var gate verify.CompletionGate
-	if ok, err := state.LoadJSONIfExists(paths.CompletionGatePath, &gate); err != nil {
+	if ok, err := loadTaskCompletionGate(paths, taskID, &gate); err != nil {
 		return adapter.Task{}, err
-	} else if !ok || gate.TaskID != taskID || !gate.Satisfied || gate.Retired {
+	} else if !ok || !gate.Satisfied || gate.Retired {
 		return adapter.Task{}, fmt.Errorf("%w: task=%s", verify.ErrCompletionGateOpen, taskID)
 	}
 	var guard verify.GuardState
-	_, _ = state.LoadJSONIfExists(paths.GuardStatePath, &guard)
+	_, _ = loadTaskGuardState(paths, taskID, &guard)
 	if sessionName := taskTmuxSession(root, task); sessionName != "" {
 		_ = tmux.KillSession(sessionName)
 	}
 	gate.Retired = true
 	gate.Status = "retired"
 	gate.RetireEligible = false
-	if _, err := state.WriteSnapshot(paths.CompletionGatePath, &gate, "harness-control", gate.Revision); err != nil {
+	taskGateRevision, err := state.CurrentRevision(paths.CompletionGateTaskPath(taskID))
+	if err != nil {
+		return adapter.Task{}, err
+	}
+	if _, err := state.WriteSnapshot(paths.CompletionGateTaskPath(taskID), &gate, "harness-control", taskGateRevision); err != nil {
+		return adapter.Task{}, err
+	}
+	aliasGateRevision, err := state.CurrentRevision(paths.CompletionGatePath)
+	if err != nil {
+		return adapter.Task{}, err
+	}
+	if _, err := state.WriteSnapshot(paths.CompletionGatePath, &gate, "harness-control", aliasGateRevision); err != nil {
 		return adapter.Task{}, err
 	}
 	guard.Status = "archived"
@@ -168,7 +179,18 @@ func ArchiveTask(root, taskID, reason string) (adapter.Task, error) {
 	guard.CompletionGateStatus = gate.Status
 	guard.CompletionGateSatisfied = gate.Satisfied
 	guard.RetireEligible = false
-	if _, err := state.WriteSnapshot(paths.GuardStatePath, &guard, "harness-control", guard.Revision); err != nil {
+	taskGuardRevision, err := state.CurrentRevision(paths.GuardStateTaskPath(taskID))
+	if err != nil {
+		return adapter.Task{}, err
+	}
+	if _, err := state.WriteSnapshot(paths.GuardStateTaskPath(taskID), &guard, "harness-control", taskGuardRevision); err != nil {
+		return adapter.Task{}, err
+	}
+	aliasGuardRevision, err := state.CurrentRevision(paths.GuardStatePath)
+	if err != nil {
+		return adapter.Task{}, err
+	}
+	if _, err := state.WriteSnapshot(paths.GuardStatePath, &guard, "harness-control", aliasGuardRevision); err != nil {
 		return adapter.Task{}, err
 	}
 	if err := updateTask(root, taskID, func(current *adapter.Task) {
@@ -191,4 +213,30 @@ func taskTmuxSession(root string, task adapter.Task) string {
 		return ""
 	}
 	return session.SessionName
+}
+
+func loadTaskCompletionGate(paths adapter.Paths, taskID string, gate *verify.CompletionGate) (bool, error) {
+	for _, path := range []string{paths.CompletionGateTaskPath(taskID), paths.CompletionGatePath} {
+		ok, err := state.LoadJSONIfExists(path, gate)
+		if err != nil {
+			return false, err
+		}
+		if ok && gate.TaskID == taskID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func loadTaskGuardState(paths adapter.Paths, taskID string, guard *verify.GuardState) (bool, error) {
+	for _, path := range []string{paths.GuardStateTaskPath(taskID), paths.GuardStatePath} {
+		ok, err := state.LoadJSONIfExists(path, guard)
+		if err != nil {
+			return false, err
+		}
+		if ok && guard.TaskID == taskID {
+			return true, nil
+		}
+	}
+	return false, nil
 }

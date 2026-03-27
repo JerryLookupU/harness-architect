@@ -5,6 +5,8 @@ import "klein-harness/internal/state"
 type RequestRecord struct {
 	RequestID             string   `json:"requestId"`
 	TaskID                string   `json:"taskId,omitempty"`
+	BindingAction         string   `json:"bindingAction,omitempty"`
+	ReusedTaskID          string   `json:"reusedTaskId,omitempty"`
 	ThreadKey             string   `json:"threadKey,omitempty"`
 	TargetThreadKey       string   `json:"targetThreadKey,omitempty"`
 	TargetPlanEpoch       int      `json:"targetPlanEpoch,omitempty"`
@@ -23,6 +25,38 @@ type RequestRecord struct {
 	UpdatedAt             string   `json:"updatedAt"`
 }
 
+type RequestSummary struct {
+	state.Metadata
+	LatestRequestID       string `json:"latestRequestId,omitempty"`
+	LatestTaskID          string `json:"latestTaskId,omitempty"`
+	LatestThreadKey       string `json:"latestThreadKey,omitempty"`
+	FrontDoorTriage       string `json:"frontDoorTriage,omitempty"`
+	NormalizedIntentClass string `json:"normalizedIntentClass,omitempty"`
+	FusionDecision        string `json:"fusionDecision,omitempty"`
+	BindingAction         string `json:"bindingAction,omitempty"`
+	TargetPlanEpoch       int    `json:"targetPlanEpoch,omitempty"`
+	RequestCount          int    `json:"requestCount"`
+	ReusedTaskCount       int    `json:"reusedTaskCount"`
+	CreatedTaskCount      int    `json:"createdTaskCount"`
+}
+
+type RequestIndex struct {
+	state.Metadata
+	RequestsByID                  map[string]RequestRecord `json:"requestsById,omitempty"`
+	LatestRequestByTaskID         map[string]string        `json:"latestRequestByTaskId,omitempty"`
+	LatestRequestByThreadKey      map[string]string        `json:"latestRequestByThreadKey,omitempty"`
+	LatestRequestByIdempotencyKey map[string]string        `json:"latestRequestByIdempotencyKey,omitempty"`
+}
+
+type RequestTaskMap struct {
+	state.Metadata
+	RequestToTask    map[string]string   `json:"requestToTask,omitempty"`
+	RequestToThread  map[string]string   `json:"requestToThread,omitempty"`
+	TaskToRequests   map[string][]string `json:"taskToRequests,omitempty"`
+	ThreadToRequests map[string][]string `json:"threadToRequests,omitempty"`
+	ThreadToTasks    map[string][]string `json:"threadToTasks,omitempty"`
+}
+
 type IntakeSummary struct {
 	state.Metadata
 	LatestRequestID       string `json:"latestRequestId,omitempty"`
@@ -36,15 +70,17 @@ type IntakeSummary struct {
 }
 
 type ThreadEntry struct {
-	ThreadKey         string   `json:"threadKey"`
-	CanonicalGoalHash string   `json:"canonicalGoalHash,omitempty"`
-	LatestRequestID   string   `json:"latestRequestId,omitempty"`
-	LatestTaskID      string   `json:"latestTaskId,omitempty"`
-	PlanEpoch         int      `json:"planEpoch,omitempty"`
-	RequestIDs        []string `json:"requestIds,omitempty"`
-	TaskIDs           []string `json:"taskIds,omitempty"`
-	Status            string   `json:"status,omitempty"`
-	UpdatedAt         string   `json:"updatedAt,omitempty"`
+	ThreadKey            string   `json:"threadKey"`
+	CanonicalGoalHash    string   `json:"canonicalGoalHash,omitempty"`
+	LatestRequestID      string   `json:"latestRequestId,omitempty"`
+	LatestTaskID         string   `json:"latestTaskId,omitempty"`
+	PlanEpoch            int      `json:"planEpoch,omitempty"`
+	CurrentPlanEpoch     int      `json:"currentPlanEpoch,omitempty"`
+	LatestValidPlanEpoch int      `json:"latestValidPlanEpoch,omitempty"`
+	RequestIDs           []string `json:"requestIds,omitempty"`
+	TaskIDs              []string `json:"taskIds,omitempty"`
+	Status               string   `json:"status,omitempty"`
+	UpdatedAt            string   `json:"updatedAt,omitempty"`
 }
 
 type ThreadState struct {

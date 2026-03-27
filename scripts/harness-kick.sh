@@ -4,6 +4,7 @@ set -euo pipefail
 POSITIONAL=()
 CONTEXTS=()
 RUN_DAEMON=1
+DAEMON_INTERVAL="30s"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -22,6 +23,9 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --model|--concurrency|--daemon-interval)
+      if [[ "$1" == "--daemon-interval" ]]; then
+        DAEMON_INTERVAL="$2"
+      fi
       shift 2
       ;;
     -h|--help)
@@ -65,5 +69,5 @@ done
 "${RUNNER[@]}" submit "${SUBMIT_ARGS[@]}"
 
 if [[ "$RUN_DAEMON" -eq 1 ]]; then
-  exec "${RUNNER[@]}" daemon run-once "$ROOT"
+  exec "${RUNNER[@]}" daemon loop "$ROOT" --interval "$DAEMON_INTERVAL"
 fi

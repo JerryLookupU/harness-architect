@@ -6,6 +6,7 @@ Purpose:
 Required fields:
 - taskId
 - objective
+- sharedContextPath
 - constraints
 - ownedPaths
 - blockedPaths
@@ -35,9 +36,16 @@ Optional runtime-carried metadata:
 - acceptedPacketPath
 - taskContractPath
 - executionSliceId
+- sharedContext
+- taskGroupId
+- batchLabel
+- entityBatch
+- outputTargets
 
 Field conventions:
 - `objective` is the execution objective for one task-local slice
+- `sharedContextPath` points to the runtime-owned task-group context in `.harness`
+- `sharedContext` is optional inline duplication for convenience; the file at `sharedContextPath` remains authoritative
 - `constraints`, `ownedPaths`, `blockedPaths`, `acceptanceMarkers`, `replanTriggers`, and `rollbackHints` are arrays of strings
 - `taskBudget` and `verificationPlan` stay machine-readable JSON objects, not prose paragraphs
 
@@ -45,5 +53,6 @@ Rules:
 - one executable task gets one task-local `worker-spec.json`
 - worker-spec may refine task-local execution but may not create new global task sets
 - worker-spec should reference the task contract for done definition instead of duplicating `doneCriteria` / `requiredEvidence`
+- worker-spec should inherit roster / file schema / source policy from `sharedContext` instead of forcing the worker to reconstruct them
 - workers may edit only owned task-local paths and artifacts
 - workers may not mutate global ledgers, leases, route decisions, merges, or completion state

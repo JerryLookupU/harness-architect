@@ -135,6 +135,46 @@ func TestIngestPassedWithEvidenceCompletes(t *testing.T) {
 	}
 }
 
+func TestIngestWritesTaskScopedGateAndAlias(t *testing.T) {
+	root := t.TempDir()
+	ticket := issueTestDispatch(t, root)
+	relVerifyPath := writeVerificationArtifacts(t, root, ticket.DispatchID, false)
+	writeSharedConstraintSnapshot(t, root, "T-1", ticket.DispatchID, 1)
+	writeAcceptedPacketAndContract(t, root, ticket)
+
+	if _, err := Ingest(Request{
+		Root:                   root,
+		TaskID:                 "T-1",
+		DispatchID:             ticket.DispatchID,
+		PlanEpoch:              1,
+		Attempt:                1,
+		CausationID:            "outcome-1",
+		Status:                 "passed",
+		Summary:                "verification passed with task-scoped state",
+		VerificationResultPath: relVerifyPath,
+	}); err != nil {
+		t.Fatalf("ingest verification: %v", err)
+	}
+
+	taskGate := loadTaskCompletionGate(t, root, "T-1")
+	if !taskGate.Satisfied || taskGate.TaskID != "T-1" {
+		t.Fatalf("expected task-scoped completion gate: %+v", taskGate)
+	}
+	aliasGate := loadCompletionGate(t, root)
+	if aliasGate.TaskID != "T-1" || aliasGate.Status != taskGate.Status {
+		t.Fatalf("expected singleton alias to mirror task-scoped completion gate: %+v %+v", aliasGate, taskGate)
+	}
+
+	taskGuard := loadTaskGuardState(t, root, "T-1")
+	if taskGuard.TaskID != "T-1" || !taskGuard.SafeToArchive {
+		t.Fatalf("expected task-scoped guard state: %+v", taskGuard)
+	}
+	aliasGuard := loadGuardState(t, root)
+	if aliasGuard.TaskID != "T-1" || aliasGuard.Status != taskGuard.Status {
+		t.Fatalf("expected singleton alias to mirror task-scoped guard state: %+v %+v", aliasGuard, taskGuard)
+	}
+}
+
 func TestIngestReviewRequiredWithEmbeddedReviewEvidenceCompletes(t *testing.T) {
 	root := t.TempDir()
 	ticket := issueTestDispatch(t, root)
@@ -560,6 +600,19 @@ func loadCompletionGate(t *testing.T, root string) CompletionGate {
 	return gate
 }
 
+func loadTaskCompletionGate(t *testing.T, root, taskID string) CompletionGate {
+	t.Helper()
+	paths, err := adapter.Resolve(root)
+	if err != nil {
+		t.Fatalf("resolve paths: %v", err)
+	}
+	var gate CompletionGate
+	if err := state.LoadJSON(paths.CompletionGateTaskPath(taskID), &gate); err != nil {
+		t.Fatalf("load task-scoped completion gate: %v", err)
+	}
+	return gate
+}
+
 func loadGuardState(t *testing.T, root string) GuardState {
 	t.Helper()
 	paths, err := adapter.Resolve(root)
@@ -569,6 +622,19 @@ func loadGuardState(t *testing.T, root string) GuardState {
 	var guard GuardState
 	if err := state.LoadJSON(paths.GuardStatePath, &guard); err != nil {
 		t.Fatalf("load guard state: %v", err)
+	}
+	return guard
+}
+
+func loadTaskGuardState(t *testing.T, root, taskID string) GuardState {
+	t.Helper()
+	paths, err := adapter.Resolve(root)
+	if err != nil {
+		t.Fatalf("resolve paths: %v", err)
+	}
+	var guard GuardState
+	if err := state.LoadJSON(paths.GuardStateTaskPath(taskID), &guard); err != nil {
+		t.Fatalf("load task-scoped guard state: %v", err)
 	}
 	return guard
 }

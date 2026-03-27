@@ -35,6 +35,8 @@ Decision rules:
 - produce a hybrid only when it reduces risk without blurring ownership
 - prefer the simpler plan when scores are very close
 - if scenario-specific dimensions apply, a proposal that skips them cannot win on general simplicity alone
+- freeze shared task-group context before dispatching workers
+- ensure the final execution task list is explicit enough that a worker can act without reinventing roster / format / source rules
 
 Output format:
 - return exactly one JSON object
@@ -102,7 +104,11 @@ Field rules:
 - do not put `workerSpecCandidates` inside `finalPacket`
 - `finalWorkerSpecCandidates` must align with `finalPacket.executionTasks`
 - use exact field names; do not rename `taskBudgets` to `taskBudget` inside `finalPacket`
+- `finalPacket.sharedContext` should contain the task-group-wide decisions that every worker slice inherits
+- `finalPacket.executionTasks` should contain the dispatchable task list produced by judging, not owned-path placeholders
+- `finalWorkerSpecCandidates` should be thin task-local payloads that reference shared task-group context instead of duplicating all background
 
 Hard rule:
 - the final result must be directly usable as runtime-owned Klein orchestration work, not just discussion text
+- for bulk generation requests, judge must settle: who/what is in scope, what the file contract is, what source policy applies, and how batches should be dispatched
 - stop at orchestration acceptance; task execution belongs to dispatch + worker, not to the judge

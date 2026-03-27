@@ -128,6 +128,14 @@ description: |
 
 因此这份 skill 文档是 **Codex 的入口说明**，不是 runtime authority。
 
+## tmux / Hook Matching
+
+如果当前执行发生在 tmux worker 里，优先使用统一前缀：
+
+- `[harness:<task-id>] <node-task-description>`
+
+后续 hook、日志检索和 closeout 复盘都应先匹配这个前缀，再结合 dispatch / slice 证据判断是否跑偏。
+
 # Minimal Read Order / Inputs
 
 当 Codex 以这份 skill 为当前执行纪律时，至少应先读：

@@ -36,36 +36,37 @@ type PlanningView struct {
 	ExecutionLoop      orchestration.ExecutionLoopContract `json:"executionLoop"`
 	ConstraintSystem   orchestration.ConstraintSystem      `json:"constraintSystem"`
 	PacketSynthesis    orchestration.PacketSynthesisLoop   `json:"packetSynthesis"`
+	PlannerCandidates  []orchestration.PlannerCandidate    `json:"plannerCandidates,omitempty"`
 	ActiveSkills       []string                            `json:"activeSkills,omitempty"`
 	SkillHints         []string                            `json:"skillHints,omitempty"`
 	TracePreview       []string                            `json:"tracePreview,omitempty"`
 }
 
 type TaskView struct {
-	Task             adapter.Task                  `json:"task"`
-	Dispatch         *dispatch.Ticket              `json:"dispatch,omitempty"`
-	Lease            *lease.Record                 `json:"lease,omitempty"`
-	Completion       *verify.CompletionGate        `json:"completionGate,omitempty"`
-	Guard            *verify.GuardState            `json:"guardState,omitempty"`
-	Release          ReleaseReadiness              `json:"release"`
-	Tmux             *tmux.SessionState            `json:"tmux,omitempty"`
-	Planning         *PlanningView                 `json:"planning,omitempty"`
-	AcceptedPacket   *orchestration.AcceptedPacket `json:"acceptedPacket,omitempty"`
-	PacketProgress   *orchestration.PacketProgress `json:"packetProgress,omitempty"`
-	RemainingSlices  []string                      `json:"remainingSlices,omitempty"`
-	NextSliceID      string                        `json:"nextSliceId,omitempty"`
-	TaskContract     *orchestration.TaskContract   `json:"taskContract,omitempty"`
-	Assessment       *verify.Assessment            `json:"assessment,omitempty"`
-	Request          *runtime.RequestRecord        `json:"request,omitempty"`
-	IntakeSummary    *runtime.IntakeSummary        `json:"intakeSummary,omitempty"`
-	ThreadEntry      *runtime.ThreadEntry          `json:"threadEntry,omitempty"`
-	ChangeSummary    *runtime.ChangeSummary        `json:"changeSummary,omitempty"`
-	TodoSummary      *runtime.TodoSummary          `json:"todoSummary,omitempty"`
-	OuterLoopMemory  *verify.TaskFeedbackSummary   `json:"outerLoopMemory,omitempty"`
-	ActiveSkills     []string                      `json:"activeSkills,omitempty"`
-	SkillHints       []string                      `json:"skillHints,omitempty"`
-	AttachCommand    string                        `json:"attachCommand,omitempty"`
-	LogPreview       []string                      `json:"logPreview,omitempty"`
+	Task            adapter.Task                  `json:"task"`
+	Dispatch        *dispatch.Ticket              `json:"dispatch,omitempty"`
+	Lease           *lease.Record                 `json:"lease,omitempty"`
+	Completion      *verify.CompletionGate        `json:"completionGate,omitempty"`
+	Guard           *verify.GuardState            `json:"guardState,omitempty"`
+	Release         ReleaseReadiness              `json:"release"`
+	Tmux            *tmux.SessionState            `json:"tmux,omitempty"`
+	Planning        *PlanningView                 `json:"planning,omitempty"`
+	AcceptedPacket  *orchestration.AcceptedPacket `json:"acceptedPacket,omitempty"`
+	PacketProgress  *orchestration.PacketProgress `json:"packetProgress,omitempty"`
+	RemainingSlices []string                      `json:"remainingSlices,omitempty"`
+	NextSliceID     string                        `json:"nextSliceId,omitempty"`
+	TaskContract    *orchestration.TaskContract   `json:"taskContract,omitempty"`
+	Assessment      *verify.Assessment            `json:"assessment,omitempty"`
+	Request         *runtime.RequestRecord        `json:"request,omitempty"`
+	IntakeSummary   *runtime.IntakeSummary        `json:"intakeSummary,omitempty"`
+	ThreadEntry     *runtime.ThreadEntry          `json:"threadEntry,omitempty"`
+	ChangeSummary   *runtime.ChangeSummary        `json:"changeSummary,omitempty"`
+	TodoSummary     *runtime.TodoSummary          `json:"todoSummary,omitempty"`
+	OuterLoopMemory *verify.TaskFeedbackSummary   `json:"outerLoopMemory,omitempty"`
+	ActiveSkills    []string                      `json:"activeSkills,omitempty"`
+	SkillHints      []string                      `json:"skillHints,omitempty"`
+	AttachCommand   string                        `json:"attachCommand,omitempty"`
+	LogPreview      []string                      `json:"logPreview,omitempty"`
 }
 
 type ReleaseReadiness struct {
@@ -143,16 +144,14 @@ func Task(root, taskID string) (TaskView, error) {
 	if err != nil {
 		return TaskView{}, err
 	}
-	var gate verify.CompletionGate
-	if ok, err := state.LoadJSONIfExists(paths.CompletionGatePath, &gate); err != nil {
+	if gate, ok, err := loadTaskCompletionGate(paths, task.TaskID); err != nil {
 		return TaskView{}, err
-	} else if ok && gate.TaskID == task.TaskID {
+	} else if ok {
 		view.Completion = &gate
 	}
-	var guard verify.GuardState
-	if ok, err := state.LoadJSONIfExists(paths.GuardStatePath, &guard); err != nil {
+	if guard, ok, err := loadTaskGuardState(paths, task.TaskID); err != nil {
 		return TaskView{}, err
-	} else if ok && guard.TaskID == task.TaskID {
+	} else if ok {
 		view.Guard = &guard
 	}
 	if session, ok, err := tmux.FindTaskSession(root, task.TaskID, task.TmuxSession); err == nil && ok {
@@ -204,7 +203,7 @@ func Task(root, taskID string) (TaskView, error) {
 			view.NextSliceID = view.RemainingSlices[0]
 		}
 	}
-	if request, ok, err := loadLatestRequestForTask(paths.QueuePath, task.TaskID); err != nil {
+	if request, ok, err := loadLatestRequestForTask(paths, task.TaskID); err != nil {
 		return TaskView{}, err
 	} else if ok {
 		view.Request = &request
@@ -345,6 +344,7 @@ type dispatchTicketView struct {
 	ExecutionLoop      orchestration.ExecutionLoopContract `json:"executionLoop"`
 	ConstraintSystem   orchestration.ConstraintSystem      `json:"constraintSystem"`
 	PacketSynthesis    orchestration.PacketSynthesisLoop   `json:"packetSynthesis"`
+	PlannerCandidates  []orchestration.PlannerCandidate    `json:"plannerCandidates"`
 }
 
 func loadPlanningView(stateDir, taskID string) (*PlanningView, error) {
@@ -376,6 +376,7 @@ func loadPlanningView(stateDir, taskID string) (*PlanningView, error) {
 		ExecutionLoop:      ticket.ExecutionLoop,
 		ConstraintSystem:   ticket.ConstraintSystem,
 		PacketSynthesis:    ticket.PacketSynthesis,
+		PlannerCandidates:  append([]orchestration.PlannerCandidate(nil), ticket.PlannerCandidates...),
 		ActiveSkills:       append([]string(nil), ticket.ExecutionLoop.ActiveSkills...),
 		SkillHints:         append([]string(nil), ticket.ExecutionLoop.SkillHints...),
 	}
@@ -510,7 +511,22 @@ func loadTodoSummary(stateDir string) (runtime.TodoSummary, bool, error) {
 	return summary, ok, nil
 }
 
-func loadLatestRequestForTask(queuePath, taskID string) (runtime.RequestRecord, bool, error) {
+func loadLatestRequestForTask(paths adapter.Paths, taskID string) (runtime.RequestRecord, bool, error) {
+	index, ok, err := loadRequestIndex(paths.RequestIndexPath)
+	if err != nil {
+		return runtime.RequestRecord{}, false, err
+	}
+	if ok {
+		if requestID := index.LatestRequestByTaskID[taskID]; requestID != "" {
+			if record, exists := index.RequestsByID[requestID]; exists {
+				return record, true, nil
+			}
+		}
+	}
+	return loadLatestRequestForTaskFromQueue(paths.QueuePath, taskID)
+}
+
+func loadLatestRequestForTaskFromQueue(queuePath, taskID string) (runtime.RequestRecord, bool, error) {
 	payload, err := os.ReadFile(queuePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -530,6 +546,49 @@ func loadLatestRequestForTask(queuePath, taskID string) (runtime.RequestRecord, 
 		return record, true, nil
 	}
 	return runtime.RequestRecord{}, false, nil
+}
+
+func loadTaskCompletionGate(paths adapter.Paths, taskID string) (verify.CompletionGate, bool, error) {
+	for _, path := range []string{paths.CompletionGateTaskPath(taskID), paths.CompletionGatePath} {
+		var gate verify.CompletionGate
+		ok, err := state.LoadJSONIfExists(path, &gate)
+		if err != nil {
+			return verify.CompletionGate{}, false, err
+		}
+		if ok && gate.TaskID == taskID {
+			return gate, true, nil
+		}
+	}
+	return verify.CompletionGate{}, false, nil
+}
+
+func loadTaskGuardState(paths adapter.Paths, taskID string) (verify.GuardState, bool, error) {
+	for _, path := range []string{paths.GuardStateTaskPath(taskID), paths.GuardStatePath} {
+		var guard verify.GuardState
+		ok, err := state.LoadJSONIfExists(path, &guard)
+		if err != nil {
+			return verify.GuardState{}, false, err
+		}
+		if ok && guard.TaskID == taskID {
+			return guard, true, nil
+		}
+	}
+	return verify.GuardState{}, false, nil
+}
+
+func loadRequestIndex(path string) (runtime.RequestIndex, bool, error) {
+	var index runtime.RequestIndex
+	ok, err := state.LoadJSONIfExists(path, &index)
+	if err != nil {
+		return runtime.RequestIndex{}, false, err
+	}
+	if index.RequestsByID == nil {
+		index.RequestsByID = map[string]runtime.RequestRecord{}
+	}
+	if index.LatestRequestByTaskID == nil {
+		index.LatestRequestByTaskID = map[string]string{}
+	}
+	return index, ok, nil
 }
 
 func remainingExecutionSlices(tasks []orchestration.ExecutionTask, progress *orchestration.PacketProgress) []string {

@@ -24,6 +24,7 @@ type BurstRequest struct {
 	WorkerID       string
 	Cwd            string
 	Command        string
+	CommandBanner  string
 	PromptPath     string
 	Budget         dispatch.Budget
 	CheckpointPath string
@@ -49,6 +50,7 @@ type Result struct {
 	Artifacts     []string       `json:"artifacts"`
 	SessionName   string         `json:"sessionName,omitempty"`
 	LogPath       string         `json:"logPath,omitempty"`
+	CommandBanner string         `json:"commandBanner,omitempty"`
 }
 
 func RunBoundedBurst(request BurstRequest) (Result, error) {
@@ -82,6 +84,7 @@ func RunBoundedBurst(request BurstRequest) (Result, error) {
 	}
 	result.SessionName = request.SessionName
 	result.LogPath = request.LogPath
+	result.CommandBanner = strings.TrimSpace(request.CommandBanner)
 	if err := writeTmuxSummary(request.Root, SessionState{
 		SessionName:   request.SessionName,
 		TaskID:        request.TaskID,
@@ -106,19 +109,21 @@ func RunBoundedBurst(request BurstRequest) (Result, error) {
 		"workerId":      request.WorkerID,
 		"cwd":           request.Cwd,
 		"command":       request.Command,
+		"commandBanner": result.CommandBanner,
 		"promptPath":    request.PromptPath,
 		"sessionName":   request.SessionName,
 		"logPath":       request.LogPath,
 	}); err != nil {
 		return result, err
 	}
+	effectiveCommand := commandWithBanner(request.Command, result.CommandBanner)
 	maxMinutes := request.Budget.MaxMinutes
 	if maxMinutes <= 0 {
 		maxMinutes = 20
 	}
 	exitCodePath := filepath.Join(filepath.Dir(request.OutcomePath), "tmux-exit-code")
 	runnerPath := filepath.Join(filepath.Dir(request.OutcomePath), "tmux-run.sh")
-	if err := os.WriteFile(runnerPath, []byte(buildRunnerScript(request.Cwd, request.Command, request.PromptPath, exitCodePath)), 0o755); err != nil {
+	if err := os.WriteFile(runnerPath, []byte(buildRunnerScript(request.Cwd, effectiveCommand, request.PromptPath, exitCodePath)), 0o755); err != nil {
 		return result, err
 	}
 	if err := CreateDetachedSession(request.SessionName, request.Cwd); err != nil {
@@ -240,6 +245,14 @@ func writeJSON(path string, value any) error {
 
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
+
+func commandWithBanner(command, banner string) string {
+	banner = strings.TrimSpace(banner)
+	if banner == "" {
+		return command
+	}
+	return "printf '%s\\n' " + shellQuote(banner) + " && " + command
 }
 
 func buildRunnerScript(cwd, command, promptPath, exitCodePath string) string {

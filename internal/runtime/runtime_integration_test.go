@@ -3,7 +3,6 @@
 package runtime_test
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -20,7 +19,7 @@ import (
 	"klein-harness/internal/verify"
 )
 
-func TestIntegrationInitSubmitRunOnceCompletes(t *testing.T) {
+func TestIntegrationInitSubmitDaemonCycleCompletes(t *testing.T) {
 	env := newHarnessEnv(t)
 	writeFile(t, filepath.Join(env.root, "README.md"), "# demo\n")
 
@@ -78,6 +77,32 @@ func TestIntegrationBurstFailureEmitsReplan(t *testing.T) {
 	}
 	if task.PlanEpoch != 2 || len(task.PromptStages) == 0 || task.PromptStages[0] != "analysis" {
 		t.Fatalf("expected task to re-enter analysis loop, got %#v", task)
+	}
+}
+
+func TestIntegrationQueuedDuplicateSubmitReusesTask(t *testing.T) {
+	env := newHarnessEnv(t)
+
+	first := runHarness(t, env, "submit", env.root, "--goal", "Fix request binding drift")
+	second := runHarness(t, env, "submit", env.root, "--goal", "Fix request binding drift", "--context", "docs/binding.md")
+	if second.Task.TaskID != first.Task.TaskID {
+		t.Fatalf("expected duplicate queued submit to reuse task: first=%#v second=%#v", first, second)
+	}
+	if second.Request.BindingAction != "reused_existing_task" {
+		t.Fatalf("expected reused_existing_task binding, got %#v", second.Request)
+	}
+
+	pool, err := adapter.LoadTaskPool(env.root)
+	if err != nil {
+		t.Fatalf("load task pool: %v", err)
+	}
+	if len(pool.Tasks) != 1 {
+		t.Fatalf("expected only one queued task after duplicate submit, got %#v", pool.Tasks)
+	}
+
+	result := runHarnessDaemon(t, env)
+	if result.RuntimeStatus != "needs_replan" || result.Task.TaskID != first.Task.TaskID {
+		t.Fatalf("expected reused task to remain single-bound and move into replan, got %#v", result)
 	}
 }
 
@@ -191,12 +216,45 @@ func TestIntegrationControlStatusAttachAndArchive(t *testing.T) {
 	}
 }
 
+func TestIntegrationTaskScopedGatesRemainQueryableAcrossTasks(t *testing.T) {
+	env := newHarnessEnv(t)
+
+	first := runHarness(t, env, "submit", env.root, "--goal", "Implement first release slice")
+	firstRun := runHarnessDaemon(t, env)
+	if firstRun.RuntimeStatus != "completed" {
+		t.Fatalf("expected first task to complete, got %#v", firstRun)
+	}
+
+	second := runHarness(t, env, "submit", env.root, "--goal", "Implement second release slice")
+	secondRun := runHarnessDaemon(t, env)
+	if secondRun.RuntimeStatus != "completed" {
+		t.Fatalf("expected second task to complete, got %#v", secondRun)
+	}
+
+	for _, taskID := range []string{first.Task.TaskID, second.Task.TaskID} {
+		if _, err := os.Stat(filepath.Join(env.root, ".harness", "state", "completion-gate-"+taskID+".json")); err != nil {
+			t.Fatalf("expected task-scoped completion gate for %s: %v", taskID, err)
+		}
+		if _, err := os.Stat(filepath.Join(env.root, ".harness", "state", "guard-state-"+taskID+".json")); err != nil {
+			t.Fatalf("expected task-scoped guard state for %s: %v", taskID, err)
+		}
+	}
+
+	firstStatus := runTaskView(t, env, "control", env.root, "task", first.Task.TaskID, "status")
+	if firstStatus.Completion == nil || firstStatus.Completion.TaskID != first.Task.TaskID {
+		t.Fatalf("expected first task status to read its task-scoped completion gate, got %#v", firstStatus.Completion)
+	}
+	if firstStatus.Guard == nil || firstStatus.Guard.TaskID != first.Task.TaskID {
+		t.Fatalf("expected first task status to read its task-scoped guard state, got %#v", firstStatus.Guard)
+	}
+}
+
 func TestIntegrationControlAttachWhileRunningUsesTmuxSummary(t *testing.T) {
 	env := newHarnessEnv(t)
 	t.Setenv("FAKE_CODEX_SLEEP_SEC", "2")
 
 	runHarness(t, env, "submit", env.root, "--goal", "Implement a recommendation flow")
-	command, output := startHarnessDaemon(t, env)
+	resultCh := startHarnessDaemon(t, env)
 	waitFor(t, 5*time.Second, func() bool {
 		summary, err := tmux.LoadSummary(env.root)
 		if err != nil {
@@ -235,7 +293,7 @@ func TestIntegrationControlAttachWhileRunningUsesTmuxSummary(t *testing.T) {
 	if attach["attachCommand"] == "" || attach["sessionName"] == "" {
 		t.Fatalf("expected attach command while running, got %#v", attach)
 	}
-	result := waitHarnessDaemon(t, command, output)
+	result := waitHarnessDaemon(t, resultCh)
 	if result.RuntimeStatus != "completed" {
 		t.Fatalf("expected completed runtime after attach probe, got %#v", result)
 	}
@@ -332,6 +390,9 @@ type harnessEnv struct {
 }
 
 type submitResult struct {
+	Request struct {
+		BindingAction string `json:"bindingAction"`
+	} `json:"request"`
 	Task struct {
 		TaskID string `json:"taskId"`
 	} `json:"task"`
@@ -394,44 +455,39 @@ func runHarness(t *testing.T, env harnessEnv, args ...string) submitResult {
 
 func runHarnessDaemon(t *testing.T, env harnessEnv) runtime.RunResult {
 	t.Helper()
-	command := exec.Command(env.harnessBin, "daemon", "run-once", env.root, "--skip-git-repo-check")
-	command.Dir = env.repoRoot
-	command.Env = os.Environ()
-	output, err := command.CombinedOutput()
+	result, err := runtime.RunOnce(env.root, runtime.RunOptions{
+		SkipGitRepoCheck: true,
+	})
 	if err != nil {
-		t.Fatalf("run daemon: %v\n%s", err, output)
+		t.Fatalf("run daemon cycle: %v", err)
 	}
-	var decoded runtime.RunResult
-	if err := json.Unmarshal(output, &decoded); err != nil {
-		t.Fatalf("decode daemon output: %v\n%s", err, output)
-	}
-	return decoded
+	return result
 }
 
-func startHarnessDaemon(t *testing.T, env harnessEnv) (*exec.Cmd, *bytes.Buffer) {
-	t.Helper()
-	command := exec.Command(env.harnessBin, "daemon", "run-once", env.root, "--skip-git-repo-check")
-	command.Dir = env.repoRoot
-	command.Env = os.Environ()
-	output := &bytes.Buffer{}
-	command.Stdout = output
-	command.Stderr = output
-	if err := command.Start(); err != nil {
-		t.Fatalf("start daemon: %v", err)
-	}
-	return command, output
+type daemonAsyncResult struct {
+	result runtime.RunResult
+	err    error
 }
 
-func waitHarnessDaemon(t *testing.T, command *exec.Cmd, output *bytes.Buffer) runtime.RunResult {
+func startHarnessDaemon(t *testing.T, env harnessEnv) <-chan daemonAsyncResult {
 	t.Helper()
-	if err := command.Wait(); err != nil {
-		t.Fatalf("wait daemon: %v\n%s", err, output.String())
+	results := make(chan daemonAsyncResult, 1)
+	go func() {
+		result, err := runtime.RunOnce(env.root, runtime.RunOptions{
+			SkipGitRepoCheck: true,
+		})
+		results <- daemonAsyncResult{result: result, err: err}
+	}()
+	return results
+}
+
+func waitHarnessDaemon(t *testing.T, results <-chan daemonAsyncResult) runtime.RunResult {
+	t.Helper()
+	result := <-results
+	if result.err != nil {
+		t.Fatalf("wait daemon cycle: %v", result.err)
 	}
-	var decoded runtime.RunResult
-	if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
-		t.Fatalf("decode daemon output: %v\n%s", err, output.String())
-	}
-	return decoded
+	return result.result
 }
 
 func runTaskView(t *testing.T, env harnessEnv, args ...string) query.TaskView {
@@ -721,17 +777,17 @@ fi
 case "$mode" in
   success)
     cat > "$verify_result" <<EOF
-{"status":"passed","summary":"verification passed","results":[{"name":"smoke","status":"passed"}]}
+{"status":"passed","summary":"verification passed","results":[{"name":"verify","status":"passed"}]}
 EOF
     ;;
   blocked)
     cat > "$verify_result" <<EOF
-{"status":"blocked","summary":"waiting on evidence","results":[{"name":"smoke","status":"blocked"}]}
+{"status":"blocked","summary":"waiting on evidence","results":[{"name":"verify","status":"blocked"}]}
 EOF
     ;;
   review-ok)
     cat > "$verify_result" <<EOF
-{"status":"passed","summary":"verification passed","results":[{"name":"smoke","status":"passed"}],"reviewEvidence":[{"summary":"looks good"}]}
+{"status":"passed","summary":"verification passed","results":[{"name":"verify","status":"passed"}],"reviewEvidence":[{"summary":"looks good"}]}
 EOF
     ;;
   no-evidence)

@@ -9,7 +9,6 @@ Current canonical CLI:
 - `harness tasks`
 - `harness task`
 - `harness control`
-- `harness daemon run-once`
 - `harness daemon loop`
 
 Compatibility wrappers still exist:

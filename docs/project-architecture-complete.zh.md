@@ -84,7 +84,7 @@ flowchart TD
 | `cmd/` | CLI 入口。`cmd/harness` 是 canonical；`cmd/kh-*` 是兼容入口。 |
 | `internal/` | 运行时核心实现，包含任务模型、路由、派发、租约、执行、验证、查询与控制。 |
 | `prompts/spec/` | 运行时内置的 orchestration prompt 资产，用于 packet-synthesis、worker-spec、verify 等规范化输出。 |
-| `scripts/` | 兼容 shell 包装层与 smoke 脚本。 |
+| `scripts/` | 兼容 shell 包装层。 |
 | `skills/` | 安装到 `$CODEX_HOME/skills` 的配套技能，不是 runtime 主逻辑。 |
 | `docs/` | 架构、设计、迁移与运行说明文档。 |
 | `test/` | demo、真实链路样例和 prompt/test 资产。 |
@@ -120,7 +120,7 @@ flowchart TD
 | `internal/query` | 读模型层 | 聚合 task、dispatch、lease、tmux、planning、completion gate 等视图。 |
 | `internal/rca` | RCA 分类层 | 将失败分配到 verification_guardrail、routing_session 等 taxonomy。 |
 | `internal/route` | 路由判断层 | 判断 dispatch / resume / replan / block。 |
-| `internal/runtime` | 核心运行时 | submit、daemon run-once、状态推进、session 绑定、analysis loop。 |
+| `internal/runtime` | 核心运行时 | submit、daemon loop、状态推进、session 绑定、analysis loop。 |
 | `internal/state` | CAS 快照层 | 给状态文件提供 revision、metadata 和 compare-and-swap 写入。 |
 | `internal/tmux` | 执行承载层 | 创建 tmux session、管道日志、等待退出、汇总会话状态。 |
 | `internal/verify` | 验证与 closeout 层 | ingest verify、completion gate、guard state、feedback summary、closeout hook。 |
@@ -151,7 +151,7 @@ sequenceDiagram
     CLI->>RT: Submit
     RT->>S: 写 queue.jsonl + task-pool.json + intake/runtime summaries
 
-    U->>CLI: harness daemon run-once
+    U->>CLI: harness daemon loop
     CLI->>RT: RunOnce
     RT->>R: Evaluate(route input)
     alt 不可执行
@@ -210,7 +210,7 @@ sequenceDiagram
 
 #### 阶段 C：挑选可运行任务
 
-入口：`harness daemon run-once`
+入口：`harness daemon loop`
 
 由 `internal/runtime.nextRunnableTask` 和 `RunOnce` 驱动：
 
@@ -433,7 +433,7 @@ derived 状态负责“查询可读性”和“门禁视图”，例如：
 职责：
 
 - 定义 request、thread、runtime、verification、tmux 等运行时模型
-- 负责 submit、run-once、loop、task 状态推进
+- 负责 submit、loop、task 状态推进
 - 负责 intake 分类、thread 融合、plan epoch 管理
 - 负责会话绑定与 analysis loop 切换
 - 负责控制动作：restart、stop、archive
@@ -766,7 +766,7 @@ go test -tags=integration ./...
 
 集成测试验证的真实行为包括：
 
-- init -> submit -> run-once -> completed 的主链路
+- init -> submit -> loop -> completed 的主链路
 - burst failure -> `needs_replan`
 - resume session 流程
 - attach/status/archive 控制动作
@@ -774,16 +774,15 @@ go test -tags=integration ./...
 - 缺失 verify artifact 时的 hookified replan
 - 兼容 wrapper 转发到 Go CLI
 
-### 11.3 真实 smoke
+### 11.3 真实使用验证
 
-命令：
+不再维护 smoke 脚本。
 
-```bash
-KLEIN_REAL_SMOKE=1 bash scripts/smoke/runtime-smoke.sh
-KLEIN_REAL_SMOKE=1 bash scripts/smoke/tmux-codex-smoke.sh
-```
+仓库约定是：
 
-仓库约定优先真实环境验证，fake/mock 主要用于 integration 测试。
+- 覆盖测试继续保留，用于回归与结构性验证
+- fake/mock 只作为 integration 覆盖手段，不作为上线判断依据
+- 真正用于推进系统迭代的反馈，来自实际 repo、实际 harness 任务、实际 tmux / verify / dashboard 结果
 
 ## 12. 当前架构的几个关键特点
 
@@ -869,4 +868,3 @@ KLEIN_REAL_SMOKE=1 bash scripts/smoke/tmux-codex-smoke.sh
 - `.harness/` 是唯一 repo-local source of truth
 - worker 只能执行，不拥有 runtime 主状态
 - completion 必须由 verify gate 判定，而不是由执行器自报
-

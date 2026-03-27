@@ -10,6 +10,7 @@ Focus:
 - extension points
 - owned path boundaries
 - smallest coherent change surface
+- freeze task-group shared context before worker dispatch
 
 Output format:
 - return exactly one JSON object
@@ -72,8 +73,13 @@ Field rules:
 - `packetCandidate` must follow `packet.md`
 - every item in `workerSpecCandidates` must follow `worker-spec.md`
 - keep `selectedPlan`, `executionTasks`, and `workerSpecCandidates` aligned
+- use `packetCandidate.sharedContext` to freeze task-group decisions that should not be rediscovered by each worker
+- `sharedContext.entitySelection` should decide the subject roster or roster-selection rule
+- `sharedContext.contentContract` should decide file shape, fields, length floor, output directory, and naming rules
+- `sharedContext.sourcePlan` should decide where evidence should come from before worker dispatch
 - fill planner-relevant arrays; leave non-relevant arrays empty instead of renaming keys
 
 Hard rule:
 - prefer minimal integration over new framework layers
+- if the task is a corpus-style request (for example 10 or 1000 scientists), freeze the shared roster / format / source policy here instead of pushing that burden to the worker
 - stop at orchestration output; do not drift into implementation steps beyond bounded task design

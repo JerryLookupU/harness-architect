@@ -84,7 +84,7 @@ func updateCompletionState(
 		return CompletionGate{}, err
 	}
 	var existingGate CompletionGate
-	if _, err := state.LoadJSONIfExists(paths.CompletionGatePath, &existingGate); err != nil {
+	if _, err := state.LoadJSONIfExists(paths.CompletionGateTaskPath(gate.TaskID), &existingGate); err != nil {
 		return CompletionGate{}, err
 	}
 	if existingGate.Retired {
@@ -92,16 +92,30 @@ func updateCompletionState(
 		gate.Status = "retired"
 		gate.RetireEligible = false
 	}
-	if _, err := state.WriteSnapshot(paths.CompletionGatePath, &gate, "kh-orchestrator", existingGate.Revision); err != nil {
+	if _, err := state.WriteSnapshot(paths.CompletionGateTaskPath(gate.TaskID), &gate, "kh-orchestrator", existingGate.Revision); err != nil {
+		return CompletionGate{}, err
+	}
+	var aliasGate CompletionGate
+	if _, err := state.LoadJSONIfExists(paths.CompletionGatePath, &aliasGate); err != nil {
+		return CompletionGate{}, err
+	}
+	if _, err := state.WriteSnapshot(paths.CompletionGatePath, &gate, "kh-orchestrator", aliasGate.Revision); err != nil {
 		return CompletionGate{}, err
 	}
 
 	guard := buildGuardState(gate)
 	var existingGuard GuardState
-	if _, err := state.LoadJSONIfExists(paths.GuardStatePath, &existingGuard); err != nil {
+	if _, err := state.LoadJSONIfExists(paths.GuardStateTaskPath(gate.TaskID), &existingGuard); err != nil {
 		return CompletionGate{}, err
 	}
-	if _, err := state.WriteSnapshot(paths.GuardStatePath, &guard, "kh-orchestrator", existingGuard.Revision); err != nil {
+	if _, err := state.WriteSnapshot(paths.GuardStateTaskPath(gate.TaskID), &guard, "kh-orchestrator", existingGuard.Revision); err != nil {
+		return CompletionGate{}, err
+	}
+	var aliasGuard GuardState
+	if _, err := state.LoadJSONIfExists(paths.GuardStatePath, &aliasGuard); err != nil {
+		return CompletionGate{}, err
+	}
+	if _, err := state.WriteSnapshot(paths.GuardStatePath, &guard, "kh-orchestrator", aliasGuard.Revision); err != nil {
 		return CompletionGate{}, err
 	}
 	return gate, nil

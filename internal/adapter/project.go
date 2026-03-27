@@ -25,6 +25,9 @@ type Paths struct {
 	VerificationSummaryPath   string
 	ReleaseSnapshotPath       string
 	TmuxSummaryPath           string
+	RequestSummaryPath        string
+	RequestIndexPath          string
+	RequestTaskMapPath        string
 	CompletionGatePath        string
 	GuardStatePath            string
 	TaskPoolPath              string
@@ -190,6 +193,9 @@ func Resolve(root string) (Paths, error) {
 		VerificationSummaryPath:   filepath.Join(stateDir, "verification-summary.json"),
 		ReleaseSnapshotPath:       filepath.Join(stateDir, "release-snapshot.json"),
 		TmuxSummaryPath:           filepath.Join(stateDir, "tmux-summary.json"),
+		RequestSummaryPath:        filepath.Join(stateDir, "request-summary.json"),
+		RequestIndexPath:          filepath.Join(stateDir, "request-index.json"),
+		RequestTaskMapPath:        filepath.Join(stateDir, "request-task-map.json"),
 		CompletionGatePath:        filepath.Join(stateDir, "completion-gate.json"),
 		GuardStatePath:            filepath.Join(stateDir, "guard-state.json"),
 		TaskPoolPath:              filepath.Join(harnessDir, "task-pool.json"),
@@ -320,6 +326,7 @@ func LoadLatestPlanEpoch(root string, task Task) (int, error) {
 		Threads map[string]struct {
 			LatestValidPlanEpoch int `json:"latestValidPlanEpoch"`
 			CurrentPlanEpoch     int `json:"currentPlanEpoch"`
+			PlanEpoch            int `json:"planEpoch"`
 		} `json:"threads"`
 	}
 	if err := loadJSON(paths.ThreadStatePath, &payload); err != nil {
@@ -335,7 +342,18 @@ func LoadLatestPlanEpoch(root string, task Task) (int, error) {
 	if thread.CurrentPlanEpoch > 0 {
 		return thread.CurrentPlanEpoch, nil
 	}
+	if thread.PlanEpoch > 0 {
+		return thread.PlanEpoch, nil
+	}
 	return task.PlanEpoch, nil
+}
+
+func (paths Paths) CompletionGateTaskPath(taskID string) string {
+	return filepath.Join(paths.StateDir, "completion-gate-"+taskID+".json")
+}
+
+func (paths Paths) GuardStateTaskPath(taskID string) string {
+	return filepath.Join(paths.StateDir, "guard-state-"+taskID+".json")
 }
 
 func LoadCheckpointFresh(root, taskID string) (bool, error) {

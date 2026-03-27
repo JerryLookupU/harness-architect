@@ -407,7 +407,7 @@ completion gate 是 runtime judge。
 ### 回归验证
 
 - 现有 `harness submit`
-- `harness daemon run-once`
+- `harness daemon loop`
 - `harness task`
 - `harness control task ...`
 

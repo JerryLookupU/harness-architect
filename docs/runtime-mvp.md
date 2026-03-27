@@ -15,7 +15,6 @@ Klein MVP is a repo-local runtime with one canonical control plane:
 - `harness tasks`
 - `harness task`
 - `harness control`
-- `harness daemon run-once`
 - `harness daemon loop`
 
 ## State Files

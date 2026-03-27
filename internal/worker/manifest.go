@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"klein-harness/internal/adapter"
 	"klein-harness/internal/dispatch"
 	"klein-harness/internal/orchestration"
+	"klein-harness/internal/state"
 	"klein-harness/internal/verify"
 )
 
@@ -28,6 +30,29 @@ type verificationRule struct {
 	ReadOnlySafe bool   `json:"readOnlySafe"`
 }
 
+type executionTaskSpec struct {
+	Title                string
+	Summary              string
+	TaskGroupID          string
+	BatchLabel           string
+	EntityBatch          []string
+	OutputTargets        []string
+	SharedContextSummary string
+	InScope              []string
+	DoneCriteria         []string
+}
+
+type corpusPlanningInfo struct {
+	OutputDir        string
+	SubjectLabel     string
+	SubjectCount     int
+	MinChars         int
+	FileExtension    string
+	IndexFile        string
+	RequiredSections []string
+	RequiresIndex    bool
+}
+
 type DispatchBundle struct {
 	TicketPath         string
 	WorkerSpecPath     string
@@ -36,6 +61,7 @@ type DispatchBundle struct {
 	AcceptedPacketPath string
 	TaskContractPath   string
 	ArtifactDir        string
+	CommandBanner      string
 }
 
 func Prepare(root string, ticket dispatch.Ticket, leaseID string) (DispatchBundle, error) {
@@ -83,6 +109,7 @@ func Prepare(root string, ticket dispatch.Ticket, leaseID string) (DispatchBundl
 	workerSpecPath := filepath.Join(artifactDir, "worker-spec.json")
 	acceptedPacketPath := orchestration.AcceptedPacketPath(paths.Root, task.TaskID)
 	taskContractPath := orchestration.TaskContractPath(artifactDir)
+	sharedContextPath := filepath.Join(artifactDir, "shared-context.json")
 	promptPath := filepath.Join(paths.StateDir, fmt.Sprintf("runner-prompt-%s.md", task.TaskID))
 	planningTracePath := filepath.Join(paths.StateDir, fmt.Sprintf("planning-trace-%s.md", task.TaskID))
 	repoRole := projectMeta.RepoRole
@@ -151,17 +178,42 @@ func Prepare(root string, ticket dispatch.Ticket, leaseID string) (DispatchBundl
 		},
 	}
 	acceptedPacket := buildAcceptedPacket(task, ticket, judgeDecision, hookPlan, verifyCommands)
-	if err := orchestration.WriteAcceptedPacket(acceptedPacketPath, acceptedPacket); err != nil {
+	if acceptedPacket.SharedContext != nil {
+		if err := writeJSON(sharedContextPath, acceptedPacket.SharedContext); err != nil {
+			return DispatchBundle{}, err
+		}
+	}
+	plannerCandidates := buildPlannerCandidates(task, ticket, packetSynthesis, judgeDecision, acceptedPacket, hookPlan, verifyCommands)
+	acceptedPacketRevision, err := state.CurrentRevision(acceptedPacketPath)
+	if err != nil {
+		return DispatchBundle{}, err
+	}
+	if err := orchestration.WriteAcceptedPacketCAS(acceptedPacketPath, acceptedPacket, acceptedPacketRevision); err != nil {
 		return DispatchBundle{}, err
 	}
 	taskContract := buildTaskContract(paths.Root, task, ticket, acceptedPacket, hookPlan, acceptedPacketPath)
-	if err := orchestration.WriteTaskContract(taskContractPath, taskContract); err != nil {
+	taskContractRevision, err := state.CurrentRevision(taskContractPath)
+	if err != nil {
+		return DispatchBundle{}, err
+	}
+	if err := orchestration.WriteTaskContractCAS(taskContractPath, taskContract, taskContractRevision); err != nil {
 		return DispatchBundle{}, err
 	}
 	workerSpec["acceptedPacketId"] = acceptedPacket.PacketID
 	workerSpec["contractId"] = taskContract.ContractID
 	workerSpec["executionSliceId"] = taskContract.ExecutionSliceID
 	workerSpec["sliceInScope"] = taskContract.InScope
+	workerSpec["sharedContextPath"] = sharedContextPath
+	workerSpec["sharedContext"] = acceptedPacket.SharedContext
+	if selectedTask := selectedExecutionTaskByID(acceptedPacket.ExecutionTasks, taskContract.ExecutionSliceID); selectedTask != nil {
+		workerSpec["taskGroupId"] = selectedTask.TaskGroupID
+		workerSpec["batchLabel"] = selectedTask.BatchLabel
+		workerSpec["entityBatch"] = selectedTask.EntityBatch
+		workerSpec["outputTargets"] = selectedTask.OutputTargets
+	}
+	commandBanner := tmuxCommandBanner(task, acceptedPacket.ExecutionTasks, taskContract)
+	workerSpec["tmuxCommandBanner"] = commandBanner
+	workerSpec["tmuxCommandProtocol"] = "[harness:<task-id>] <node-task-description>"
 	if err := writeJSON(workerSpecPath, workerSpec); err != nil {
 		return DispatchBundle{}, err
 	}
@@ -217,12 +269,17 @@ func Prepare(root string, ticket dispatch.Ticket, leaseID string) (DispatchBundl
 		"planningTracePath":       planningTracePath,
 		"acceptedPacketPath":      acceptedPacketPath,
 		"taskContractPath":        taskContractPath,
+		"sharedContextPath":       sharedContextPath,
 		"executionSliceId":        taskContract.ExecutionSliceID,
 		"workerSpecPath":          workerSpecPath,
 		"workerSpec":              workerSpec,
+		"tmuxCommandBanner":       commandBanner,
+		"tmuxCommandProtocol":     "[harness:<task-id>] <node-task-description>",
 		"acceptedPacket":          acceptedPacket,
+		"sharedContext":           acceptedPacket.SharedContext,
 		"taskContract":            taskContract,
 		"artifacts": map[string]string{
+			"sharedContext":  sharedContextPath,
 			"acceptedPacket": acceptedPacketPath,
 			"taskContract":   taskContractPath,
 			"workerSpec":     workerSpecPath,
@@ -241,15 +298,16 @@ func Prepare(root string, ticket dispatch.Ticket, leaseID string) (DispatchBundl
 			"ruleIds":  unique(task.VerificationRuleIDs),
 			"commands": verifyCommands,
 		},
-		"validationHooks":  hookPlan.Hooks,
-		"learningHints":    hookPlan.LearningHints,
-		"outerLoopMemory":  taskFeedback,
-		"constraintPath":   constraintPath,
-		"methodology":      methodology,
-		"judgeDecision":    judgeDecision,
-		"executionLoop":    executionLoop,
-		"constraintSystem": constraintSystem,
-		"packetSynthesis":  packetSynthesis,
+		"validationHooks":   hookPlan.Hooks,
+		"learningHints":     hookPlan.LearningHints,
+		"outerLoopMemory":   taskFeedback,
+		"constraintPath":    constraintPath,
+		"methodology":       methodology,
+		"judgeDecision":     judgeDecision,
+		"executionLoop":     executionLoop,
+		"constraintSystem":  constraintSystem,
+		"packetSynthesis":   packetSynthesis,
+		"plannerCandidates": plannerCandidates,
 		"runtimeRefs": mergeStringMaps(
 			map[string]string{
 				"promptRef":       ticket.PromptRef,
@@ -272,7 +330,7 @@ func Prepare(root string, ticket dispatch.Ticket, leaseID string) (DispatchBundl
 		copy := taskFeedback
 		taskFeedbackPtr = &copy
 	}
-	prompt := buildPrompt(ticketPath, workerSpecPath, acceptedPacketPath, taskContractPath, taskContract.ExecutionSliceID, planningTracePath, constraintPath, artifactDir, filepath.Join(paths.StateDir, "feedback-summary.json"), task, ticket, packetSynthesis, executionLoop, hookPlan, taskFeedbackPtr, constraintSystem)
+	prompt := buildPrompt(ticketPath, workerSpecPath, sharedContextPath, acceptedPacketPath, taskContractPath, taskContract.ExecutionSliceID, planningTracePath, constraintPath, artifactDir, filepath.Join(paths.StateDir, "feedback-summary.json"), task, ticket, packetSynthesis, executionLoop, hookPlan, taskFeedbackPtr, constraintSystem, acceptedPacket.SharedContext, selectedExecutionTaskByID(acceptedPacket.ExecutionTasks, taskContract.ExecutionSliceID))
 	if err := os.WriteFile(promptPath, []byte(prompt), 0o644); err != nil {
 		return DispatchBundle{}, err
 	}
@@ -284,6 +342,7 @@ func Prepare(root string, ticket dispatch.Ticket, leaseID string) (DispatchBundl
 		AcceptedPacketPath: acceptedPacketPath,
 		TaskContractPath:   taskContractPath,
 		ArtifactDir:        artifactDir,
+		CommandBanner:      commandBanner,
 	}, nil
 }
 
@@ -325,76 +384,90 @@ func verificationCommands(path string, ruleIDs []string) ([]map[string]any, erro
 	return commands, nil
 }
 
-func buildPrompt(ticketPath, workerSpecPath, acceptedPacketPath, taskContractPath, executionSliceID, planningTracePath, constraintPath, artifactDir, feedbackSummaryPath string, task adapter.Task, ticket dispatch.Ticket, packetSynthesis orchestration.PacketSynthesisLoop, executionLoop orchestration.ExecutionLoopContract, hookPlan verify.HookPlan, taskFeedback *verify.TaskFeedbackSummary, constraintSystem orchestration.ConstraintSystem) string {
+func buildPrompt(ticketPath, workerSpecPath, sharedContextPath, acceptedPacketPath, taskContractPath, executionSliceID, planningTracePath, constraintPath, artifactDir, feedbackSummaryPath string, task adapter.Task, ticket dispatch.Ticket, packetSynthesis orchestration.PacketSynthesisLoop, executionLoop orchestration.ExecutionLoopContract, hookPlan verify.HookPlan, taskFeedback *verify.TaskFeedbackSummary, constraintSystem orchestration.ConstraintSystem, sharedContext *orchestration.SharedTaskGroupContext, selectedTask *orchestration.ExecutionTask) string {
 	routePolicyTags := policyTags(ticket.ReasonCodes)
 	lines := []string{
 		"You are the Klein worker for exactly one bound task inside a repo-local closed-loop runtime.",
 		"",
-		"Codex skill contract for this dispatch:",
+		"Dispatch summary:",
+		fmt.Sprintf("- taskId: %s", task.TaskID),
+		fmt.Sprintf("- executionSliceId: %s", executionSliceID),
+		fmt.Sprintf("- title: %s", task.Title),
+		fmt.Sprintf("- objective: %s", coalesce(task.Summary, task.Title)),
 		fmt.Sprintf("- activeSkills: %s", strings.Join(executionLoop.ActiveSkills, ", ")),
-		fmt.Sprintf("- executionLoopSkill: %s", executionLoop.SkillPath),
-		"- skills are entry guidance for Codex; dispatch ticket, worker-spec, task contract, and runtime rules remain authoritative.",
+		fmt.Sprintf("- orchestrationMode: metadata-backed B3Ehive (%d planners + 1 judge)", packetSynthesis.PlannerCount),
+		"- skills are entry guidance for Codex; runtime-owned files inside .harness remain authoritative.",
 		"",
 		"Required reads before execution:",
-		fmt.Sprintf("1. Read the immutable dispatch ticket first: %s", ticketPath),
+		fmt.Sprintf("1. Read the immutable dispatch ticket: %s", ticketPath),
 		fmt.Sprintf("2. Read the task-local worker spec: %s", workerSpecPath),
-		fmt.Sprintf("3. Read the accepted packet truth for this epoch: %s", acceptedPacketPath),
+		fmt.Sprintf("3. Read the shared task-group context: %s", sharedContextPath),
 		fmt.Sprintf("4. Read the current dispatch task contract: %s", taskContractPath),
-		fmt.Sprintf("5. Read the planning trace for the visible B3Ehive packet-synthesis contract: %s", planningTracePath),
-		fmt.Sprintf("6. Read the shared constraint snapshot for this task: %s", constraintPath),
-		"7. If task-local artifacts already exist, read worker-result.json, verify.json, handoff.md, and referenced compact handoff logs.",
-		"8. If feedback-summary exists and this task has recent failures, read only the current task's recent 3 high-severity failures before re-execution.",
-		"9. After those reads, move to execution in owned paths. Do not keep expanding into prompt docs unless blocked on artifact format or verification wording.",
+		"5. If task-local artifacts already exist, read worker-result.json, verify.json, handoff.md, and referenced compact handoff logs.",
+		"6. If feedback-summary exists and this task has recent failures, read only the current task's recent 3 high-severity failures before re-execution.",
+		"7. After those reads, move to execution. Do not reopen planner/judge work unless the dispatch files contradict each other.",
 		"",
-		"Codex skill-specific read order overrides:",
-		"- If activeSkills includes harness-log-search-cskill, prefer .harness/state/current.json, runtime.json, request-summary.json, lineage-index.json, log-index.json, and compact handoff logs before raw runner logs.",
-		"- If activeSkills includes klein-harness, inspect control plane first, then execution plane, then operator plane before changing harness-oriented surfaces.",
-		"- If activeSkills includes qiushi-execution, treat investigate -> execute -> verify -> closeout as a hard working rhythm rather than a prose suggestion.",
+		"Worker contract:",
+		"- Use shared task-group context for roster, file schema, source policy, and other common background.",
+		"- Use this dispatch slice for the current batch or milestone only.",
+		"- Keep the tmux node label aligned with the current slice via `[harness:<task-id>] <node-task-description>`.",
+		"- Do not rediscover the full roster or rewrite the common prompt if shared context already defines it.",
 		"",
 		"Hard authority rules:",
 		"- Never create or mutate thread keys, request ids, task ids, plan epochs, leases, or global `.harness/state/*` ledgers.",
 		"- Never edit files outside the bound worktree.",
 		"- Never edit paths outside `allowedWriteGlobs`.",
-		"- Never edit `blockedWriteGlobs`.",
-		"- Never write task-local outputs outside `artifactDir`.",
-		"- Never merge, rebase, push, archive, delete branches, or delete worktrees.",
-		"- Never decide that the loop is complete. You may only decide the terminal outcome of this worker run.",
+		"- Never edit `blockedWriteGlobs` or move closeout artifacts outside `artifactDir`.",
+		"- Never merge, rebase, push, archive, delete branches, or decide global completion.",
 		"",
 		"Execution defaults:",
-		"- Fix root causes, not symptoms.",
-		"- Keep changes minimal, focused, and consistent with the existing codebase.",
-		"- Read a file before editing it.",
+		"- Keep work bounded to the current slice and its outputs.",
 		"- Before each meaningful tool/action group, briefly state your immediate intent.",
-		"- Treat the three required reads above as enough context for the normal case.",
-		"- Use the planning trace as context, not as a request to run a second planning pass.",
-		"- Do not skip directly from the request text to edits before reading the required inputs.",
-		"- The outer runtime already owns submit -> route -> dispatch. Do not recreate planning or orchestration inside this task unless the ticket is internally inconsistent.",
+		"- Prefer acting from shared context over re-reading every orchestration prompt file.",
+		"- If shared context is missing a required planning decision, stop and report planning drift instead of freelancing.",
 		"",
-		"Visible orchestration layer for this dispatch:",
-		fmt.Sprintf("- packetSynthesisMode: metadata-backed B3Ehive (%d planners + 1 judge)", packetSynthesis.PlannerCount),
-		"- observableRuntimeBehavior: one dispatch ticket + one worker execution; planner/judge roles are persisted as planning metadata for now",
+		"Current slice payload:",
 	}
-	for _, planner := range packetSynthesis.Planners {
-		lines = append(lines, fmt.Sprintf("- planner: %s | %s | %s", planner.ID, planner.Name, planner.Focus))
+	if selectedTask != nil {
+		lines = append(lines, fmt.Sprintf("- taskTitle: %s", selectedTask.Title))
+		lines = append(lines, fmt.Sprintf("- taskSummary: %s", selectedTask.Summary))
+		if selectedTask.BatchLabel != "" {
+			lines = append(lines, fmt.Sprintf("- batchLabel: %s", selectedTask.BatchLabel))
+		}
+		if len(selectedTask.EntityBatch) > 0 {
+			lines = append(lines, fmt.Sprintf("- entityBatch: %s", strings.Join(selectedTask.EntityBatch, ", ")))
+		}
+		if len(selectedTask.OutputTargets) > 0 {
+			lines = append(lines, fmt.Sprintf("- outputTargets: %s", strings.Join(selectedTask.OutputTargets, ", ")))
+		}
 	}
-	lines = append(lines,
-		fmt.Sprintf("- judge: %s | %s | %s", packetSynthesis.Judge.ID, packetSynthesis.Judge.Name, packetSynthesis.Judge.Focus),
-		fmt.Sprintf("- planningTracePath: %s", planningTracePath),
-		"",
-		"Visible execution / validation loop for this dispatch:",
-		"- executionLoopMode: qiushi execution / validation loop",
-		fmt.Sprintf("- executionLoopSkill: %s", filepath.Join("skills", "qiushi-execution", "SKILL.md")),
-		fmt.Sprintf("- activeSkills: %s", strings.Join(executionLoop.ActiveSkills, ", ")),
-		fmt.Sprintf("- skillHints: %s", strings.Join(executionLoop.SkillHints, " | ")),
-		"- executionLoopPhases: investigate -> execute -> verify -> closeout -> analysis -> re-execute",
-		"- executionLoopRule: if verify or closeout fails, return to analysis instead of faking completion",
-		fmt.Sprintf("- sharedConstraintPath: %s", constraintPath),
-		fmt.Sprintf("- selectedExecutionSliceId: %s", executionSliceID),
-		"",
-	)
+	if sharedContext != nil {
+		lines = append(lines, "")
+		lines = append(lines, "Shared task-group context:")
+		if sharedContext.Summary != "" {
+			lines = append(lines, fmt.Sprintf("- summary: %s", sharedContext.Summary))
+		}
+		if sharedContext.EntitySelection.SubjectLabel != "" || sharedContext.EntitySelection.TargetCount > 0 {
+			lines = append(lines, fmt.Sprintf("- entitySelection: %s", summarizeEntitySelection(sharedContext.EntitySelection)))
+		}
+		if sharedContext.ContentContract.OutputDir != "" {
+			lines = append(lines, fmt.Sprintf("- outputDir: %s", sharedContext.ContentContract.OutputDir))
+		}
+		if len(sharedContext.ContentContract.RequiredSections) > 0 {
+			lines = append(lines, fmt.Sprintf("- requiredSections: %s", strings.Join(sharedContext.ContentContract.RequiredSections, ", ")))
+		}
+		if sharedContext.ContentContract.MinChars > 0 {
+			lines = append(lines, fmt.Sprintf("- minChars: %d", sharedContext.ContentContract.MinChars))
+		}
+		if len(sharedContext.SourcePlan.PreferredSourceTypes) > 0 {
+			lines = append(lines, fmt.Sprintf("- preferredSources: %s", strings.Join(sharedContext.SourcePlan.PreferredSourceTypes, ", ")))
+		}
+		lines = append(lines, "- sharedContextPath is the first place to look for roster / format / source rules.")
+		lines = append(lines, "")
+	}
 	if taskFeedback != nil && len(taskFeedback.RecentFailures) > 0 {
 		lines = append(lines,
-			"Outer-loop memory from verify/error sidecar:",
+			"Recent failure memory:",
 			fmt.Sprintf("- feedbackSummaryPath: %s", feedbackSummaryPath),
 			fmt.Sprintf("- latestFailureType: %s", taskFeedback.LatestFeedbackType),
 			fmt.Sprintf("- latestFailureMessage: %s", taskFeedback.LatestMessage),
@@ -417,7 +490,15 @@ func buildPrompt(ticketPath, workerSpecPath, acceptedPacketPath, taskContractPat
 		}
 		lines = append(lines, "")
 	}
-	lines = append(lines, "Soft constraints appended after the base prompt:")
+	lines = append(lines,
+		"Verification and closeout:",
+		"- Treat investigate -> execute -> verify -> closeout as a hard rhythm.",
+		"- Record verify evidence with commands, file paths, or artifact refs.",
+		"- Before exit, write worker-result.json, verify.json, and handoff.md.",
+		"- If evidence is incomplete, stop with a blocked outcome instead of claiming success.",
+		"",
+		"Soft constraints appended after the base prompt:",
+	)
 	for _, rule := range constraintSystem.Rules {
 		if rule.Enforcement != "soft" {
 			continue
@@ -444,56 +525,19 @@ func buildPrompt(ticketPath, workerSpecPath, acceptedPacketPath, taskContractPat
 	lines = append(lines, "")
 	if len(routePolicyTags) > 0 {
 		lines = append(lines,
-			"Policy guardrails from route reasonCodes:",
+			"Route policy guardrails:",
 			fmt.Sprintf("- reasonCodes: %s", strings.Join(unique(ticket.ReasonCodes), ", ")),
 			fmt.Sprintf("- policyTags: %s", strings.Join(routePolicyTags, ", ")),
 		)
-		if contains(routePolicyTags, "policy_bug_rca_first") {
-			lines = append(lines,
-				"- Bug / failure flow: reproduce or capture concrete failure evidence before editing.",
-				"- Keep one active hypothesis at a time and test it with the smallest discriminating step.",
-				"- Do not apply or suggest quick fixes before the evidence supports a root cause.",
-				"- After confirmation, prefer one minimal change tied to the confirmed cause.",
-			)
-		}
-		if contains(routePolicyTags, "policy_options_before_plan") {
-			lines = append(lines,
-				"- Recommendation / compare flow: write 2 to 3 viable options with trade-offs first.",
-				"- Make one recommendation before expanding into blueprint or implementation work.",
-			)
-		}
-		if contains(routePolicyTags, "policy_resume_state_first") {
-			lines = append(lines,
-				"- Resume flow: read `AGENTS.md`, `.harness/state/current.json`, `.harness/state/runtime.json`, `.harness/state/request-summary.json`, `.harness/task-pool.json`, `.harness/session-registry.json`, and the relevant compact log before coding.",
-				"- If activeSkills includes harness-log-search-cskill, keep raw runner logs as detail fallback only; do not broad-scan transcripts by default.",
-				"- If active task state or prior handoff is unclear, stop and record that ambiguity instead of guessing.",
-			)
-		}
-		if contains(routePolicyTags, "policy_harness_state_first") {
-			lines = append(lines,
-				"- Harness state flow: inspect control plane first, then execution plane, then operator plane before editing harness-oriented files.",
-				"- Prefer stabilizing claim, handoff, task-pool, session, and operator surfaces before expanding implementation scope.",
-			)
-		}
-		if contains(routePolicyTags, "policy_log_compact_first") {
-			lines = append(lines,
-				"- Log retrieval flow: prefer hot state, log index, and compact handoff logs before raw runner logs.",
-				"- Return evidence windows or refs, not full transcripts, unless detail fallback is explicitly required.",
-			)
-		}
-		if contains(routePolicyTags, "policy_operator_surface_required") {
-			lines = append(lines,
-				"- Operator surface flow: ensure closeout records overview/watch/metrics-facing outputs when the request explicitly asks for unattended, dashboard, or status visibility.",
-			)
-		}
 		lines = append(lines, "")
 	}
 	lines = append(lines,
-		"On-demand references only when blocked on format:",
-		fmt.Sprintf("- methodologyGuide: %s", filepath.Join("prompts", "spec", "methodology.md")),
-		fmt.Sprintf("- applyWorkflow: %s", filepath.Join("prompts", "spec", "apply.md")),
-		fmt.Sprintf("- verifyWorkflow: %s", filepath.Join("prompts", "spec", "verify.md")),
-		fmt.Sprintf("- workerResultGuide: %s", filepath.Join("prompts", "spec", "worker-result.md")),
+		"On-demand runtime refs when blocked:",
+		fmt.Sprintf("- acceptedPacketPath: %s", acceptedPacketPath),
+		fmt.Sprintf("- planningTracePath: %s", planningTracePath),
+		fmt.Sprintf("- sharedConstraintPath: %s", constraintPath),
+		fmt.Sprintf("- artifactDir: %s", artifactDir),
+		fmt.Sprintf("- executionLoopSkill: %s", filepath.Join("skills", "qiushi-execution", "SKILL.md")),
 		"",
 		"Hookified verification flow:",
 	)
@@ -512,7 +556,7 @@ func buildPrompt(ticketPath, workerSpecPath, acceptedPacketPath, taskContractPat
 	lines = append(lines,
 		"",
 		"Verification:",
-		"- Run verify commands from the dispatch ticket in order.",
+		"- Run verify commands from the dispatch ticket or worker-spec in order.",
 		"- Start with the narrowest relevant validation, then broader checks when required.",
 		"- Record each command, exit code, and output path in verify.json.",
 		"- Write verify.json as a scorecard-oriented artifact with overallStatus, overallSummary, scorecard, evidenceLedger, findings, and reviewChecklist when applicable.",
@@ -522,31 +566,13 @@ func buildPrompt(ticketPath, workerSpecPath, acceptedPacketPath, taskContractPat
 		"- Before exit, if any required closeout artifact is missing, stop editing and write the missing artifact first.",
 		"",
 		"Required artifacts before exit:",
+		fmt.Sprintf("- %s", sharedContextPath),
 		fmt.Sprintf("- %s", workerSpecPath),
 		fmt.Sprintf("- %s", acceptedPacketPath),
 		fmt.Sprintf("- %s", taskContractPath),
 		fmt.Sprintf("- %s", filepath.Join(artifactDir, "worker-result.json")),
 		fmt.Sprintf("- %s", filepath.Join(artifactDir, "verify.json")),
 		fmt.Sprintf("- %s", filepath.Join(artifactDir, "handoff.md")),
-		"",
-		"Task focus:",
-		fmt.Sprintf("- taskId: %s", task.TaskID),
-		fmt.Sprintf("- planEpoch: %d", task.PlanEpoch),
-		fmt.Sprintf("- roleHint: %s", task.RoleHint),
-		fmt.Sprintf("- taskKind: %s", task.Kind),
-		fmt.Sprintf("- workerMode: %s", task.WorkerMode),
-		fmt.Sprintf("- routingModel: %s", task.RoutingModel),
-		fmt.Sprintf("- executionModel: %s", task.ExecutionModel),
-		fmt.Sprintf("- orchestrationSessionId: %s", task.OrchestrationSessionID),
-		fmt.Sprintf("- promptStages: %s", strings.Join(task.PromptStages, ", ")),
-		fmt.Sprintf("- title: %s", task.Title),
-		fmt.Sprintf("- summary: %s", task.Summary),
-		fmt.Sprintf("- description: %s", task.Description),
-		fmt.Sprintf("- ownedPaths: %s", strings.Join(task.OwnedPaths, ", ")),
-		fmt.Sprintf("- verificationRuleIds: %s", strings.Join(task.VerificationRuleIDs, ", ")),
-		fmt.Sprintf("- reasonCodes: %s", strings.Join(unique(ticket.ReasonCodes), ", ")),
-		fmt.Sprintf("- policyTags: %s", strings.Join(routePolicyTags, ", ")),
-		fmt.Sprintf("- promptRef: %s", ticket.PromptRef),
 		"",
 		"Final response:",
 		"- Be brief.",
@@ -562,6 +588,7 @@ func buildAcceptedPacket(task adapter.Task, ticket dispatch.Ticket, judgeDecisio
 		flowSelection = "standard bounded delivery"
 	}
 	executionTasks := deriveExecutionTasks(task, verifyCommands)
+	sharedContext := buildSharedTaskGroupContext(task, executionTasks)
 	return orchestration.AcceptedPacket{
 		SchemaVersion:     "kh.accepted-packet.v1",
 		Generator:         "kh-worker-supervisor",
@@ -574,17 +601,18 @@ func buildAcceptedPacket(task adapter.Task, ticket dispatch.Ticket, judgeDecisio
 		Constraints:       taskConstraints(task),
 		FlowSelection:     flowSelection,
 		PolicyTagsApplied: policyTags(ticket.ReasonCodes),
-		SelectedPlan:      coalesce(task.Description, task.Summary, task.Title),
+		SelectedPlan:      selectedPlanText(task, sharedContext, executionTasks),
 		RejectedAlternatives: []orchestration.RejectedAlternative{
 			{CandidateID: "broad_unbounded_slice", Reason: "prefer one bounded slice that keeps verification and rollback explicit"},
 			{CandidateID: "worker_self_complete", Reason: "completion remains runtime-owned and must stay outside worker authority"},
 		},
+		SharedContext:  sharedContext,
 		ExecutionTasks: executionTasks,
 		VerificationPlan: map[string]any{
 			"ruleIds":  unique(task.VerificationRuleIDs),
 			"commands": verifyCommands,
 		},
-		DecisionRationale: coalesce(task.Description, task.Summary),
+		DecisionRationale: decisionRationaleText(task, sharedContext),
 		OwnedPaths:        unique(task.OwnedPaths),
 		TaskBudgets: map[string]any{
 			"taskId":     task.TaskID,
@@ -606,6 +634,412 @@ func buildAcceptedPacket(task adapter.Task, ticket dispatch.Ticket, judgeDecisio
 		AcceptedAt: nowUTC(),
 		AcceptedBy: "kh-worker-supervisor",
 	}
+}
+
+func buildPlannerCandidates(task adapter.Task, ticket dispatch.Ticket, loop orchestration.PacketSynthesisLoop, judgeDecision orchestration.JudgeDecision, packet orchestration.AcceptedPacket, hookPlan verify.HookPlan, verifyCommands []map[string]any) []orchestration.PlannerCandidate {
+	taskName := materializedTaskName(task)
+	executionTasks := packet.ExecutionTasks
+	verifySteps := verificationStepTitles(verifyCommands)
+	verifySummary := summarizePlannerVerifyPlan(verifySteps, packet.ReplanTriggers)
+	lanes := make([]orchestration.PlannerCandidate, 0, len(loop.Planners))
+	for _, planner := range loop.Planners {
+		lowered := strings.ToLower(strings.Join([]string{planner.ID, planner.Name, planner.Focus}, " "))
+		candidate := orchestration.PlannerCandidate{
+			PlannerID:      planner.ID,
+			PlannerName:    planner.Name,
+			Focus:          planner.Focus,
+			TaskName:       taskName,
+			ProposedFlow:   judgeDecision.SelectedFlow,
+			MaterializedBy: "kh-worker-supervisor",
+		}
+		switch {
+		case strings.Contains(lowered, "architecture"):
+			candidate.ResultSummary = fmt.Sprintf("用 `%s` 作为主任务名，并把任务边界收敛在 owned paths 与 runtime authority boundary 内。", taskName)
+			candidate.KeyMoves = []string{
+				"保持 thread 级主任务名稳定，便于后续追加需求继续挂到同一主线",
+				"先看 control plane，再看 execution plane，最后看 operator plane",
+				fmt.Sprintf("限制写入边界到 %d 个 owned path scopes", len(unique(task.OwnedPaths))),
+			}
+			candidate.Risks = []string{
+				"owned paths 过宽会让 execution slice 膨胀",
+				"如果把 closeout / archive 权限下放给 worker，会破坏 runtime authority boundary",
+			}
+			candidate.Evidence = uniqueNonEmpty(
+				summarizeOwnedPathEvidence(task.OwnedPaths),
+				summarizeList("policyTags", policyTags(ticket.ReasonCodes), 3),
+			)
+		case strings.Contains(lowered, "delivery"):
+			candidate.ResultSummary = fmt.Sprintf("把主任务 `%s` 编排成可追踪切片，并把当前 dispatch 绑定到单一 execution slice。", taskName)
+			candidate.KeyMoves = []string{
+				fmt.Sprintf("judge 当前接受了 %d 个 execution tasks", len(executionTasks)),
+				fmt.Sprintf("当前 dispatch=%s", ticket.DispatchID),
+				fmt.Sprintf("当前尝试 attempt=%d", ticket.Attempt),
+			}
+			if len(executionTasks) > 0 {
+				candidate.KeyMoves = append(candidate.KeyMoves, "首个待执行 slice="+executionTasks[0].ID)
+			}
+			candidate.Risks = []string{
+				"delivery slice 太碎会导致主任务编排图失真",
+				"缺少主任务到聚合 tasks 的显式关系时，operator 很难跟踪追加需求落点",
+			}
+			candidate.Evidence = uniqueNonEmpty(
+				fmt.Sprintf("selectedFlow=%s", packet.FlowSelection),
+				fmt.Sprintf("acceptedPacket=%s", packet.PacketID),
+			)
+		case strings.Contains(lowered, "risk"):
+			candidate.ResultSummary = verifySummary
+			candidate.KeyMoves = []string{
+				"把 verify / review / rollback 信号放进同一条主任务执行链",
+				"失败时进入 analysis.required -> needs_replan -> next dispatch",
+			}
+			if len(hookPlan.AcceptanceMarkers) > 0 {
+				candidate.KeyMoves = append(candidate.KeyMoves, "acceptance markers="+strings.Join(unique(hookPlan.AcceptanceMarkers), ", "))
+			}
+			candidate.Risks = uniqueNonEmpty(
+				"closeout artifacts 缺失会直接触发 blocked / replan",
+				summarizeList("replan", packet.ReplanTriggers, 3),
+				summarizeList("rollback", packet.RollbackHints, 2),
+			)
+			candidate.Evidence = uniqueNonEmpty(
+				summarizeList("verifySteps", verifySteps, 2),
+				fmt.Sprintf("reviewRequired=%t verifyRequired=%t", judgeDecision.ReviewRequired, judgeDecision.VerifyRequired),
+			)
+		default:
+			candidate.ResultSummary = "planner candidate was materialized from dispatch-time packet synthesis metadata"
+		}
+		lanes = append(lanes, candidate)
+	}
+	return lanes
+}
+
+func materializedTaskName(task adapter.Task) string {
+	label := strings.TrimSpace(coalesce(task.Title, task.Summary, task.TaskID))
+	if strings.Contains(label, "前端页面开发") || strings.Contains(label, "可视化开发") {
+		return "harness-architect 前端页面开发"
+	}
+	if label == "" {
+		return task.TaskID
+	}
+	runes := []rune(label)
+	if len(runes) > 26 {
+		return string(runes[:26]) + "..."
+	}
+	return label
+}
+
+func summarizePlannerVerifyPlan(steps, replanTriggers []string) string {
+	if len(steps) == 0 {
+		return "风险 lane 侧重 verify / replan；当前 verification plan 还没有命令级持久化。"
+	}
+	return fmt.Sprintf("风险 lane 计划先执行 %d 个验证步骤，并在 verify 失败时回到 replan。", len(steps))
+}
+
+func summarizeOwnedPathEvidence(paths []string) string {
+	paths = unique(paths)
+	if len(paths) == 0 {
+		return "owned paths are not set"
+	}
+	if len(paths) == 1 {
+		return "owned path=" + paths[0]
+	}
+	return fmt.Sprintf("owned paths=%s (+%d more)", paths[0], len(paths)-1)
+}
+
+func summarizeList(label string, values []string, maxCount int) string {
+	values = unique(values)
+	if len(values) == 0 {
+		return ""
+	}
+	if len(values) > maxCount {
+		return fmt.Sprintf("%s=%s (+%d more)", label, strings.Join(values[:maxCount], ", "), len(values)-maxCount)
+	}
+	return fmt.Sprintf("%s=%s", label, strings.Join(values, ", "))
+}
+
+func tmuxCommandBanner(task adapter.Task, executionTasks []orchestration.ExecutionTask, contract orchestration.TaskContract) string {
+	description := commandNodeDescription(contract, executionTasks, task)
+	if description == "" {
+		return fmt.Sprintf("[harness:%s]", task.TaskID)
+	}
+	return fmt.Sprintf("[harness:%s] %s", task.TaskID, description)
+}
+
+func commandNodeDescription(contract orchestration.TaskContract, executionTasks []orchestration.ExecutionTask, task adapter.Task) string {
+	if title := executionTaskTitle(executionTasks, contract.ExecutionSliceID); title != "" {
+		return truncateLabel(title, 96)
+	}
+	if objective := strings.TrimSpace(contract.Objective); objective != "" {
+		return truncateLabel(objective, 96)
+	}
+	return truncateLabel(coalesce(task.Title, task.Summary, task.TaskID), 96)
+}
+
+func executionTaskTitle(tasks []orchestration.ExecutionTask, sliceID string) string {
+	for _, task := range tasks {
+		if strings.TrimSpace(task.ID) != strings.TrimSpace(sliceID) {
+			continue
+		}
+		if strings.TrimSpace(task.Title) != "" {
+			return task.Title
+		}
+		if strings.TrimSpace(task.Summary) != "" {
+			return task.Summary
+		}
+	}
+	return ""
+}
+
+func truncateLabel(value string, limit int) string {
+	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	if value == "" || limit <= 0 {
+		return value
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit]) + "..."
+}
+
+func selectedExecutionTaskByID(tasks []orchestration.ExecutionTask, sliceID string) *orchestration.ExecutionTask {
+	for _, item := range tasks {
+		if strings.TrimSpace(item.ID) != strings.TrimSpace(sliceID) {
+			continue
+		}
+		copy := item
+		return &copy
+	}
+	return nil
+}
+
+func summarizeEntitySelection(selection orchestration.EntitySelection) string {
+	parts := make([]string, 0, 3)
+	if selection.TargetCount > 0 && selection.SubjectLabel != "" {
+		parts = append(parts, fmt.Sprintf("%d 位%s", selection.TargetCount, selection.SubjectLabel))
+	} else if selection.SubjectLabel != "" {
+		parts = append(parts, selection.SubjectLabel)
+	}
+	if selection.SelectionMode != "" {
+		parts = append(parts, "mode="+selection.SelectionMode)
+	}
+	if len(selection.Entities) > 0 {
+		parts = append(parts, "entities="+strings.Join(selection.Entities, ", "))
+	}
+	return strings.Join(parts, " | ")
+}
+
+func buildSharedTaskGroupContext(task adapter.Task, executionTasks []orchestration.ExecutionTask) *orchestration.SharedTaskGroupContext {
+	info := inferCorpusPlanning(task)
+	operatorTaskList := make([]string, 0, len(executionTasks))
+	for _, item := range executionTasks {
+		if strings.TrimSpace(item.Title) != "" {
+			operatorTaskList = append(operatorTaskList, item.Title)
+		}
+	}
+	context := &orchestration.SharedTaskGroupContext{
+		GroupID:          task.TaskID + ".group",
+		Summary:          coalesce(task.Description, task.Summary, task.Title),
+		OperatorTaskList: unique(operatorTaskList),
+		VerificationFocus: uniqueNonEmpty(
+			"名单、文件格式、资料来源这些共享决策应在规划阶段冻结",
+			"worker 只执行当前批次或当前阶段，不重新发散成新的外层规划",
+		),
+	}
+	if info.SubjectLabel != "" || info.SubjectCount > 0 {
+		context.EntitySelection = orchestration.EntitySelection{
+			SubjectLabel:      info.SubjectLabel,
+			TargetCount:       info.SubjectCount,
+			SelectionMode:     "planner_or_judge_frozen",
+			SelectionCriteria: uniqueNonEmpty("优先在编排阶段冻结名单或名单生成规则，再交给 worker 执行当前批次"),
+		}
+	}
+	if info.OutputDir != "" || len(info.RequiredSections) > 0 || info.MinChars > 0 {
+		context.ContentContract = orchestration.ContentContract{
+			OutputDir:         info.OutputDir,
+			IndexFile:         info.IndexFile,
+			FileExtension:     coalesce(info.FileExtension, ".md"),
+			FileNamingRule:    "序号-名称.md",
+			RequiredFields:    uniqueNonEmpty("基本信息", "代表成果", "核心贡献", "历史影响", "争议点", "延伸阅读"),
+			RequiredSections:  unique(info.RequiredSections),
+			MinChars:          info.MinChars,
+			FormatConstraints: uniqueNonEmpty("每位对象单独一个文件", "总索引与正文文件分离"),
+		}
+	}
+	context.SourcePlan = orchestration.SourcePlan{
+		ResearchGoal: "先冻结名单、格式和资料策略，再进入批量写作或整理",
+		PreferredSourceTypes: uniqueNonEmpty(
+			"百科类权威资料",
+			"高校 / 学术机构页面",
+			"传记、综述或权威出版物",
+		),
+		SearchHints:        uniqueNonEmpty(buildSearchHint(task, info)),
+		RequiredCrossCheck: true,
+		Notes:              uniqueNonEmpty("关键事实优先交叉确认，避免每个 worker 自己临时决定资料标准"),
+	}
+	context.SharedPrompt = uniqueNonEmpty(
+		buildSharedPromptLine(task, info),
+		"先使用 shared task-group context，再执行当前 dispatch slice。",
+		"如果名单、字段模板或资料来源策略未冻结，先回报 planning drift，不要由 worker 临场重规划。",
+	)
+	if context.Summary == "" && len(context.SharedPrompt) == 0 && len(context.OperatorTaskList) == 0 {
+		return nil
+	}
+	return context
+}
+
+func selectedPlanText(task adapter.Task, sharedContext *orchestration.SharedTaskGroupContext, executionTasks []orchestration.ExecutionTask) string {
+	parts := []string{strings.TrimSpace(coalesce(task.Description, task.Summary, task.Title))}
+	if sharedContext != nil {
+		if summary := strings.TrimSpace(sharedContext.Summary); summary != "" && summary != parts[0] {
+			parts = append(parts, summary)
+		}
+		if sharedContext.ContentContract.OutputDir != "" {
+			parts = append(parts, "输出目录="+sharedContext.ContentContract.OutputDir)
+		}
+		if sharedContext.ContentContract.MinChars > 0 {
+			parts = append(parts, fmt.Sprintf("每个文件不少于 %d 字", sharedContext.ContentContract.MinChars))
+		}
+	}
+	if len(executionTasks) > 0 {
+		parts = append(parts, fmt.Sprintf("judge tasklist=%d", len(executionTasks)))
+	}
+	return strings.Join(uniqueNonEmpty(parts...), " | ")
+}
+
+func decisionRationaleText(task adapter.Task, sharedContext *orchestration.SharedTaskGroupContext) string {
+	parts := []string{strings.TrimSpace(coalesce(task.Description, task.Summary))}
+	if sharedContext != nil {
+		parts = append(parts, "共享名单/格式/资料策略应在规划阶段冻结，再交给 worker 执行当前 slice。")
+	}
+	return strings.Join(uniqueNonEmpty(parts...), " | ")
+}
+
+func deriveCorpusExecutionTaskSpecs(task adapter.Task) []executionTaskSpec {
+	info := inferCorpusPlanning(task)
+	if info.OutputDir == "" && info.SubjectLabel == "" && info.SubjectCount == 0 {
+		return nil
+	}
+	sharedSummary := buildSharedPromptLine(task, info)
+	specs := []executionTaskSpec{
+		{
+			Title:                "冻结名单与命名规范",
+			Summary:              fmt.Sprintf("在规划阶段确定本轮 %s 的名单或名单生成规则，并冻结文件命名规范。", summarizeCorpusSubject(info)),
+			TaskGroupID:          task.TaskID + ".group",
+			SharedContextSummary: sharedSummary,
+			DoneCriteria:         []string{"名单或名单规则写入共享上下文", "文件命名规范可供后续批次直接继承"},
+		},
+		{
+			Title:                "冻结公共内容模板与资料策略",
+			Summary:              "整理每个文件的固定字段、篇幅约束、输出目录和资料来源策略，形成任务组公共提示词。",
+			TaskGroupID:          task.TaskID + ".group",
+			SharedContextSummary: sharedSummary,
+			DoneCriteria:         []string{"公共字段模板冻结", "资料策略冻结", "worker 可直接复用公共上下文"},
+		},
+	}
+	batchLabel := "正文批次"
+	if info.SubjectCount > 0 {
+		batchLabel = fmt.Sprintf("%s正文批次", summarizeCorpusSubject(info))
+	}
+	specs = append(specs, executionTaskSpec{
+		Title:                "批量产出正文文件",
+		Summary:              fmt.Sprintf("按共享上下文批量产出 %s 的正文文件，并把当前批次的输出写入 %s。", summarizeCorpusSubject(info), coalesce(info.OutputDir, "目标目录")),
+		TaskGroupID:          task.TaskID + ".group",
+		BatchLabel:           batchLabel,
+		SharedContextSummary: sharedSummary,
+		OutputTargets:        uniqueNonEmpty(info.OutputDir),
+		DoneCriteria:         []string{"正文文件开始落盘", "每个文件遵循共享字段模板和字数约束"},
+	})
+	if info.RequiresIndex || info.IndexFile != "" {
+		specs = append(specs, executionTaskSpec{
+			Title:                "生成总索引与收口校验",
+			Summary:              fmt.Sprintf("生成总索引文件并完成整体校验、verify 与 handoff 收口。 | index=%s", coalesce(info.IndexFile, "总索引")),
+			TaskGroupID:          task.TaskID + ".group",
+			SharedContextSummary: sharedSummary,
+			OutputTargets:        uniqueNonEmpty(filepath.Join(info.OutputDir, coalesce(info.IndexFile, "00-总索引.md"))),
+			DoneCriteria:         []string{"总索引写入完成", "verify evidence 完整", "closeout artifacts 完整"},
+		})
+	}
+	return specs
+}
+
+func inferCorpusPlanning(task adapter.Task) corpusPlanningInfo {
+	text := strings.Join(uniqueNonEmpty(task.Title, task.Summary, task.Description), "\n")
+	info := corpusPlanningInfo{
+		FileExtension: ".md",
+		IndexFile:     "00-总索引.md",
+	}
+	if matches := regexp.MustCompile(`(?:在|到)\s+(\S+)\s+下`).FindStringSubmatch(text); len(matches) == 2 {
+		info.OutputDir = strings.TrimSpace(matches[1])
+	}
+	if matches := regexp.MustCompile(`(\d+)\s*位([^\s。；，、]+)`).FindStringSubmatch(text); len(matches) == 3 {
+		fmt.Sscanf(matches[1], "%d", &info.SubjectCount)
+		info.SubjectLabel = strings.TrimSpace(matches[2])
+	}
+	if matches := regexp.MustCompile(`不少于\s*(\d+)\s*字`).FindStringSubmatch(text); len(matches) == 2 {
+		fmt.Sscanf(matches[1], "%d", &info.MinChars)
+	}
+	for _, raw := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		if strings.Contains(line, "总索引") {
+			info.RequiresIndex = true
+		}
+		if !strings.Contains(line, "包含") {
+			continue
+		}
+		parts := strings.SplitN(line, "包含", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		tail := strings.TrimSpace(parts[1])
+		for _, token := range strings.FieldsFunc(tail, func(r rune) bool {
+			return strings.ContainsRune("、，,。；;：:", r)
+		}) {
+			token = strings.TrimSpace(token)
+			if token == "" {
+				continue
+			}
+			info.RequiredSections = append(info.RequiredSections, token)
+		}
+	}
+	info.RequiredSections = unique(info.RequiredSections)
+	return info
+}
+
+func summarizeCorpusSubject(info corpusPlanningInfo) string {
+	if info.SubjectCount > 0 && info.SubjectLabel != "" {
+		return fmt.Sprintf("%d 位%s", info.SubjectCount, info.SubjectLabel)
+	}
+	if info.SubjectLabel != "" {
+		return info.SubjectLabel
+	}
+	return "对象集合"
+}
+
+func buildSharedPromptLine(task adapter.Task, info corpusPlanningInfo) string {
+	parts := []string{fmt.Sprintf("先在编排阶段冻结 %s 的名单、格式和资料策略，再分发当前 worker slice。", summarizeCorpusSubject(info))}
+	if info.OutputDir != "" {
+		parts = append(parts, "输出目录="+info.OutputDir)
+	}
+	if len(info.RequiredSections) > 0 {
+		parts = append(parts, "固定字段="+strings.Join(info.RequiredSections, " / "))
+	}
+	if info.MinChars > 0 {
+		parts = append(parts, fmt.Sprintf("每个文件不少于 %d 字", info.MinChars))
+	}
+	if strings.TrimSpace(task.Description) != "" {
+		parts = append(parts, strings.TrimSpace(task.Description))
+	}
+	return strings.Join(uniqueNonEmpty(parts...), " | ")
+}
+
+func buildSearchHint(task adapter.Task, info corpusPlanningInfo) string {
+	if info.SubjectLabel != "" {
+		return fmt.Sprintf("围绕“%s 资料 / 生平 / 主要贡献 / 历史影响”收集权威来源。", summarizeCorpusSubject(info))
+	}
+	return fmt.Sprintf("围绕任务 `%s` 收集权威来源并在规划阶段冻结资料策略。", coalesce(task.Title, task.TaskID))
 }
 
 func buildTaskContract(root string, task adapter.Task, ticket dispatch.Ticket, packet orchestration.AcceptedPacket, hookPlan verify.HookPlan, acceptedPacketPath string) orchestration.TaskContract {
@@ -692,36 +1126,237 @@ func deriveExecutionTasks(task adapter.Task, verifyCommands []map[string]any) []
 	verificationSteps := verificationStepTitles(verifyCommands)
 	baseEvidence := []string{"verify.json", "worker-result.json", "handoff.md"}
 	baseSummary := coalesce(task.Description, task.Summary, task.Title)
-	if len(task.OwnedPaths) == 0 {
-		return []orchestration.ExecutionTask{
-			{
-				ID:                fmt.Sprintf("%s.slice.1", task.TaskID),
-				Title:             coalesce(task.Title, task.TaskID),
-				Summary:           baseSummary,
-				InScope:           []string{"repo-local bounded slice"},
-				DoneCriteria:      []string{"bounded change applied", "verification evidence recorded", "closeout artifacts written"},
-				RequiredEvidence:  baseEvidence,
-				VerificationSteps: verificationSteps,
-			},
+	specs := deriveExecutionTaskSpecs(task, baseSummary)
+	tasks := make([]orchestration.ExecutionTask, 0, len(specs))
+	for index, spec := range specs {
+		title := strings.TrimSpace(spec.Title)
+		if title == "" {
+			title = coalesce(task.Title, task.TaskID)
 		}
-	}
-	tasks := make([]orchestration.ExecutionTask, 0, len(task.OwnedPaths))
-	for index, ownedPath := range unique(task.OwnedPaths) {
-		title := fmt.Sprintf("Edit slice %d", index+1)
-		if task.Title != "" {
-			title = fmt.Sprintf("%s [%d]", task.Title, index+1)
+		doneCriteria := uniqueNonEmpty(spec.DoneCriteria...)
+		if len(doneCriteria) == 0 {
+			doneCriteria = []string{"bounded change applied", "verification evidence recorded", "closeout artifacts written"}
 		}
 		tasks = append(tasks, orchestration.ExecutionTask{
-			ID:                fmt.Sprintf("%s.slice.%d", task.TaskID, index+1),
-			Title:             title,
-			Summary:           fmt.Sprintf("%s | scope=%s", baseSummary, ownedPath),
-			InScope:           []string{ownedPath},
-			DoneCriteria:      []string{"bounded change applied within owned path", "verification evidence recorded", "closeout artifacts written"},
-			RequiredEvidence:  baseEvidence,
-			VerificationSteps: verificationSteps,
+			ID:                   fmt.Sprintf("%s.slice.%d", task.TaskID, index+1),
+			Title:                title,
+			Summary:              strings.TrimSpace(spec.Summary),
+			TaskGroupID:          strings.TrimSpace(spec.TaskGroupID),
+			BatchLabel:           strings.TrimSpace(spec.BatchLabel),
+			EntityBatch:          unique(spec.EntityBatch),
+			OutputTargets:        unique(spec.OutputTargets),
+			SharedContextSummary: strings.TrimSpace(spec.SharedContextSummary),
+			InScope:              unique(spec.InScope),
+			DoneCriteria:         doneCriteria,
+			RequiredEvidence:     baseEvidence,
+			VerificationSteps:    verificationSteps,
 		})
 	}
 	return tasks
+}
+
+func deriveExecutionTaskSpecs(task adapter.Task, baseSummary string) []executionTaskSpec {
+	if specs := deriveCorpusExecutionTaskSpecs(task); len(specs) > 0 {
+		return specs
+	}
+	requirements := explicitRequirementLines(task)
+	if len(requirements) == 0 {
+		requirements = inlineRequirementLines(task)
+	}
+	if len(requirements) > 0 {
+		specs := make([]executionTaskSpec, 0, len(requirements)+1)
+		if title := strings.TrimSpace(task.Title); title != "" {
+			specs = append(specs, executionTaskSpec{
+				Title:   title,
+				Summary: fmt.Sprintf("建立主任务骨架并稳定任务命名，确保后续规划、追加需求和执行链都挂在同一主线上。 | %s", title),
+			})
+		}
+		for index, requirement := range requirements {
+			specs = append(specs, executionTaskSpec{
+				Title:        fmt.Sprintf("%s [%d]", semanticTaskTitle(task, requirement), index+1),
+				Summary:      requirement,
+				DoneCriteria: []string{"requirement intent is reflected in runtime artifacts", "verification evidence recorded", "closeout artifacts written"},
+			})
+		}
+		if len(specs) > 0 {
+			return specs
+		}
+	}
+	inScope := unique(task.OwnedPaths)
+	if len(inScope) == 0 {
+		inScope = []string{"repo-local bounded slice"}
+	}
+	return []executionTaskSpec{
+		{
+			Title:   coalesce(task.Title, task.TaskID),
+			Summary: strings.TrimSpace(baseSummary),
+			InScope: inScope,
+		},
+	}
+}
+
+func explicitRequirementLines(task adapter.Task) []string {
+	lines := strings.Split(strings.ReplaceAll(task.Summary+"\n"+task.Description, "\r\n", "\n"), "\n")
+	requirementRE := regexp.MustCompile(`^(?:\d+[\.\)、:：-]*|[-*•]+)\s*`)
+	requirements := make([]string, 0, len(lines))
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		lower := strings.ToLower(line)
+		if lower == "要求" || lower == "requirements" || lower == "requirement" {
+			continue
+		}
+		if !requirementRE.MatchString(line) {
+			continue
+		}
+		line = strings.TrimSpace(requirementRE.ReplaceAllString(line, ""))
+		line = strings.Trim(line, "：:;；")
+		if line == "" {
+			continue
+		}
+		requirements = append(requirements, line)
+	}
+	return uniqueNonEmpty(requirements...)
+}
+
+func inlineRequirementLines(task adapter.Task) []string {
+	lines := strings.Split(strings.ReplaceAll(task.Summary+"\n"+task.Description, "\r\n", "\n"), "\n")
+	requirements := make([]string, 0, len(lines))
+	for _, raw := range lines {
+		line := normalizeRequirementLine(raw)
+		if line == "" {
+			continue
+		}
+		if parts := splitDisplayRequirements(line); len(parts) > 0 {
+			requirements = append(requirements, parts...)
+			continue
+		}
+		if part := splitNeedToDisplayRequirement(line); part != "" {
+			requirements = append(requirements, part)
+		}
+	}
+	return uniqueNonEmpty(requirements...)
+}
+
+func normalizeRequirementLine(raw string) string {
+	line := strings.TrimSpace(raw)
+	line = strings.TrimPrefix(line, "补充：")
+	line = strings.TrimPrefix(line, "补充:")
+	line = strings.TrimPrefix(line, "说明：")
+	line = strings.TrimPrefix(line, "说明:")
+	line = strings.TrimPrefix(line, "要求：")
+	line = strings.TrimPrefix(line, "要求:")
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return ""
+	}
+	lower := strings.ToLower(line)
+	if lower == "要求" || lower == "requirements" || lower == "requirement" {
+		return ""
+	}
+	return line
+}
+
+func splitDisplayRequirements(line string) []string {
+	index := strings.Index(line, "展示")
+	if index < 0 {
+		index = strings.Index(line, "显示")
+	}
+	if index < 0 {
+		return nil
+	}
+	verb := "展示"
+	if strings.HasPrefix(line[index:], "显示") {
+		verb = "显示"
+	}
+	payload := strings.TrimSpace(line[index+len(verb):])
+	if payload == "" {
+		return nil
+	}
+	clauses := strings.FieldsFunc(payload, func(r rune) bool {
+		return r == '；' || r == ';'
+	})
+	requirements := make([]string, 0, len(clauses))
+	for _, clause := range clauses {
+		segment := strings.TrimSpace(clause)
+		if segment == "" {
+			continue
+		}
+		if strings.Contains(segment, "本次先只做") || strings.Contains(segment, "不修改") {
+			continue
+		}
+		for _, item := range strings.Split(segment, "、") {
+			item = sanitizeRequirementFragment(item)
+			if item == "" {
+				continue
+			}
+			requirements = append(requirements, verb+" "+item)
+		}
+	}
+	return uniqueNonEmpty(requirements...)
+}
+
+func splitNeedToDisplayRequirement(line string) string {
+	if !strings.Contains(line, "需要把") || !strings.Contains(line, "展示") {
+		return ""
+	}
+	payload := strings.TrimSpace(strings.TrimPrefix(line, "需要把"))
+	if payload == "" {
+		return ""
+	}
+	if index := strings.Index(payload, "展示"); index >= 0 {
+		payload = strings.TrimSpace(payload[:index])
+	}
+	payload = strings.TrimSpace(strings.TrimSuffix(payload, "也显式"))
+	payload = sanitizeRequirementFragment(payload)
+	if payload == "" {
+		return ""
+	}
+	return "展示 " + payload
+}
+
+func sanitizeRequirementFragment(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.TrimSuffix(value, "也显式")
+	value = strings.TrimSuffix(value, "显式")
+	value = strings.TrimSuffix(value, "也需要")
+	value = strings.TrimSuffix(value, "在 dashboard 里")
+	value = strings.TrimSuffix(value, "在dashboard里")
+	value = strings.Trim(value, "：:;；，, ")
+	return strings.TrimSpace(value)
+}
+
+func semanticTaskTitle(task adapter.Task, requirement string) string {
+	base := strings.TrimSpace(task.Title)
+	if base == "" {
+		base = strings.TrimSpace(firstSentence(task.Summary))
+	}
+	if base == "" {
+		base = task.TaskID
+	}
+	trimmed := strings.TrimSpace(requirement)
+	if trimmed == "" {
+		return base
+	}
+	runes := []rune(trimmed)
+	if len(runes) > 24 {
+		trimmed = string(runes[:24]) + "..."
+	}
+	return base + " - " + trimmed
+}
+
+func firstSentence(text string) string {
+	for _, raw := range strings.FieldsFunc(text, func(r rune) bool {
+		return r == '\n' || r == '。' || r == '.' || r == '!' || r == '！' || r == '?' || r == '？'
+	}) {
+		line := strings.TrimSpace(raw)
+		if line != "" {
+			return line
+		}
+	}
+	return ""
 }
 
 func selectExecutionTask(root, taskID string, tasks []orchestration.ExecutionTask, attempt int) *orchestration.ExecutionTask {

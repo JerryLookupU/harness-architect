@@ -2,8 +2,12 @@ package orchestration
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+
+	"klein-harness/internal/state"
 )
 
 type RejectedAlternative struct {
@@ -11,40 +15,86 @@ type RejectedAlternative struct {
 	Reason      string `json:"reason"`
 }
 
+type EntitySelection struct {
+	SubjectLabel      string   `json:"subjectLabel,omitempty"`
+	TargetCount       int      `json:"targetCount,omitempty"`
+	SelectionMode     string   `json:"selectionMode,omitempty"`
+	SelectionCriteria []string `json:"selectionCriteria,omitempty"`
+	Entities          []string `json:"entities,omitempty"`
+	Notes             []string `json:"notes,omitempty"`
+}
+
+type ContentContract struct {
+	OutputDir         string   `json:"outputDir,omitempty"`
+	IndexFile         string   `json:"indexFile,omitempty"`
+	FileExtension     string   `json:"fileExtension,omitempty"`
+	FileNamingRule    string   `json:"fileNamingRule,omitempty"`
+	RequiredFields    []string `json:"requiredFields,omitempty"`
+	RequiredSections  []string `json:"requiredSections,omitempty"`
+	MinChars          int      `json:"minChars,omitempty"`
+	FormatConstraints []string `json:"formatConstraints,omitempty"`
+}
+
+type SourcePlan struct {
+	ResearchGoal         string   `json:"researchGoal,omitempty"`
+	PreferredSourceTypes []string `json:"preferredSourceTypes,omitempty"`
+	SearchHints          []string `json:"searchHints,omitempty"`
+	RequiredCrossCheck   bool     `json:"requiredCrossCheck,omitempty"`
+	Notes                []string `json:"notes,omitempty"`
+}
+
+type SharedTaskGroupContext struct {
+	GroupID           string          `json:"groupId,omitempty"`
+	Summary           string          `json:"summary,omitempty"`
+	EntitySelection   EntitySelection `json:"entitySelection,omitempty"`
+	ContentContract   ContentContract `json:"contentContract,omitempty"`
+	SourcePlan        SourcePlan      `json:"sourcePlan,omitempty"`
+	SharedPrompt      []string        `json:"sharedPrompt,omitempty"`
+	OperatorTaskList  []string        `json:"operatorTaskList,omitempty"`
+	VerificationFocus []string        `json:"verificationFocus,omitempty"`
+}
+
 type ExecutionTask struct {
-	ID                string   `json:"id"`
-	Title             string   `json:"title"`
-	Summary           string   `json:"summary"`
-	InScope           []string `json:"inScope,omitempty"`
-	DoneCriteria      []string `json:"doneCriteria,omitempty"`
-	RequiredEvidence  []string `json:"requiredEvidence,omitempty"`
-	VerificationSteps []string `json:"verificationSteps,omitempty"`
+	ID                   string   `json:"id"`
+	Title                string   `json:"title"`
+	Summary              string   `json:"summary"`
+	TaskGroupID          string   `json:"taskGroupId,omitempty"`
+	BatchLabel           string   `json:"batchLabel,omitempty"`
+	EntityBatch          []string `json:"entityBatch,omitempty"`
+	OutputTargets        []string `json:"outputTargets,omitempty"`
+	SharedContextSummary string   `json:"sharedContextSummary,omitempty"`
+	InScope              []string `json:"inScope,omitempty"`
+	DoneCriteria         []string `json:"doneCriteria,omitempty"`
+	RequiredEvidence     []string `json:"requiredEvidence,omitempty"`
+	VerificationSteps    []string `json:"verificationSteps,omitempty"`
 }
 
 type AcceptedPacket struct {
-	SchemaVersion        string                `json:"schemaVersion"`
-	Generator            string                `json:"generator"`
-	GeneratedAt          string                `json:"generatedAt"`
-	TaskID               string                `json:"taskId"`
-	ThreadKey            string                `json:"threadKey"`
-	PlanEpoch            int                   `json:"planEpoch"`
-	PacketID             string                `json:"packetId"`
-	Objective            string                `json:"objective"`
-	Constraints          []string              `json:"constraints"`
-	FlowSelection        string                `json:"flowSelection"`
-	PolicyTagsApplied    []string              `json:"policyTagsApplied,omitempty"`
-	SelectedPlan         string                `json:"selectedPlan"`
-	RejectedAlternatives []RejectedAlternative `json:"rejectedAlternatives,omitempty"`
-	ExecutionTasks       []ExecutionTask       `json:"executionTasks"`
-	VerificationPlan     map[string]any        `json:"verificationPlan"`
-	DecisionRationale    string                `json:"decisionRationale"`
-	OwnedPaths           []string              `json:"ownedPaths,omitempty"`
-	TaskBudgets          map[string]any        `json:"taskBudgets,omitempty"`
-	AcceptanceMarkers    []string              `json:"acceptanceMarkers,omitempty"`
-	ReplanTriggers       []string              `json:"replanTriggers,omitempty"`
-	RollbackHints        []string              `json:"rollbackHints,omitempty"`
-	AcceptedAt           string                `json:"acceptedAt"`
-	AcceptedBy           string                `json:"acceptedBy"`
+	SchemaVersion        string                  `json:"schemaVersion"`
+	Revision             int64                   `json:"revision"`
+	Generator            string                  `json:"generator"`
+	GeneratedAt          string                  `json:"generatedAt"`
+	TaskID               string                  `json:"taskId"`
+	ThreadKey            string                  `json:"threadKey"`
+	PlanEpoch            int                     `json:"planEpoch"`
+	PacketID             string                  `json:"packetId"`
+	Objective            string                  `json:"objective"`
+	Constraints          []string                `json:"constraints"`
+	FlowSelection        string                  `json:"flowSelection"`
+	PolicyTagsApplied    []string                `json:"policyTagsApplied,omitempty"`
+	SelectedPlan         string                  `json:"selectedPlan"`
+	RejectedAlternatives []RejectedAlternative   `json:"rejectedAlternatives,omitempty"`
+	SharedContext        *SharedTaskGroupContext `json:"sharedContext,omitempty"`
+	ExecutionTasks       []ExecutionTask         `json:"executionTasks"`
+	VerificationPlan     map[string]any          `json:"verificationPlan"`
+	DecisionRationale    string                  `json:"decisionRationale"`
+	OwnedPaths           []string                `json:"ownedPaths,omitempty"`
+	TaskBudgets          map[string]any          `json:"taskBudgets,omitempty"`
+	AcceptanceMarkers    []string                `json:"acceptanceMarkers,omitempty"`
+	ReplanTriggers       []string                `json:"replanTriggers,omitempty"`
+	RollbackHints        []string                `json:"rollbackHints,omitempty"`
+	AcceptedAt           string                  `json:"acceptedAt"`
+	AcceptedBy           string                  `json:"acceptedBy"`
 }
 
 type VerificationChecklistItem struct {
@@ -57,6 +107,7 @@ type VerificationChecklistItem struct {
 
 type TaskContract struct {
 	SchemaVersion         string                      `json:"schemaVersion"`
+	Revision              int64                       `json:"revision"`
 	Generator             string                      `json:"generator"`
 	GeneratedAt           string                      `json:"generatedAt"`
 	ContractID            string                      `json:"contractId"`
@@ -82,6 +133,7 @@ type TaskContract struct {
 
 type PacketProgress struct {
 	SchemaVersion     string   `json:"schemaVersion"`
+	Revision          int64    `json:"revision"`
 	Generator         string   `json:"generator"`
 	UpdatedAt         string   `json:"updatedAt"`
 	TaskID            string   `json:"taskId"`
@@ -105,7 +157,11 @@ func PacketProgressPath(root, taskID string) string {
 }
 
 func WriteAcceptedPacket(path string, packet AcceptedPacket) error {
-	return writeRuntimeObject(path, packet)
+	currentRevision, err := state.CurrentRevision(path)
+	if err != nil {
+		return err
+	}
+	return WriteAcceptedPacketCAS(path, packet, currentRevision)
 }
 
 func LoadAcceptedPacket(path string) (AcceptedPacket, error) {
@@ -121,7 +177,11 @@ func LoadAcceptedPacket(path string) (AcceptedPacket, error) {
 }
 
 func WriteTaskContract(path string, contract TaskContract) error {
-	return writeRuntimeObject(path, contract)
+	currentRevision, err := state.CurrentRevision(path)
+	if err != nil {
+		return err
+	}
+	return WriteTaskContractCAS(path, contract, currentRevision)
 }
 
 func LoadTaskContract(path string) (TaskContract, error) {
@@ -137,7 +197,11 @@ func LoadTaskContract(path string) (TaskContract, error) {
 }
 
 func WritePacketProgress(path string, progress PacketProgress) error {
-	return writeRuntimeObject(path, progress)
+	currentRevision, err := state.CurrentRevision(path)
+	if err != nil {
+		return err
+	}
+	return WritePacketProgressCAS(path, progress, currentRevision)
 }
 
 func LoadPacketProgress(path string) (PacketProgress, error) {
@@ -152,7 +216,29 @@ func LoadPacketProgress(path string) (PacketProgress, error) {
 	return progress, nil
 }
 
-func writeRuntimeObject(path string, value any) error {
+func WriteAcceptedPacketCAS(path string, packet AcceptedPacket, expectedRevision int64) error {
+	return writeRuntimeObjectCAS(path, &packet, expectedRevision)
+}
+
+func WriteTaskContractCAS(path string, contract TaskContract, expectedRevision int64) error {
+	return writeRuntimeObjectCAS(path, &contract, expectedRevision)
+}
+
+func WritePacketProgressCAS(path string, progress PacketProgress, expectedRevision int64) error {
+	return writeRuntimeObjectCAS(path, &progress, expectedRevision)
+}
+
+func writeRuntimeObjectCAS(path string, value any, expectedRevision int64) error {
+	currentRevision, err := state.CurrentRevision(path)
+	if err != nil {
+		return err
+	}
+	if currentRevision != expectedRevision {
+		return fmt.Errorf("%w: expected %d got %d", state.ErrCASConflict, expectedRevision, currentRevision)
+	}
+	if err := setRuntimeObjectRevision(value, currentRevision+1); err != nil {
+		return err
+	}
 	payload, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
@@ -161,4 +247,21 @@ func writeRuntimeObject(path string, value any) error {
 		return err
 	}
 	return os.WriteFile(path, append(payload, '\n'), 0o644)
+}
+
+func setRuntimeObjectRevision(document any, revision int64) error {
+	value := reflect.ValueOf(document)
+	if value.Kind() != reflect.Pointer || value.IsNil() {
+		return fmt.Errorf("runtime object must be a non-nil pointer")
+	}
+	target := value.Elem()
+	if target.Kind() != reflect.Struct {
+		return fmt.Errorf("runtime object must point to a struct")
+	}
+	field := target.FieldByName("Revision")
+	if !field.IsValid() || !field.CanSet() || field.Kind() != reflect.Int64 {
+		return fmt.Errorf("runtime object is missing settable Revision field")
+	}
+	field.SetInt(revision)
+	return nil
 }

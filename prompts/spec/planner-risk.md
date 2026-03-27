@@ -10,6 +10,7 @@ Focus:
 - verification completeness
 - rollback and recovery
 - phase-1 body-vs-target discipline
+- keep shared task-group context stable enough that workers do not replan format or sources mid-run
 
 Output format:
 - return exactly one JSON object
@@ -72,8 +73,10 @@ Field rules:
 - `packetCandidate` must follow `packet.md`
 - every item in `workerSpecCandidates` must follow `worker-spec.md`
 - `risks`, `verificationIdeas`, `recoveryPlan`, and `rejectConditions` must be concrete
+- use `packetCandidate.sharedContext` to capture shared roster / format / source risks once, rather than making every worker rediscover them
 - fill planner-relevant arrays; leave non-relevant arrays empty instead of renaming keys
 
 Hard rule:
 - do not trade away verification, noop evidence, or control-plane auditability for speed
+- if shared roster, source policy, or file schema is still unresolved, mark that as a planning risk and keep it out of worker freelancing
 - stop at orchestration output; do not drift into implementation or direct execution

@@ -50,7 +50,7 @@ func recordCompletedExecutionSlice(root, taskID, dispatchID string) error {
 	progress.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	progress.LastDispatchID = dispatchID
 	progress.CompletedSliceIDs = appendIfMissing(progress.CompletedSliceIDs, contract.ExecutionSliceID)
-	return orchestration.WritePacketProgress(progressPath, progress)
+	return orchestration.WritePacketProgressCAS(progressPath, progress, progress.Revision)
 }
 
 func appendIfMissing(values []string, value string) []string {

@@ -24,7 +24,7 @@ New shape:
 - `harness-tasks` -> `harness tasks`
 - `harness-task` -> `harness task`
 - `harness-control` -> `harness control`
-- ad-hoc runner tick scripts -> `harness daemon run-once`
+- ad-hoc runner tick scripts -> `harness daemon loop`
 - ad-hoc runner loop scripts -> `harness daemon loop`
 
 ## Removed From Canonical Path

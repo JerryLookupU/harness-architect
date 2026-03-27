@@ -211,6 +211,116 @@ func TestTaskIncludesReleaseReadyStateFromGateAndGuard(t *testing.T) {
 	}
 }
 
+func TestTaskPrefersTaskScopedCompletionAndGuard(t *testing.T) {
+	root := t.TempDir()
+	if err := adapter.UpsertTask(root, adapter.Task{
+		TaskID:             "T-3",
+		ThreadKey:          "thread-3",
+		Title:              "task scoped gate",
+		Summary:            "task scoped gate",
+		Status:             "completed",
+		VerificationStatus: "passed",
+	}); err != nil {
+		t.Fatalf("upsert task: %v", err)
+	}
+	paths, err := adapter.Resolve(root)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if _, err := state.WriteSnapshot(paths.CompletionGatePath, &verify.CompletionGate{
+		Status:     "blocked",
+		Satisfied:  false,
+		TaskID:     "other-task",
+		DispatchID: "dispatch-other",
+	}, "test", 0); err != nil {
+		t.Fatalf("write alias completion gate: %v", err)
+	}
+	if _, err := state.WriteSnapshot(paths.GuardStatePath, &verify.GuardState{
+		Status:                  "blocked",
+		TaskID:                  "other-task",
+		DispatchID:              "dispatch-other",
+		SafeToArchive:           false,
+		CompletionGateStatus:    "blocked",
+		CompletionGateSatisfied: false,
+	}, "test", 0); err != nil {
+		t.Fatalf("write alias guard state: %v", err)
+	}
+	if _, err := state.WriteSnapshot(paths.CompletionGateTaskPath("T-3"), &verify.CompletionGate{
+		Status:     "satisfied",
+		Satisfied:  true,
+		TaskID:     "T-3",
+		DispatchID: "dispatch-3",
+	}, "test", 0); err != nil {
+		t.Fatalf("write task-scoped completion gate: %v", err)
+	}
+	if _, err := state.WriteSnapshot(paths.GuardStateTaskPath("T-3"), &verify.GuardState{
+		Status:                  "retire_ready",
+		TaskID:                  "T-3",
+		DispatchID:              "dispatch-3",
+		SafeToArchive:           true,
+		CompletionGateStatus:    "satisfied",
+		CompletionGateSatisfied: true,
+		RetireEligible:          true,
+	}, "test", 0); err != nil {
+		t.Fatalf("write task-scoped guard state: %v", err)
+	}
+
+	view, err := Task(root, "T-3")
+	if err != nil {
+		t.Fatalf("load task view: %v", err)
+	}
+	if view.Completion == nil || view.Completion.TaskID != "T-3" || !view.Completion.Satisfied {
+		t.Fatalf("expected task-scoped completion gate to win: %+v", view.Completion)
+	}
+	if view.Guard == nil || view.Guard.TaskID != "T-3" || !view.Guard.SafeToArchive {
+		t.Fatalf("expected task-scoped guard state to win: %+v", view.Guard)
+	}
+}
+
+func TestTaskLoadsLatestRequestFromRequestIndex(t *testing.T) {
+	root := t.TempDir()
+	if err := adapter.UpsertTask(root, adapter.Task{
+		TaskID:    "T-4",
+		ThreadKey: "thread-4",
+		Title:     "request index",
+		Summary:   "request index",
+		Status:    "queued",
+	}); err != nil {
+		t.Fatalf("upsert task: %v", err)
+	}
+	paths, err := adapter.Resolve(root)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	index := runtime.RequestIndex{
+		RequestsByID: map[string]runtime.RequestRecord{
+			"R-4": {
+				RequestID:             "R-4",
+				TaskID:                "T-4",
+				ThreadKey:             "thread-4",
+				BindingAction:         "created_new_task",
+				Goal:                  "hydrate request index",
+				Status:                "queued",
+				NormalizedIntentClass: "fresh_work",
+			},
+		},
+		LatestRequestByTaskID: map[string]string{
+			"T-4": "R-4",
+		},
+	}
+	if _, err := state.WriteSnapshot(paths.RequestIndexPath, &index, "test", 0); err != nil {
+		t.Fatalf("write request index: %v", err)
+	}
+
+	view, err := Task(root, "T-4")
+	if err != nil {
+		t.Fatalf("load task view: %v", err)
+	}
+	if view.Request == nil || view.Request.RequestID != "R-4" || view.Request.TaskID != "T-4" {
+		t.Fatalf("expected latest request from request index: %+v", view.Request)
+	}
+}
+
 func TestReleaseStatusAggregatesReleaseBoard(t *testing.T) {
 	root := t.TempDir()
 	if err := adapter.UpsertTask(root, adapter.Task{

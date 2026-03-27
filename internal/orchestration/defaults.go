@@ -14,6 +14,19 @@ type PlannerAgent struct {
 	PromptRef string `json:"promptRef"`
 }
 
+type PlannerCandidate struct {
+	PlannerID      string   `json:"plannerId"`
+	PlannerName    string   `json:"plannerName"`
+	Focus          string   `json:"focus"`
+	TaskName       string   `json:"taskName"`
+	ProposedFlow   string   `json:"proposedFlow,omitempty"`
+	ResultSummary  string   `json:"resultSummary,omitempty"`
+	KeyMoves       []string `json:"keyMoves,omitempty"`
+	Risks          []string `json:"risks,omitempty"`
+	Evidence       []string `json:"evidence,omitempty"`
+	MaterializedBy string   `json:"materializedBy,omitempty"`
+}
+
 type JudgeAgent struct {
 	ID         string   `json:"id"`
 	Name       string   `json:"name"`
@@ -195,6 +208,7 @@ func DefaultPacketSynthesisLoop(root string) PacketSynthesisLoop {
 			"policyTagsApplied",
 			"selectedPlan",
 			"rejectedAlternatives",
+			"sharedContext",
 			"executionTasks",
 			"verificationPlan",
 			"decisionRationale",
@@ -207,6 +221,8 @@ func DefaultPacketSynthesisLoop(root string) PacketSynthesisLoop {
 		WorkerSpecFields: []string{
 			"taskId",
 			"objective",
+			"sharedContextPath",
+			"sharedContext",
 			"constraints",
 			"ownedPaths",
 			"blockedPaths",

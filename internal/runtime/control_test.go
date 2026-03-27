@@ -107,6 +107,58 @@ func TestArchiveTaskRequiresSatisfiedCompletionGate(t *testing.T) {
 	}
 }
 
+func TestArchiveTaskReadsTaskScopedGate(t *testing.T) {
+	root := t.TempDir()
+	paths, err := bootstrap.Init(root)
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	task := adapter.Task{
+		TaskID:    "T-002",
+		ThreadKey: "R-002",
+		Kind:      "feature",
+		Title:     "task-scoped archive",
+		Summary:   "task-scoped archive",
+		Status:    "completed",
+	}
+	if err := adapter.UpsertTask(root, task); err != nil {
+		t.Fatalf("upsert task: %v", err)
+	}
+	if _, err := state.WriteSnapshot(paths.CompletionGateTaskPath(task.TaskID), &verify.CompletionGate{
+		Status:     "satisfied",
+		Satisfied:  true,
+		TaskID:     task.TaskID,
+		DispatchID: "dispatch_T_002_1_1",
+	}, "test", 0); err != nil {
+		t.Fatalf("write task-scoped gate: %v", err)
+	}
+	if _, err := state.WriteSnapshot(paths.GuardStateTaskPath(task.TaskID), &verify.GuardState{
+		Status:                  "retire_ready",
+		TaskID:                  task.TaskID,
+		CompletionGateStatus:    "satisfied",
+		CompletionGateSatisfied: true,
+		RetireEligible:          true,
+		SafeToArchive:           true,
+	}, "test", 0); err != nil {
+		t.Fatalf("write task-scoped guard: %v", err)
+	}
+
+	updated, err := ArchiveTask(root, task.TaskID, "")
+	if err != nil {
+		t.Fatalf("archive from task-scoped gate: %v", err)
+	}
+	if updated.Status != "archived" {
+		t.Fatalf("expected archived status, got %q", updated.Status)
+	}
+	var archivedGate verify.CompletionGate
+	if err := state.LoadJSON(paths.CompletionGateTaskPath(task.TaskID), &archivedGate); err != nil {
+		t.Fatalf("load task-scoped gate: %v", err)
+	}
+	if !archivedGate.Retired {
+		t.Fatalf("expected task-scoped gate to be retired: %#v", archivedGate)
+	}
+}
+
 func TestFinalizeTaskAfterVerificationCompletesTask(t *testing.T) {
 	root := t.TempDir()
 	paths, err := bootstrap.Init(root)

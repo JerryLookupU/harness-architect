@@ -5,7 +5,7 @@ This document captures the MVP runtime policy above the implementation.
 ## Scope
 
 - `harness submit` is the only human-originating write path
-- `harness daemon run-once` and `harness daemon loop` are automation paths
+- `harness daemon loop` and `harness daemon loop` are automation paths
 - `harness control` is the operator control path
 - native `tmux` is an execution backend, not the scheduler
 
@@ -34,7 +34,7 @@ Automation may change code only when:
 
 Automation paths:
 
-- `harness daemon run-once`
+- `harness daemon loop`
 - `harness daemon loop`
 
 Operator actions:

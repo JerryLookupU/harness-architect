@@ -317,6 +317,7 @@ func run(request Request, resume bool) (Result, error) {
 		WorkerID:       "kh-codex",
 		Cwd:            ticket.Cwd,
 		Command:        command,
+		CommandBanner:  bundle.CommandBanner,
 		PromptPath:     bundle.PromptPath,
 		Budget:         ticket.Budget,
 		CheckpointPath: checkpointPath,

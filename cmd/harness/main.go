@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -11,10 +12,28 @@ import (
 
 	"klein-harness/internal/bootstrap"
 	"klein-harness/internal/cli"
+	"klein-harness/internal/dashboard"
 	"klein-harness/internal/query"
 	"klein-harness/internal/runtime"
 	"klein-harness/internal/tmux"
+
+	zeroservice "github.com/zeromicro/go-zero/core/service"
 )
+
+type dashboardOptions struct {
+	Addr             string
+	EnableDaemon     bool
+	DaemonInterval   time.Duration
+	DaemonRunOptions runtime.RunOptions
+}
+
+type daemonLoopService struct {
+	root     string
+	interval time.Duration
+	options  runtime.RunOptions
+	cancel   context.CancelFunc
+	runLoop  daemonLoopRunner
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -39,6 +58,8 @@ func main() {
 		err = runControl(os.Args[2:])
 	case "daemon":
 		err = runDaemon(os.Args[2:])
+	case "dashboard":
+		err = runDashboard(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -52,7 +73,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: harness <init|submit|release-status|release-snapshot|tasks|task|control|daemon> [args...]")
+	fmt.Fprintln(os.Stderr, "usage: harness <init|submit|release-status|release-snapshot|tasks|task|control|daemon|dashboard> [args...]")
 }
 
 func runInit(args []string) error {
@@ -215,43 +236,32 @@ func runControl(args []string) error {
 
 func runDaemon(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: harness daemon <run-once|loop> <ROOT> [args...]")
+		return errors.New("usage: harness daemon <loop> <ROOT> [args...]")
 	}
 	switch args[0] {
-	case "run-once":
-		return runDaemonRunOnce(args[1:])
 	case "loop":
 		return runDaemonLoop(args[1:])
+	case "run-once":
+		return errors.New("harness daemon run-once has been removed; use `harness daemon loop` or `harness dashboard`")
 	default:
 		return fmt.Errorf("unknown daemon action: %s", args[0])
 	}
 }
 
-func runDaemonRunOnce(args []string) error {
+func runDashboard(args []string) error {
 	root, rest, err := cli.ResolveRootArg(args)
 	if err != nil {
 		return err
 	}
-	fs := flag.NewFlagSet("run-once", flag.ContinueOnError)
-	workerID := fs.String("worker-id", "harness-daemon", "worker id")
-	model := fs.String("model", "", "model override")
-	approval := fs.String("approval-policy", "", "approval policy")
-	sandbox := fs.String("sandbox-mode", "", "sandbox mode")
-	skipGitRepoCheck := fs.Bool("skip-git-repo-check", false, "allow running outside a git repo")
-	if err := fs.Parse(rest); err != nil {
-		return err
-	}
-	result, err := runtime.RunOnce(root, runtime.RunOptions{
-		WorkerID:         *workerID,
-		Model:            *model,
-		ApprovalPolicy:   *approval,
-		SandboxMode:      *sandbox,
-		SkipGitRepoCheck: *skipGitRepoCheck,
-	})
+	options, err := parseDashboardOptions(rest)
 	if err != nil {
 		return err
 	}
-	return writeJSON(result)
+	fmt.Fprintf(os.Stderr, "dashboard serving %s at http://%s\n", root, options.Addr)
+	if options.EnableDaemon {
+		fmt.Fprintf(os.Stderr, "dashboard daemon loop enabled interval=%s worker=%s\n", options.DaemonInterval, firstString(options.DaemonRunOptions.WorkerID, "dashboard-daemon"))
+	}
+	return serveDashboard(root, options)
 }
 
 func runDaemonLoop(args []string) error {
@@ -278,6 +288,55 @@ func runDaemonLoop(args []string) error {
 	})
 }
 
+func parseDashboardOptions(args []string) (dashboardOptions, error) {
+	fs := flag.NewFlagSet("dashboard", flag.ContinueOnError)
+	addr := fs.String("addr", "127.0.0.1:7420", "listen address")
+	daemon := fs.Bool("daemon", true, "run the scheduler loop alongside the dashboard")
+	noDaemon := fs.Bool("no-daemon", false, "serve the dashboard without the scheduler loop")
+	daemonInterval := fs.Duration("daemon-interval", 30*time.Second, "scheduler loop interval")
+	workerID := fs.String("worker-id", "dashboard-daemon", "worker id for the scheduler loop")
+	model := fs.String("model", "", "model override for the scheduler loop")
+	approval := fs.String("approval-policy", "", "approval policy for the scheduler loop")
+	sandbox := fs.String("sandbox-mode", "", "sandbox mode for the scheduler loop")
+	skipGitRepoCheck := fs.Bool("skip-git-repo-check", false, "allow running outside a git repo")
+	if err := fs.Parse(args); err != nil {
+		return dashboardOptions{}, err
+	}
+	enableDaemon := *daemon && !*noDaemon
+	return dashboardOptions{
+		Addr:           *addr,
+		EnableDaemon:   enableDaemon,
+		DaemonInterval: *daemonInterval,
+		DaemonRunOptions: runtime.RunOptions{
+			WorkerID:         *workerID,
+			Model:            *model,
+			ApprovalPolicy:   *approval,
+			SandboxMode:      *sandbox,
+			SkipGitRepoCheck: *skipGitRepoCheck,
+		},
+	}, nil
+}
+
+func serveDashboard(root string, options dashboardOptions) error {
+	config, err := dashboard.NewConfig(root, options.Addr)
+	if err != nil {
+		return err
+	}
+	server, err := dashboard.NewServer(config)
+	if err != nil {
+		return err
+	}
+	if !options.EnableDaemon {
+		server.Start()
+		return nil
+	}
+	group := zeroservice.NewServiceGroup()
+	group.Add(server)
+	group.Add(newDaemonLoopService(root, options.DaemonInterval, options.DaemonRunOptions))
+	group.Start()
+	return nil
+}
+
 func interactiveTTY() bool {
 	info, err := os.Stdout.Stat()
 	if err != nil {
@@ -293,6 +352,15 @@ func writeJSON(value any) error {
 	}
 	_, err = os.Stdout.Write(append(payload, '\n'))
 	return err
+}
+
+func firstString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 type stringList []string

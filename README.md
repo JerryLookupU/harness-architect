@@ -64,8 +64,8 @@ harness submit /path/to/repo --goal "Fix failing verify regression" --context do
 harness tasks /path/to/repo
 harness task /path/to/repo T-001
 harness control /path/to/repo task T-001 status
-harness daemon run-once /path/to/repo --skip-git-repo-check
 harness daemon loop /path/to/repo --interval 30s --skip-git-repo-check
+harness dashboard /path/to/repo --addr 127.0.0.1:7420 --skip-git-repo-check
 ```
 
 Compatibility wrappers still work:
@@ -96,7 +96,7 @@ codex exec resume <SESSION_ID> --json --output-last-message <path> ...
 Real execution path:
 
 1. `harness submit`
-2. `harness daemon run-once`
+2. `harness daemon loop` or `harness dashboard`
 3. route task
 4. issue dispatch
 5. acquire and claim lease
@@ -106,7 +106,52 @@ Real execution path:
 9. ingest verify
 10. expose query/control state
 
+`harness dashboard` now starts the operator page and a repo-local `daemon loop` together by default. Use `--no-daemon` when you only want the read surface without background scheduling.
+
+The operator page now runs on a go-zero `rest.Server`, and when daemon mode is enabled it is started in the same go-zero `ServiceGroup` as the repo-local scheduler loop. This keeps the HTTP surface and the runtime loop under one service lifecycle while leaving the core runtime state machine in place.
+
 `harness control /repo task <TASK_ID> attach` uses the real tmux session name. In non-interactive contexts it prints the exact attach command.
+
+## Planning And Dispatch Model
+
+Klein now treats planning, dispatch, and execution as three different layers:
+
+1. planner / judge decide the shared task-group context
+2. judge emits the actual dispatchable task list
+3. tmux workers receive the shared context plus one current execution slice
+
+For corpus-style or batch-style tasks such as "10 mathematicians" or "1000 scientists", the planning layer should freeze the shared decisions before any worker starts:
+
+- who or what is in scope
+- the file schema and required fields
+- the length and format constraints
+- the output directory and naming rules
+- the source / research policy
+
+Those shared decisions now live in packet-level `sharedContext` and are written into task-local `.harness/artifacts/<TASK>/<DISPATCH>/shared-context.json`.
+
+That means workers are expected to:
+
+- read `dispatch-ticket`
+- read `worker-spec`
+- read `shared-context.json`
+- read `task-contract`
+- execute only the current slice
+
+Workers should not rediscover the full roster, rewrite the common prompt, or reopen planner / judge decisions unless the runtime artifacts contradict each other.
+
+`ownedPaths` remains a boundary and audit surface. It is not the primary human task list.
+
+## Worker Prompt Contract
+
+The worker prompt is intentionally lighter than before:
+
+- planning metadata remains in `.harness`
+- shared task-group background remains in `.harness`
+- the active tmux node label follows `[harness:<task-id>] <node-task-description>`
+- the worker focuses on the current batch or milestone, then writes `worker-result.json`, `verify.json`, and `handoff.md`
+
+This separation is important for large-volume task groups. The worker should act like a bounded executor, not a second outer orchestrator.
 
 ## Runtime State
 
@@ -156,18 +201,36 @@ Unit tests:
 go test ./...
 ```
 
-Integration tests with fake `tmux` and fake `codex`:
+If your local macOS toolchain currently fails with a `libtapi.dylib` signature error during link, use:
+
+```bash
+CGO_ENABLED=0 go test ./...
+CGO_ENABLED=0 go build ./cmd/harness
+```
+
+That is a local linker environment issue, not a harness runtime requirement.
+
+Coverage-oriented integration tests:
 
 ```bash
 go test -tags=integration ./...
 ```
 
-Real smoke tests only when the environment is ready:
+These tests are for regression coverage, not the final source of truth for runtime behavior.
 
-```bash
-KLEIN_REAL_SMOKE=1 bash scripts/smoke/runtime-smoke.sh
-KLEIN_REAL_SMOKE=1 bash scripts/smoke/tmux-codex-smoke.sh
-```
+Real validation should happen through actual harness usage in the target repo and environment:
+
+- submit a real task
+- let `harness daemon loop` or `harness dashboard` drive the runtime
+- inspect the real task/thread/dispatch/tmux/verify surfaces
+- iterate from those real outcomes instead of synthetic smoke flows
+
+Klein intentionally prefers real runtime validation over synthetic smoke flows:
+
+- use real repo state
+- use real tmux workers
+- use real verify / handoff artifacts
+- use coverage tests for regression protection, not as a replacement for real operator feedback
 
 ## Migration Notes
 

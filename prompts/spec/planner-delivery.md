@@ -10,6 +10,7 @@ Focus:
 - dependency order
 - task-local worker-spec slicing
 - operator-visible milestones
+- task-group prompt reuse across worker slices
 
 Output format:
 - return exactly one JSON object
@@ -72,8 +73,11 @@ Field rules:
 - `packetCandidate` must follow `packet.md`
 - every item in `workerSpecCandidates` must follow `worker-spec.md`
 - `executionTasks`, `dependencies`, and `phaseBoundaries` must be explicit enough for dispatch and operator review
+- `executionTasks` should be the judge-ready task list, not a restatement of owned paths
+- each execution task should inherit shared planning from `packetCandidate.sharedContext` and add only batch-local information such as entity subset, output targets, or current milestone
 - fill planner-relevant arrays; leave non-relevant arrays empty instead of renaming keys
 
 Hard rule:
 - keep worker-spec slices independently claimable when possible
+- when a request implies large-volume content generation, split work into planning phases and bounded production batches before dispatch
 - stop at orchestration output; do not drift into implementation beyond task decomposition and ordering

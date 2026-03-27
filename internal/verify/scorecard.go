@@ -38,10 +38,19 @@ func LoadAssessment(path string) (Assessment, error) {
 	if err != nil {
 		return Assessment{}, err
 	}
-	var assessment Assessment
-	if err := json.Unmarshal(payload, &assessment); err != nil {
+	var envelope struct {
+		Assessment
+		Scorecard json.RawMessage `json:"scorecard,omitempty"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
 		return Assessment{}, err
 	}
+	assessment := envelope.Assessment
+	scorecard, err := decodeScorecard(envelope.Scorecard)
+	if err != nil {
+		return Assessment{}, err
+	}
+	assessment.Scorecard = scorecard
 	var raw map[string]any
 	if err := json.Unmarshal(payload, &raw); err == nil {
 		if strings.TrimSpace(assessment.OverallStatus) == "" {
@@ -80,6 +89,71 @@ func LoadAssessment(path string) (Assessment, error) {
 		assessment.RecommendedNextAction = deriveRecommendedNextAction(assessment)
 	}
 	return assessment, nil
+}
+
+func decodeScorecard(payload json.RawMessage) ([]ScorecardItem, error) {
+	if len(strings.TrimSpace(string(payload))) == 0 || strings.EqualFold(strings.TrimSpace(string(payload)), "null") {
+		return nil, nil
+	}
+	var items []ScorecardItem
+	if err := json.Unmarshal(payload, &items); err == nil {
+		return items, nil
+	}
+	var container struct {
+		Requirements []scorecardRequirement `json:"requirements"`
+		Items        []scorecardRequirement `json:"items"`
+	}
+	if err := json.Unmarshal(payload, &container); err != nil {
+		return nil, err
+	}
+	requirements := container.Requirements
+	if len(requirements) == 0 {
+		requirements = container.Items
+	}
+	out := make([]ScorecardItem, 0, len(requirements))
+	for _, requirement := range requirements {
+		out = append(out, requirement.toScorecardItem())
+	}
+	return out, nil
+}
+
+type scorecardRequirement struct {
+	ID        string `json:"id"`
+	Name      string `json:"name,omitempty"`
+	Title     string `json:"title,omitempty"`
+	Status    string `json:"status,omitempty"`
+	Summary   string `json:"summary,omitempty"`
+	Evidence  string `json:"evidence,omitempty"`
+	Note      string `json:"note,omitempty"`
+	Result    string `json:"result,omitempty"`
+	Score     int    `json:"score,omitempty"`
+	Threshold int    `json:"threshold,omitempty"`
+}
+
+func (item scorecardRequirement) toScorecardItem() ScorecardItem {
+	title := firstNonEmpty(item.Title, item.Name, item.ID)
+	summary := firstNonEmpty(item.Summary, item.Evidence, item.Note, item.Result)
+	score := item.Score
+	threshold := item.Threshold
+	if threshold == 0 {
+		threshold = 3
+	}
+	if score == 0 {
+		switch normalizeScorecardStatus(item.Status) {
+		case "pass":
+			score = threshold
+		case "blocked", "fail":
+			score = 1
+		}
+	}
+	return ScorecardItem{
+		ID:        firstNonEmpty(item.ID, title),
+		Title:     title,
+		Score:     score,
+		Threshold: threshold,
+		Status:    item.Status,
+		Summary:   summary,
+	}
 }
 
 func AssessmentPath(root, taskID, dispatchID string) string {
@@ -343,6 +417,15 @@ func coalesceString(values ...any) string {
 			if strings.TrimSpace(typed) != "" {
 				return typed
 			}
+		}
+	}
+	return ""
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
 		}
 	}
 	return ""
