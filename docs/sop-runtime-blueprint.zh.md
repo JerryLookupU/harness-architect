@@ -48,6 +48,7 @@
 - `repeated_entity_corpus` 会挂上 shared-spec-frozen / programmatic-verify-first 策略信号
 - `development_task` 及其子 family 会挂上 compiled-contract-first 策略信号
 - family 不再只是 submit metadata，而是 dispatch 前就进入 route policy
+- 对历史遗留或丢失 `taskFamily` / `sopId` 的 task，`RunOnce` 会先做一次 programmatic backfill，再进入 route
 
 ## 上下文四层模型
 
@@ -87,6 +88,7 @@
 - runtime control context 主要给程序，不要求 worker 大量读取
 - 四层会同时落成 `request-context.json`、`shared-flow-context.json`、`slice-context.json`、`runtime-control-context.json`
 - runtime 另外会聚合生成 `context-layers.json`，让下一 session 按固定入口接棒
+- control/query 面会显式暴露这些 compiled context refs，便于 operator 追踪当前 slice 绑定的是哪一套合同
 
 ## SOP Registry
 
@@ -182,6 +184,7 @@ prompt 默认引导 worker 先看：
 
 第一版增加程序化 `verify-skeleton.json`，避免 worker 输出空对象。
 同时增加程序化 `closeout-skeleton.json` 与 `handoff-contract.json`，把 closeout / handoff 必填段落和 resume read order 固定下来。
+`task-contract.json` 也会反向指向 `shared-flow-context.json`、`task-graph.json`、`slice-context.json`、`context-layers.json`、`verify-skeleton.json`、`closeout-skeleton.json`、`handoff-contract.json`、`takeover-context.json`，让 verify gate 能检查 continuation contract 是否完整。
 
 runtime 侧额外增加一条硬闸门：
 

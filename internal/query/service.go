@@ -53,37 +53,37 @@ type PlanningView struct {
 }
 
 type TaskView struct {
-	Task            adapter.Task                  `json:"task"`
-	Dispatch        *dispatch.Ticket              `json:"dispatch,omitempty"`
-	Lease           *lease.Record                 `json:"lease,omitempty"`
-	Completion      *verify.CompletionGate        `json:"completionGate,omitempty"`
-	Guard           *verify.GuardState            `json:"guardState,omitempty"`
-	Release         ReleaseReadiness              `json:"release"`
-	Tmux            *tmux.SessionState            `json:"tmux,omitempty"`
-	Planning        *PlanningView                 `json:"planning,omitempty"`
-	AcceptedPacket  *orchestration.AcceptedPacket `json:"acceptedPacket,omitempty"`
-	PacketProgress  *orchestration.PacketProgress `json:"packetProgress,omitempty"`
-	RemainingSlices []string                      `json:"remainingSlices,omitempty"`
-	NextSliceID     string                        `json:"nextSliceId,omitempty"`
-	TaskContract    *orchestration.TaskContract   `json:"taskContract,omitempty"`
-	ContextLayers   *orchestration.ContextLayers  `json:"contextLayers,omitempty"`
-	SharedFlow      *orchestration.SharedFlowContext `json:"sharedFlow,omitempty"`
-	SliceContext    *orchestration.SliceLocalContext `json:"sliceContext,omitempty"`
-	VerifySkeleton  *orchestration.VerifySkeleton `json:"verifySkeleton,omitempty"`
-	Closeout        *orchestration.CloseoutSkeleton `json:"closeout,omitempty"`
-	Handoff         *orchestration.HandoffContract `json:"handoff,omitempty"`
+	Task            adapter.Task                        `json:"task"`
+	Dispatch        *dispatch.Ticket                    `json:"dispatch,omitempty"`
+	Lease           *lease.Record                       `json:"lease,omitempty"`
+	Completion      *verify.CompletionGate              `json:"completionGate,omitempty"`
+	Guard           *verify.GuardState                  `json:"guardState,omitempty"`
+	Release         ReleaseReadiness                    `json:"release"`
+	Tmux            *tmux.SessionState                  `json:"tmux,omitempty"`
+	Planning        *PlanningView                       `json:"planning,omitempty"`
+	AcceptedPacket  *orchestration.AcceptedPacket       `json:"acceptedPacket,omitempty"`
+	PacketProgress  *orchestration.PacketProgress       `json:"packetProgress,omitempty"`
+	RemainingSlices []string                            `json:"remainingSlices,omitempty"`
+	NextSliceID     string                              `json:"nextSliceId,omitempty"`
+	TaskContract    *orchestration.TaskContract         `json:"taskContract,omitempty"`
+	ContextLayers   *orchestration.ContextLayers        `json:"contextLayers,omitempty"`
+	SharedFlow      *orchestration.SharedFlowContext    `json:"sharedFlow,omitempty"`
+	SliceContext    *orchestration.SliceLocalContext    `json:"sliceContext,omitempty"`
+	VerifySkeleton  *orchestration.VerifySkeleton       `json:"verifySkeleton,omitempty"`
+	Closeout        *orchestration.CloseoutSkeleton     `json:"closeout,omitempty"`
+	Handoff         *orchestration.HandoffContract      `json:"handoff,omitempty"`
 	Continuation    *orchestration.ContinuationProtocol `json:"continuation,omitempty"`
-	Assessment      *verify.Assessment            `json:"assessment,omitempty"`
-	Request         *runtime.RequestRecord        `json:"request,omitempty"`
-	IntakeSummary   *runtime.IntakeSummary        `json:"intakeSummary,omitempty"`
-	ThreadEntry     *runtime.ThreadEntry          `json:"threadEntry,omitempty"`
-	ChangeSummary   *runtime.ChangeSummary        `json:"changeSummary,omitempty"`
-	TodoSummary     *runtime.TodoSummary          `json:"todoSummary,omitempty"`
-	OuterLoopMemory *verify.TaskFeedbackSummary   `json:"outerLoopMemory,omitempty"`
-	ActiveSkills    []string                      `json:"activeSkills,omitempty"`
-	SkillHints      []string                      `json:"skillHints,omitempty"`
-	AttachCommand   string                        `json:"attachCommand,omitempty"`
-	LogPreview      []string                      `json:"logPreview,omitempty"`
+	Assessment      *verify.Assessment                  `json:"assessment,omitempty"`
+	Request         *runtime.RequestRecord              `json:"request,omitempty"`
+	IntakeSummary   *runtime.IntakeSummary              `json:"intakeSummary,omitempty"`
+	ThreadEntry     *runtime.ThreadEntry                `json:"threadEntry,omitempty"`
+	ChangeSummary   *runtime.ChangeSummary              `json:"changeSummary,omitempty"`
+	TodoSummary     *runtime.TodoSummary                `json:"todoSummary,omitempty"`
+	OuterLoopMemory *verify.TaskFeedbackSummary         `json:"outerLoopMemory,omitempty"`
+	ActiveSkills    []string                            `json:"activeSkills,omitempty"`
+	SkillHints      []string                            `json:"skillHints,omitempty"`
+	AttachCommand   string                              `json:"attachCommand,omitempty"`
+	LogPreview      []string                            `json:"logPreview,omitempty"`
 }
 
 type ReleaseReadiness struct {
@@ -544,37 +544,44 @@ func loadTaskContract(root, taskID, dispatchID string) (orchestration.TaskContra
 
 func loadContextLayers(planning *PlanningView, contract *orchestration.TaskContract) (orchestration.ContextLayers, bool, error) {
 	var payload orchestration.ContextLayers
-	return payload, loadJSONIfPresent(firstNonEmptyPlanningPath(contractPath(contract, func(c *orchestration.TaskContract) string { return c.ContextLayersPath }), planningPath(planning, func(p *PlanningView) string { return p.ContextLayersPath })), &payload)
+	ok, err := loadJSONIfPresent(firstNonEmptyPlanningPath(contractPath(contract, func(c *orchestration.TaskContract) string { return c.ContextLayersPath }), planningPath(planning, func(p *PlanningView) string { return p.ContextLayersPath })), &payload)
+	return payload, ok, err
 }
 
 func loadSharedFlowContext(planning *PlanningView, contract *orchestration.TaskContract) (orchestration.SharedFlowContext, bool, error) {
 	var payload orchestration.SharedFlowContext
-	return payload, loadJSONIfPresent(firstNonEmptyPlanningPath(contractPath(contract, func(c *orchestration.TaskContract) string { return c.SharedFlowContextPath }), planningPath(planning, func(p *PlanningView) string { return p.SharedFlowPath })), &payload)
+	ok, err := loadJSONIfPresent(firstNonEmptyPlanningPath(contractPath(contract, func(c *orchestration.TaskContract) string { return c.SharedFlowContextPath }), planningPath(planning, func(p *PlanningView) string { return p.SharedFlowPath })), &payload)
+	return payload, ok, err
 }
 
 func loadSliceContext(planning *PlanningView, contract *orchestration.TaskContract) (orchestration.SliceLocalContext, bool, error) {
 	var payload orchestration.SliceLocalContext
-	return payload, loadJSONIfPresent(firstNonEmptyPlanningPath(contractPath(contract, func(c *orchestration.TaskContract) string { return c.SliceContextPath }), planningPath(planning, func(p *PlanningView) string { return p.SliceContextPath })), &payload)
+	ok, err := loadJSONIfPresent(firstNonEmptyPlanningPath(contractPath(contract, func(c *orchestration.TaskContract) string { return c.SliceContextPath }), planningPath(planning, func(p *PlanningView) string { return p.SliceContextPath })), &payload)
+	return payload, ok, err
 }
 
 func loadVerifySkeleton(planning *PlanningView, contract *orchestration.TaskContract) (orchestration.VerifySkeleton, bool, error) {
 	var payload orchestration.VerifySkeleton
-	return payload, loadJSONIfPresent(firstNonEmptyPlanningPath(contractPath(contract, func(c *orchestration.TaskContract) string { return c.VerifySkeletonPath }), planningPath(planning, func(p *PlanningView) string { return p.VerifySkeletonPath })), &payload)
+	ok, err := loadJSONIfPresent(firstNonEmptyPlanningPath(contractPath(contract, func(c *orchestration.TaskContract) string { return c.VerifySkeletonPath }), planningPath(planning, func(p *PlanningView) string { return p.VerifySkeletonPath })), &payload)
+	return payload, ok, err
 }
 
 func loadCloseoutSkeleton(planning *PlanningView, contract *orchestration.TaskContract) (orchestration.CloseoutSkeleton, bool, error) {
 	var payload orchestration.CloseoutSkeleton
-	return payload, loadJSONIfPresent(firstNonEmptyPlanningPath(contractPath(contract, func(c *orchestration.TaskContract) string { return c.CloseoutSkeletonPath }), planningPath(planning, func(p *PlanningView) string { return p.CloseoutPath })), &payload)
+	ok, err := loadJSONIfPresent(firstNonEmptyPlanningPath(contractPath(contract, func(c *orchestration.TaskContract) string { return c.CloseoutSkeletonPath }), planningPath(planning, func(p *PlanningView) string { return p.CloseoutPath })), &payload)
+	return payload, ok, err
 }
 
 func loadHandoffContract(planning *PlanningView, contract *orchestration.TaskContract) (orchestration.HandoffContract, bool, error) {
 	var payload orchestration.HandoffContract
-	return payload, loadJSONIfPresent(firstNonEmptyPlanningPath(contractPath(contract, func(c *orchestration.TaskContract) string { return c.HandoffContractPath }), planningPath(planning, func(p *PlanningView) string { return p.HandoffPath })), &payload)
+	ok, err := loadJSONIfPresent(firstNonEmptyPlanningPath(contractPath(contract, func(c *orchestration.TaskContract) string { return c.HandoffContractPath }), planningPath(planning, func(p *PlanningView) string { return p.HandoffPath })), &payload)
+	return payload, ok, err
 }
 
 func loadContinuation(planning *PlanningView, contract *orchestration.TaskContract) (orchestration.ContinuationProtocol, bool, error) {
 	var payload orchestration.ContinuationProtocol
-	return payload, loadJSONIfPresent(firstNonEmptyPlanningPath(contractPath(contract, func(c *orchestration.TaskContract) string { return c.TakeoverPath }), planningPath(planning, func(p *PlanningView) string { return p.TakeoverPath })), &payload)
+	ok, err := loadJSONIfPresent(firstNonEmptyPlanningPath(contractPath(contract, func(c *orchestration.TaskContract) string { return c.TakeoverPath }), planningPath(planning, func(p *PlanningView) string { return p.TakeoverPath })), &payload)
+	return payload, ok, err
 }
 
 func loadAssessment(root, taskID, dispatchID string) (verify.Assessment, bool, error) {

@@ -1,6 +1,7 @@
 package query
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -64,6 +65,160 @@ func TestTaskIncludesPlanningActiveSkillsAndHints(t *testing.T) {
 	}
 	if view.Planning == nil || len(view.Planning.ActiveSkills) != 2 || len(view.Planning.SkillHints) == 0 {
 		t.Fatalf("expected planning active skills and hints: %+v", view.Planning)
+	}
+}
+
+func TestTaskLoadsCompiledContextAndContinuationContracts(t *testing.T) {
+	root := t.TempDir()
+	if err := adapter.UpsertTask(root, adapter.Task{
+		TaskID:         "T-contract",
+		ThreadKey:      "thread-contract",
+		Title:          "Resume compiled contracts",
+		Summary:        "Resume compiled contracts",
+		PlanEpoch:      1,
+		Status:         "running",
+		LastDispatchID: "dispatch-contract",
+		OwnedPaths:     []string{"internal/query/**"},
+	}); err != nil {
+		t.Fatalf("upsert task: %v", err)
+	}
+	paths, err := adapter.Resolve(root)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	artifactDir := filepath.Join(paths.ArtifactsDir, "T-contract", "dispatch-contract")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact dir: %v", err)
+	}
+	contextLayersPath := filepath.Join(artifactDir, "context-layers.json")
+	sharedFlowPath := filepath.Join(artifactDir, "shared-flow-context.json")
+	sliceContextPath := filepath.Join(artifactDir, "slice-context.json")
+	verifySkeletonPath := filepath.Join(artifactDir, "verify-skeleton.json")
+	closeoutPath := filepath.Join(artifactDir, "closeout-skeleton.json")
+	handoffPath := filepath.Join(artifactDir, "handoff-contract.json")
+	takeoverPath := filepath.Join(artifactDir, "takeover-context.json")
+
+	if err := writeJSONFile(contextLayersPath, map[string]any{
+		"schemaVersion":  "kh.context-layers.v1",
+		"request":        map[string]any{"goal": "Resume compiled contracts"},
+		"sharedFlow":     map[string]any{"taskFamily": "feature_system", "sopId": "sop.development_task.v1", "summary": "shared summary"},
+		"sliceLocal":     map[string]any{"executionSliceId": "T-contract.slice.1", "sliceMode": "direct_pass"},
+		"runtimeControl": map[string]any{"taskId": "T-contract", "dispatchId": "dispatch-contract"},
+	}); err != nil {
+		t.Fatalf("write context layers: %v", err)
+	}
+	if err := writeJSONFile(sharedFlowPath, map[string]any{
+		"taskFamily":     "feature_system",
+		"sopId":          "sop.development_task.v1",
+		"summary":        "shared summary",
+		"compiledPhases": []string{"requirement_spec", "task_graph_compile"},
+		"taskGraphRef":   filepath.Join(artifactDir, "task-graph.json"),
+	}); err != nil {
+		t.Fatalf("write shared flow: %v", err)
+	}
+	if err := writeJSONFile(sliceContextPath, map[string]any{
+		"executionSliceId":  "T-contract.slice.1",
+		"sliceMode":         "direct_pass",
+		"allowedWriteGlobs": []string{"internal/query/**"},
+	}); err != nil {
+		t.Fatalf("write slice context: %v", err)
+	}
+	if err := writeJSONFile(verifySkeletonPath, map[string]any{
+		"schemaVersion":    "kh.verify-skeleton.v1",
+		"taskId":           "T-contract",
+		"executionSliceId": "T-contract.slice.1",
+		"checks":           []map[string]any{{"id": "required_artifacts", "kind": "artifact_presence", "description": "required artifacts"}},
+	}); err != nil {
+		t.Fatalf("write verify skeleton: %v", err)
+	}
+	if err := writeJSONFile(closeoutPath, map[string]any{
+		"schemaVersion":      "kh.closeout-skeleton.v1",
+		"taskId":             "T-contract",
+		"verifySkeletonPath": verifySkeletonPath,
+		"workerMustProvide":  []string{"verify.json", "handoff.md"},
+	}); err != nil {
+		t.Fatalf("write closeout skeleton: %v", err)
+	}
+	if err := writeJSONFile(handoffPath, map[string]any{
+		"schemaVersion":      "kh.handoff-contract.v1",
+		"taskId":             "T-contract",
+		"executionSliceId":   "T-contract.slice.1",
+		"requiredArtifacts":  []string{"verify.json", "handoff.md"},
+		"resumeInstructions": []string{"resume from context-layers.json"},
+	}); err != nil {
+		t.Fatalf("write handoff contract: %v", err)
+	}
+	if err := writeJSONFile(takeoverPath, map[string]any{
+		"schemaVersion":         "kh.multi-session-continuation.v1",
+		"taskId":                "T-contract",
+		"dispatchId":            "dispatch-contract",
+		"executionSliceId":      "T-contract.slice.1",
+		"contextLayersPath":     contextLayersPath,
+		"sharedFlowContextPath": sharedFlowPath,
+		"sliceContextPath":      sliceContextPath,
+		"verifySkeletonPath":    verifySkeletonPath,
+		"closeoutSkeletonPath":  closeoutPath,
+		"handoffContractPath":   handoffPath,
+		"readOrder":             []string{contextLayersPath, sharedFlowPath, sliceContextPath},
+	}); err != nil {
+		t.Fatalf("write takeover contract: %v", err)
+	}
+	if err := orchestration.WriteTaskContract(filepath.Join(artifactDir, "task-contract.json"), orchestration.TaskContract{
+		SchemaVersion:         "kh.task-contract.v1",
+		Generator:             "test",
+		GeneratedAt:           "2026-03-29T10:00:00Z",
+		ContractID:            "contract_T-contract_1_1",
+		TaskID:                "T-contract",
+		TaskFamily:            orchestration.TaskFamilyFeatureSystem,
+		SOPID:                 orchestration.SOPDevelopmentTaskV1,
+		DispatchID:            "dispatch-contract",
+		ThreadKey:             "thread-contract",
+		PlanEpoch:             1,
+		ExecutionSliceID:      "T-contract.slice.1",
+		Objective:             "Resume compiled contracts",
+		InScope:               []string{"internal/query/**"},
+		DoneCriteria:          []string{"contracts remain traceable"},
+		VerificationChecklist: []orchestration.VerificationChecklistItem{{ID: "required_artifacts", Title: "required artifacts", Required: true}},
+		RequiredEvidence:      []string{"verify.json"},
+		ReviewRequired:        false,
+		ContractStatus:        "accepted",
+		ProposedBy:            "test",
+		AcceptedBy:            "test",
+		AcceptedAt:            "2026-03-29T10:00:00Z",
+		AcceptedPacketPath:    orchestration.AcceptedPacketPath(root, "T-contract"),
+		SharedFlowContextPath: sharedFlowPath,
+		TaskGraphPath:         filepath.Join(artifactDir, "task-graph.json"),
+		SliceContextPath:      sliceContextPath,
+		ContextLayersPath:     contextLayersPath,
+		VerifySkeletonPath:    verifySkeletonPath,
+		CloseoutSkeletonPath:  closeoutPath,
+		HandoffContractPath:   handoffPath,
+		TakeoverPath:          takeoverPath,
+	}); err != nil {
+		t.Fatalf("write task contract: %v", err)
+	}
+
+	view, err := Task(root, "T-contract")
+	if err != nil {
+		t.Fatalf("task view: %v", err)
+	}
+	if view.ContextLayers == nil || view.ContextLayers.SliceLocal.ExecutionSliceID != "T-contract.slice.1" {
+		t.Fatalf("expected context layers in task view: %+v", view.ContextLayers)
+	}
+	if view.SharedFlow == nil || view.SharedFlow.SOPID != orchestration.SOPDevelopmentTaskV1 {
+		t.Fatalf("expected shared flow context in task view: %+v", view.SharedFlow)
+	}
+	if view.VerifySkeleton == nil || len(view.VerifySkeleton.Checks) == 0 {
+		t.Fatalf("expected verify skeleton in task view: %+v", view.VerifySkeleton)
+	}
+	if view.Closeout == nil || len(view.Closeout.WorkerMustProvide) == 0 {
+		t.Fatalf("expected closeout skeleton in task view: %+v", view.Closeout)
+	}
+	if view.Handoff == nil || len(view.Handoff.ResumeInstructions) == 0 {
+		t.Fatalf("expected handoff contract in task view: %+v", view.Handoff)
+	}
+	if view.Continuation == nil || view.Continuation.ContextLayersPath != contextLayersPath || view.Continuation.HandoffContractPath != handoffPath {
+		t.Fatalf("expected continuation protocol in task view: %+v", view.Continuation)
 	}
 }
 
@@ -479,4 +634,12 @@ func TestBuildReleaseSnapshotMarksDirtyBoardAsNotReady(t *testing.T) {
 	if len(snapshot.BlockingReasons) < 2 {
 		t.Fatalf("expected blocking reasons in release snapshot: %+v", snapshot)
 	}
+}
+
+func writeJSONFile(path string, value any) error {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, payload, 0o644)
 }
