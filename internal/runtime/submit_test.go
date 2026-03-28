@@ -504,6 +504,18 @@ func TestBuildRouteInputCarriesIntakeSignals(t *testing.T) {
 	}
 }
 
+func TestShouldEnterAnalysisLoopDoesNotRetryBlockedByDefault(t *testing.T) {
+	if ShouldEnterAnalysisLoop("", "blocked", "", nil) {
+		t.Fatalf("expected blocked verification to stop instead of auto-retrying")
+	}
+	if ShouldEnterAnalysisLoop("", "", "task.blocked", nil) {
+		t.Fatalf("expected task.blocked follow-up to stop instead of auto-retrying")
+	}
+	if !ShouldEnterAnalysisLoop("", "", "replan.emitted", nil) {
+		t.Fatalf("expected explicit replan follow-up to stay retryable")
+	}
+}
+
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {

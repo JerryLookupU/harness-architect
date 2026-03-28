@@ -477,6 +477,20 @@ func executionTasksProgressCheck(root, taskID, acceptedPacketPath string) (GateC
 		}
 		return GateCheck{}, nil, err
 	}
+	if progress.PlanEpoch != 0 && progress.PlanEpoch != packet.PlanEpoch {
+		return GateCheck{
+			Name:   "executionTasks",
+			OK:     false,
+			Detail: fmt.Sprintf("executionTasks=%d staleProgressPlanEpoch=%d expected=%d", len(packet.ExecutionTasks), progress.PlanEpoch, packet.PlanEpoch),
+		}, []string{acceptedPacketPath, progressPath}, nil
+	}
+	if strings.TrimSpace(progress.AcceptedPacketID) != "" && progress.AcceptedPacketID != packet.PacketID {
+		return GateCheck{
+			Name:   "executionTasks",
+			OK:     false,
+			Detail: fmt.Sprintf("executionTasks=%d staleProgressPacket=%s expected=%s", len(packet.ExecutionTasks), progress.AcceptedPacketID, packet.PacketID),
+		}, []string{acceptedPacketPath, progressPath}, nil
+	}
 	completed := map[string]struct{}{}
 	for _, id := range progress.CompletedSliceIDs {
 		completed[id] = struct{}{}

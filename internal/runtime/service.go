@@ -874,11 +874,11 @@ func shouldEnterAnalysisLoop(burstStatus, verifyStatus, followUp string, verifyE
 		return true
 	}
 	switch verifyStatus {
-	case "failed", "blocked":
+	case "failed":
 		return true
 	}
 	switch followUp {
-	case "replan.emitted", "task.blocked":
+	case "replan.emitted":
 		return true
 	}
 	return false

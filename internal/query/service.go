@@ -198,7 +198,7 @@ func Task(root, taskID string) (TaskView, error) {
 		}
 	}
 	if view.AcceptedPacket != nil {
-		view.RemainingSlices = remainingExecutionSlices(view.AcceptedPacket.ExecutionTasks, view.PacketProgress)
+		view.RemainingSlices = remainingExecutionSlices(*view.AcceptedPacket, view.PacketProgress)
 		if len(view.RemainingSlices) > 0 {
 			view.NextSliceID = view.RemainingSlices[0]
 		}
@@ -591,12 +591,14 @@ func loadRequestIndex(path string) (runtime.RequestIndex, bool, error) {
 	return index, ok, nil
 }
 
-func remainingExecutionSlices(tasks []orchestration.ExecutionTask, progress *orchestration.PacketProgress) []string {
+func remainingExecutionSlices(packet orchestration.AcceptedPacket, progress *orchestration.PacketProgress) []string {
+	tasks := packet.ExecutionTasks
 	if len(tasks) == 0 {
 		return nil
 	}
 	completed := map[string]struct{}{}
-	if progress != nil {
+	if progress != nil && progress.PlanEpoch == packet.PlanEpoch &&
+		(strings.TrimSpace(progress.AcceptedPacketID) == "" || progress.AcceptedPacketID == packet.PacketID) {
 		for _, id := range progress.CompletedSliceIDs {
 			completed[id] = struct{}{}
 		}

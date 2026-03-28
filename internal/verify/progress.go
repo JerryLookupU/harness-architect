@@ -37,7 +37,7 @@ func recordCompletedExecutionSlice(root, taskID, dispatchID string) error {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if progress.TaskID == "" {
+	if progress.TaskID == "" || progress.PlanEpoch != packet.PlanEpoch || progress.AcceptedPacketID != packet.PacketID {
 		progress = orchestration.PacketProgress{
 			SchemaVersion:    "kh.packet-progress.v1",
 			Generator:        "kh-orchestrator",

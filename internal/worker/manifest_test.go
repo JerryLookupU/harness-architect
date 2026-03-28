@@ -314,13 +314,13 @@ func TestPrepareWritesDispatchTicketWorkerSpecAndPrompt(t *testing.T) {
 		t.Fatalf("read prompt: %v", err)
 	}
 	promptText := string(prompt)
-	if !strings.Contains(promptText, "Dispatch summary:") {
-		t.Fatalf("prompt missing dispatch summary section")
+	if !strings.Contains(promptText, "Task background:") {
+		t.Fatalf("prompt missing task background section")
 	}
 	if !strings.Contains(promptText, "activeSkills: qiushi-execution") {
 		t.Fatalf("prompt missing active skills guidance: %s", promptText)
 	}
-	if !strings.Contains(promptText, "runtime-owned files inside .harness remain authoritative.") {
+	if !strings.Contains(promptText, "runtime-owned files inside .harness remain authoritative, but this prompt is the primary worker handoff.") {
 		t.Fatalf("prompt missing skill authority guidance: %s", promptText)
 	}
 	if !strings.Contains(promptText, bundle.WorkerSpecPath) {
@@ -338,22 +338,25 @@ func TestPrepareWritesDispatchTicketWorkerSpecAndPrompt(t *testing.T) {
 	if !strings.Contains(promptText, ticket.ExecutionSliceID) {
 		t.Fatalf("prompt missing execution slice id: %s", promptText)
 	}
-	if !strings.Contains(promptText, "After those reads, move to execution.") {
-		t.Fatalf("prompt missing simplified execution handoff")
-	}
 	if !strings.Contains(promptText, "metadata-backed B3Ehive") {
 		t.Fatalf("prompt missing visible B3Ehive guidance")
 	}
-	if !strings.Contains(promptText, "Worker contract:") {
-		t.Fatalf("prompt missing worker contract section")
+	if !strings.Contains(promptText, "Shared constraints:") {
+		t.Fatalf("prompt missing shared constraints section")
+	}
+	if !strings.Contains(promptText, "Shared spec:") {
+		t.Fatalf("prompt missing shared spec section")
+	}
+	if !strings.Contains(promptText, "Current worker task:") {
+		t.Fatalf("prompt missing current worker task section")
 	}
 	if !strings.Contains(promptText, "Shared task-group context:") {
 		t.Fatalf("prompt missing shared task-group context section")
 	}
-	if !strings.Contains(promptText, "Soft constraints appended after the base prompt:") {
+	if !strings.Contains(promptText, "Soft constraints:") {
 		t.Fatalf("prompt missing soft constraints section")
 	}
-	if !strings.Contains(promptText, "Hard constraints verified item-by-item by runtime / verify:") {
+	if !strings.Contains(promptText, "Hard constraints checked by runtime / verify:") {
 		t.Fatalf("prompt missing hard constraints section")
 	}
 	if !strings.Contains(promptText, "[execution/process/soft/enforced]") {
@@ -373,6 +376,9 @@ func TestPrepareWritesDispatchTicketWorkerSpecAndPrompt(t *testing.T) {
 	}
 	if !strings.Contains(promptText, "On-demand runtime refs when blocked:") {
 		t.Fatalf("prompt missing on-demand runtime refs section")
+	}
+	if strings.Contains(promptText, "Read the immutable dispatch ticket") || strings.Contains(promptText, "Read the task-local worker spec") {
+		t.Fatalf("prompt should not instruct the worker to front-load raw JSON files: %s", promptText)
 	}
 	if !strings.Contains(promptText, "Hookified verification flow:") {
 		t.Fatalf("prompt missing hookified verification flow section")
@@ -680,6 +686,89 @@ func TestPrepareSelectsFirstIncompleteSliceFromProgress(t *testing.T) {
 	}
 }
 
+func TestPrepareResetsStalePacketProgressAcrossPlanEpoch(t *testing.T) {
+	root := t.TempDir()
+	harnessDir := filepath.Join(root, ".harness")
+	if err := os.MkdirAll(filepath.Join(harnessDir, "state"), 0o755); err != nil {
+		t.Fatalf("mkdir harness state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(harnessDir, "task-pool.json"), []byte(`{
+  "tasks": [
+    {
+      "taskId": "T-3b",
+      "threadKey": "thread-3b",
+      "kind": "feature",
+      "roleHint": "worker",
+      "title": "Progress reset on replan",
+      "summary": "Track dashboard execution.\n1. Show tasklist.\n2. Show checklist.\n3. Show token usage.",
+      "workerMode": "execution",
+      "planEpoch": 2,
+      "ownedPaths": ["internal/worker/**", "internal/verify/**", "prompts/spec/**"],
+      "forbiddenPaths": [".harness/**"],
+      "resumeStrategy": "fresh",
+      "routingModel": "gpt-5.4",
+      "executionModel": "gpt-5.3-codex",
+      "orchestrationSessionId": "orch-3b",
+      "promptStages": ["route", "dispatch", "execute", "verify"]
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write task-pool: %v", err)
+	}
+	if err := orchestration.WritePacketProgress(orchestration.PacketProgressPath(root, "T-3b"), orchestration.PacketProgress{
+		SchemaVersion:     "kh.packet-progress.v1",
+		Generator:         "test",
+		UpdatedAt:         "2026-03-26T10:00:00Z",
+		TaskID:            "T-3b",
+		ThreadKey:         "thread-3b",
+		PlanEpoch:         1,
+		AcceptedPacketID:  "packet_T-3b_1",
+		CompletedSliceIDs: []string{"T-3b.slice.1"},
+		LastDispatchID:    "dispatch_T-3b_1_1",
+	}); err != nil {
+		t.Fatalf("write stale packet progress: %v", err)
+	}
+
+	bundle, err := Prepare(root, dispatch.Ticket{
+		DispatchID:     "dispatch_T-3b_2_1",
+		IdempotencyKey: "dispatch:T-3b:epoch_2:attempt_1",
+		TaskID:         "T-3b",
+		ThreadKey:      "thread-3b",
+		PlanEpoch:      2,
+		Attempt:        1,
+		PromptRef:      "prompts/spec/apply.md",
+		ReasonCodes:    []string{"dispatch_ready"},
+	}, "lease-3b")
+	if err != nil {
+		t.Fatalf("prepare bundle: %v", err)
+	}
+
+	var ticket struct {
+		ExecutionSliceID string `json:"executionSliceId"`
+		TaskContract     struct {
+			ExecutionSliceID string `json:"executionSliceId"`
+		} `json:"taskContract"`
+	}
+	payload, err := os.ReadFile(bundle.TicketPath)
+	if err != nil {
+		t.Fatalf("read ticket: %v", err)
+	}
+	if err := json.Unmarshal(payload, &ticket); err != nil {
+		t.Fatalf("unmarshal ticket: %v", err)
+	}
+	if ticket.ExecutionSliceID != "T-3b.slice.1" || ticket.TaskContract.ExecutionSliceID != "T-3b.slice.1" {
+		t.Fatalf("expected stale progress to be ignored after replan, got %+v", ticket)
+	}
+
+	progress, err := orchestration.LoadPacketProgress(orchestration.PacketProgressPath(root, "T-3b"))
+	if err != nil {
+		t.Fatalf("load packet progress: %v", err)
+	}
+	if progress.PlanEpoch != 2 || progress.AcceptedPacketID != "packet_T-3b_2" || len(progress.CompletedSliceIDs) != 0 {
+		t.Fatalf("expected stale packet progress to be reset, got %+v", progress)
+	}
+}
+
 func TestPrepareDoesNotSplitExecutionTasksByOwnedPathsWithoutExplicitRequirements(t *testing.T) {
 	root := t.TempDir()
 	harnessDir := filepath.Join(root, ".harness")
@@ -857,6 +946,35 @@ func TestInferCorpusPlanningHonorsExplicitSingleFileOutput(t *testing.T) {
 	}
 }
 
+func TestInferCorpusPlanningRecognizesRepeatedObjectCountsBeyondWei(t *testing.T) {
+	task := adapter.Task{
+		TaskID:  "T-cards",
+		Title:   "角色卡片批量生成",
+		Summary: "生成 5 个角色卡片，分别是 战士、法师、盗贼、牧师、游侠。",
+	}
+
+	info := inferCorpusPlanning(task)
+	if info.SubjectCount != 5 || info.SubjectLabel != "角色卡片" {
+		t.Fatalf("expected generic repeated-object parsing, got %+v", info)
+	}
+	if len(info.EntityRoster) != 5 {
+		t.Fatalf("expected explicit entity roster, got %+v", info)
+	}
+}
+
+func TestInferCorpusPlanningRecognizesHuiZongOutputFile(t *testing.T) {
+	task := adapter.Task{
+		TaskID:  "T-huizong",
+		Title:   "语言学家资料汇总",
+		Summary: "需要 20 位语言学家资料，最终汇总到 output/linguists.md。",
+	}
+
+	info := inferCorpusPlanning(task)
+	if !info.SingleDocument || info.OutputFile != "output/linguists.md" {
+		t.Fatalf("expected hui-zong wording to preserve single-document output, got %+v", info)
+	}
+}
+
 func TestSingleDocumentCorpusContextAvoidsMultiFileDefaults(t *testing.T) {
 	task := adapter.Task{
 		TaskID:      "T-linguists",
@@ -866,14 +984,17 @@ func TestSingleDocumentCorpusContextAvoidsMultiFileDefaults(t *testing.T) {
 	}
 
 	executionTasks := deriveExecutionTasks(task, nil)
-	if len(executionTasks) != 2 {
-		t.Fatalf("expected single-document corpus flow to derive 2 execution tasks, got %+v", executionTasks)
+	if len(executionTasks) != 22 {
+		t.Fatalf("expected single-document corpus flow to derive roster + 20 object slices + closeout, got %+v", executionTasks)
 	}
-	if executionTasks[0].Title != "写入单文档交付件" {
-		t.Fatalf("expected single-document writing slice first, got %+v", executionTasks)
+	if executionTasks[0].Title != "冻结名单与分片规格" {
+		t.Fatalf("expected roster-freeze slice first, got %+v", executionTasks)
 	}
-	if len(executionTasks[0].OutputTargets) != 1 || executionTasks[0].OutputTargets[0] != "output/linguists.md" {
-		t.Fatalf("expected single output target, got %+v", executionTasks[0])
+	if len(executionTasks[1].OutputTargets) != 1 || executionTasks[1].OutputTargets[0] != "output/linguists.parts/01-entry.md" {
+		t.Fatalf("expected first object slice to target a fragment file, got %+v", executionTasks[1])
+	}
+	if executionTasks[len(executionTasks)-1].Title != "完成校验与收口" || executionTasks[len(executionTasks)-1].OutputTargets[0] != "output/linguists.md" {
+		t.Fatalf("expected final closeout slice to target the final single document, got %+v", executionTasks[len(executionTasks)-1])
 	}
 
 	sharedContext := buildSharedTaskGroupContext(task, executionTasks)
@@ -893,13 +1014,19 @@ func TestSingleDocumentCorpusContextAvoidsMultiFileDefaults(t *testing.T) {
 	if !containsString(sharedContext.ContentContract.FormatConstraints, "固定单文件交付") {
 		t.Fatalf("expected single-document constraint marker, got %+v", sharedContext.ContentContract)
 	}
-	if containsString(sharedContext.OperatorTaskList, "冻结名单与单文档结构") {
-		t.Fatalf("expected execution task list to avoid planning-only slices, got %+v", sharedContext.OperatorTaskList)
+	if !containsString(sharedContext.ContentContract.FormatConstraints, "同类对象默认先拆成逐对象片段，再汇总成单文档") {
+		t.Fatalf("expected single-document context to advertise atomic split rule, got %+v", sharedContext.ContentContract)
+	}
+	if !containsString(sharedContext.OperatorTaskList, "冻结名单与分片规格") {
+		t.Fatalf("expected execution task list to include the roster-freeze slice, got %+v", sharedContext.OperatorTaskList)
 	}
 	if !containsSubstring(sharedContext.SharedPrompt, "总正文不少于 2000 字") {
 		t.Fatalf("expected shared prompt to describe doc-level min chars, got %+v", sharedContext.SharedPrompt)
 	}
 	if containsSubstring(sharedContext.SharedPrompt, "每个文件不少于 2000 字") {
 		t.Fatalf("expected shared prompt to avoid per-file min chars wording, got %+v", sharedContext.SharedPrompt)
+	}
+	if !containsSubstring(sharedContext.SharedPrompt, "默认拆成 20 个逐对象 worker slice") {
+		t.Fatalf("expected shared prompt to describe atomic split rule, got %+v", sharedContext.SharedPrompt)
 	}
 }

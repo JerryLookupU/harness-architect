@@ -46,7 +46,9 @@ type corpusPlanningInfo struct {
 	OutputDir        string
 	OutputFile       string
 	SubjectLabel     string
+	SubjectUnit      string
 	SubjectCount     int
+	EntityRoster     []string
 	MinChars         int
 	FileExtension    string
 	IndexFile        string
@@ -195,6 +197,9 @@ func Prepare(root string, ticket dispatch.Ticket, leaseID string) (DispatchBundl
 		return DispatchBundle{}, err
 	}
 	if err := orchestration.WriteAcceptedPacketCAS(acceptedPacketPath, acceptedPacket, acceptedPacketRevision); err != nil {
+		return DispatchBundle{}, err
+	}
+	if err := syncPacketProgress(paths.Root, acceptedPacket); err != nil {
 		return DispatchBundle{}, err
 	}
 	taskContract := buildTaskContract(paths.Root, task, ticket, acceptedPacket, hookPlan, acceptedPacketPath)
@@ -393,50 +398,37 @@ func verificationCommands(path string, ruleIDs []string) ([]map[string]any, erro
 func buildPrompt(ticketPath, workerSpecPath, sharedContextPath, acceptedPacketPath, taskContractPath, executionSliceID, planningTracePath, constraintPath, artifactDir, feedbackSummaryPath string, task adapter.Task, ticket dispatch.Ticket, packetSynthesis orchestration.PacketSynthesisLoop, executionLoop orchestration.ExecutionLoopContract, hookPlan verify.HookPlan, taskFeedback *verify.TaskFeedbackSummary, constraintSystem orchestration.ConstraintSystem, sharedContext *orchestration.SharedTaskGroupContext, selectedTask *orchestration.ExecutionTask) string {
 	routePolicyTags := policyTags(ticket.ReasonCodes)
 	lines := []string{
-		"You are the Klein worker for exactly one bound task inside a repo-local closed-loop runtime.",
+		"You are the Klein worker for one bounded slice inside a repo-local closed-loop runtime.",
 		"",
-		"Dispatch summary:",
+		"Task background:",
 		fmt.Sprintf("- taskId: %s", task.TaskID),
 		fmt.Sprintf("- executionSliceId: %s", executionSliceID),
-		fmt.Sprintf("- title: %s", task.Title),
+		fmt.Sprintf("- title: %s", coalesce(task.Title, task.TaskID)),
 		fmt.Sprintf("- objective: %s", coalesce(task.Summary, task.Title)),
-		fmt.Sprintf("- activeSkills: %s", strings.Join(executionLoop.ActiveSkills, ", ")),
 		fmt.Sprintf("- orchestrationMode: metadata-backed B3Ehive (%d planners + 1 judge)", packetSynthesis.PlannerCount),
-		"- skills are entry guidance for Codex; runtime-owned files inside .harness remain authoritative.",
+		fmt.Sprintf("- activeSkills: %s", strings.Join(executionLoop.ActiveSkills, ", ")),
+		"- runtime-owned files inside .harness remain authoritative, but this prompt is the primary worker handoff.",
 		"",
-		"Required reads before execution:",
-		fmt.Sprintf("1. Read the immutable dispatch ticket: %s", ticketPath),
-		fmt.Sprintf("2. Read the task-local worker spec: %s", workerSpecPath),
-		fmt.Sprintf("3. Read the shared task-group context: %s", sharedContextPath),
-		fmt.Sprintf("4. Read the current dispatch task contract: %s", taskContractPath),
-		"4.5 When these files are large JSON, read only the fields needed for the current slice first; avoid full-file pretty prints unless a contradiction forces deeper inspection.",
-		"5. If task-local artifacts already exist, read worker-result.json, verify.json, handoff.md, and referenced compact handoff logs.",
-		"6. If feedback-summary exists and this task has recent failures, read only the current task's recent 3 high-severity failures before re-execution.",
-		"7. After those reads, move to execution. Do not reopen planner/judge work unless the dispatch files contradict each other.",
-		"",
-		"Worker contract:",
+		"Shared constraints:",
 		"- Use shared task-group context for roster, file schema, source policy, and other common background.",
-		"- Use this dispatch slice for the current batch or milestone only.",
+		"- Keep work bounded to the current slice and its assigned outputs.",
 		"- Keep the tmux node label aligned with the current slice via `[harness:<task-id>] <node-task-description>`.",
 		"- Do not rediscover the full roster or rewrite the common prompt if shared context already defines it.",
-		"",
-		"Hard authority rules:",
 		"- Never create or mutate thread keys, request ids, task ids, plan epochs, leases, or global `.harness/state/*` ledgers.",
 		"- Never edit files outside the bound worktree.",
 		"- Never edit paths outside `allowedWriteGlobs`.",
 		"- Never edit `blockedWriteGlobs` or move closeout artifacts outside `artifactDir`.",
 		"- Never merge, rebase, push, archive, delete branches, or decide global completion.",
 		"",
-		"Execution defaults:",
-		"- Keep work bounded to the current slice and its outputs.",
-		"- Before each meaningful tool/action group, briefly state your immediate intent.",
-		"- Prefer acting from shared context over re-reading every orchestration prompt file.",
-		"- Prefer compact field extraction over dumping entire dispatch/state JSON files into the transcript.",
+		"Shared spec:",
+		fmt.Sprintf("- summary: %s", strings.TrimSpace(coalesce(task.Description, task.Summary, task.Title))),
+		"- Worker instructions are deliberately text-first: background, constraints, shared spec, and current slice body are separated.",
+		"- Same-type repeated tasks should default to one object per worker slice plus a final closeout slice.",
 		"- If shared context is missing a required planning decision, stop and report planning drift instead of freelancing.",
-		"",
-		"Current slice payload:",
 	}
 	if selectedTask != nil {
+		lines = append(lines, "")
+		lines = append(lines, "Current worker task:")
 		lines = append(lines, fmt.Sprintf("- taskTitle: %s", selectedTask.Title))
 		lines = append(lines, fmt.Sprintf("- taskSummary: %s", selectedTask.Summary))
 		if selectedTask.BatchLabel != "" {
@@ -447,6 +439,12 @@ func buildPrompt(ticketPath, workerSpecPath, sharedContextPath, acceptedPacketPa
 		}
 		if len(selectedTask.OutputTargets) > 0 {
 			lines = append(lines, fmt.Sprintf("- outputTargets: %s", strings.Join(selectedTask.OutputTargets, ", ")))
+		}
+		if len(selectedTask.DoneCriteria) > 0 {
+			lines = append(lines, fmt.Sprintf("- doneCriteria: %s", strings.Join(selectedTask.DoneCriteria, " | ")))
+		}
+		if len(selectedTask.VerificationSteps) > 0 {
+			lines = append(lines, fmt.Sprintf("- verificationSteps: %s", strings.Join(selectedTask.VerificationSteps, " -> ")))
 		}
 	}
 	if sharedContext != nil {
@@ -473,11 +471,13 @@ func buildPrompt(ticketPath, workerSpecPath, sharedContextPath, acceptedPacketPa
 		if len(sharedContext.SourcePlan.PreferredSourceTypes) > 0 {
 			lines = append(lines, fmt.Sprintf("- preferredSources: %s", strings.Join(sharedContext.SourcePlan.PreferredSourceTypes, ", ")))
 		}
-		lines = append(lines, "- sharedContextPath is the first place to look for roster / format / source rules.")
-		lines = append(lines, "")
+		for _, item := range sharedContext.SharedPrompt {
+			lines = append(lines, "- "+item)
+		}
 	}
 	if taskFeedback != nil && len(taskFeedback.RecentFailures) > 0 {
 		lines = append(lines,
+			"",
 			"Recent failure memory:",
 			fmt.Sprintf("- feedbackSummaryPath: %s", feedbackSummaryPath),
 			fmt.Sprintf("- latestFailureType: %s", taskFeedback.LatestFeedbackType),
@@ -499,16 +499,16 @@ func buildPrompt(ticketPath, workerSpecPath, sharedContextPath, acceptedPacketPa
 				lines = append(lines, fmt.Sprintf("    next: %s", failure.NextAction))
 			}
 		}
-		lines = append(lines, "")
 	}
 	lines = append(lines,
+		"",
 		"Verification and closeout:",
 		"- Treat investigate -> execute -> verify -> closeout as a hard rhythm.",
 		"- Record verify evidence with commands, file paths, or artifact refs.",
 		"- Before exit, write worker-result.json, verify.json, and handoff.md.",
 		"- If evidence is incomplete, stop with a blocked outcome instead of claiming success.",
 		"",
-		"Soft constraints appended after the base prompt:",
+		"Soft constraints:",
 	)
 	for _, rule := range constraintSystem.Rules {
 		if rule.Enforcement != "soft" {
@@ -519,7 +519,7 @@ func buildPrompt(ticketPath, workerSpecPath, sharedContextPath, acceptedPacketPa
 		}
 		lines = append(lines, fmt.Sprintf("- [%s/%s/%s/%s] %s", rule.Layer, rule.Category, rule.Enforcement, rule.Level, rule.Rule))
 	}
-	lines = append(lines, "", "Hard constraints verified item-by-item by runtime / verify:")
+	lines = append(lines, "", "Hard constraints checked by runtime / verify:")
 	for _, rule := range constraintSystem.Rules {
 		if rule.Enforcement != "hard" {
 			continue
@@ -540,12 +540,15 @@ func buildPrompt(ticketPath, workerSpecPath, sharedContextPath, acceptedPacketPa
 			fmt.Sprintf("- reasonCodes: %s", strings.Join(unique(ticket.ReasonCodes), ", ")),
 			fmt.Sprintf("- policyTags: %s", strings.Join(routePolicyTags, ", ")),
 		)
-		lines = append(lines, "")
 	}
 	lines = append(lines,
 		"On-demand runtime refs when blocked:",
-		fmt.Sprintf("- acceptedPacketPath: %s", acceptedPacketPath),
-		fmt.Sprintf("- planningTracePath: %s", planningTracePath),
+		fmt.Sprintf("- dispatch ticket: %s", ticketPath),
+		fmt.Sprintf("- worker spec: %s", workerSpecPath),
+		fmt.Sprintf("- shared context: %s", sharedContextPath),
+		fmt.Sprintf("- accepted packet: %s", acceptedPacketPath),
+		fmt.Sprintf("- task contract: %s", taskContractPath),
+		fmt.Sprintf("- planning trace: %s", planningTracePath),
 		fmt.Sprintf("- sharedConstraintPath: %s", constraintPath),
 		fmt.Sprintf("- artifactDir: %s", artifactDir),
 		fmt.Sprintf("- executionLoopSkill: %s", filepath.Join("skills", "qiushi-execution", "SKILL.md")),
@@ -567,7 +570,7 @@ func buildPrompt(ticketPath, workerSpecPath, sharedContextPath, acceptedPacketPa
 	lines = append(lines,
 		"",
 		"Verification:",
-		"- Run verify commands from the dispatch ticket or worker-spec in order.",
+		"- Run verify commands in order.",
 		"- Start with the narrowest relevant validation, then broader checks when required.",
 		"- Record each command, exit code, and output path in verify.json.",
 		"- Write verify.json as a scorecard-oriented artifact with overallStatus, overallSummary, scorecard, evidenceLedger, findings, and reviewChecklist when applicable.",
@@ -862,6 +865,7 @@ func buildSharedTaskGroupContext(task adapter.Task, executionTasks []orchestrati
 			TargetCount:       info.SubjectCount,
 			SelectionMode:     "planner_or_judge_frozen",
 			SelectionCriteria: uniqueNonEmpty("优先在编排阶段冻结名单或名单生成规则，再交给 worker 执行当前批次"),
+			Entities:          unique(info.EntityRoster),
 		}
 	}
 	if info.OutputDir != "" || info.OutputFile != "" || len(info.RequiredSections) > 0 || info.MinChars > 0 {
@@ -876,12 +880,13 @@ func buildSharedTaskGroupContext(task adapter.Task, executionTasks []orchestrati
 			contract.FormatConstraints = uniqueNonEmpty(
 				"固定单文件交付",
 				singleDocumentOutputConstraint(info),
+				"同类对象默认先拆成逐对象片段，再汇总成单文档",
 			)
 		} else {
 			contract.IndexFile = info.IndexFile
 			contract.FileNamingRule = "序号-名称.md"
 			contract.RequiredFields = uniqueNonEmpty("基本信息", "代表成果", "核心贡献", "历史影响", "争议点", "延伸阅读")
-			contract.FormatConstraints = uniqueNonEmpty("每位对象单独一个文件", "总索引与正文文件分离")
+			contract.FormatConstraints = uniqueNonEmpty("每位对象单独一个文件", "总索引与正文文件分离", "同类对象默认一对象一 worker slice")
 		}
 		context.ContentContract = contract
 	}
@@ -943,6 +948,9 @@ func deriveCorpusExecutionTaskSpecs(task adapter.Task) []executionTaskSpec {
 		return nil
 	}
 	sharedSummary := buildSharedPromptLine(task, info)
+	if info.SubjectCount > 1 {
+		return buildAtomicCorpusExecutionTaskSpecs(task, info, sharedSummary)
+	}
 	if info.SingleDocument {
 		outputTarget := coalesce(info.OutputFile, filepath.Join(info.OutputDir, "deliverable"+coalesce(info.FileExtension, ".md")))
 		return []executionTaskSpec{
@@ -997,6 +1005,81 @@ func deriveCorpusExecutionTaskSpecs(task adapter.Task) []executionTaskSpec {
 	return specs
 }
 
+func buildAtomicCorpusExecutionTaskSpecs(task adapter.Task, info corpusPlanningInfo, sharedSummary string) []executionTaskSpec {
+	rosterPath := corpusRosterPath(info)
+	entityLabels := corpusEntityLabels(info)
+	specs := make([]executionTaskSpec, 0, len(entityLabels)+2)
+	rosterSummary := fmt.Sprintf("先冻结 %s 的名单、顺序、字段模板和资料策略，再进入逐对象执行。", summarizeCorpusSubject(info))
+	if rosterPath != "" {
+		rosterSummary = fmt.Sprintf("%s | roster=%s", rosterSummary, rosterPath)
+	}
+	specs = append(specs, executionTaskSpec{
+		Title:                "冻结名单与分片规格",
+		Summary:              rosterSummary,
+		TaskGroupID:          task.TaskID + ".group",
+		BatchLabel:           "roster-freeze",
+		SharedContextSummary: sharedSummary,
+		OutputTargets:        uniqueNonEmpty(rosterPath),
+		DoneCriteria: []string{
+			"名单或对象槽位已冻结",
+			"共享字段模板和资料策略已冻结",
+			"后续 worker 可以只处理单个对象",
+		},
+	})
+	for index, entity := range entityLabels {
+		outputTarget := corpusEntityOutputTarget(info, index)
+		summary := fmt.Sprintf("只处理 roster 中第 %d 项 `%s` 的内容，不改动其他对象。", index+1, entity)
+		doneCriteria := []string{
+			"只完成当前对象交付件",
+			"不扩展到其他对象",
+			"verify evidence 已记录",
+		}
+		if info.SingleDocument {
+			summary = fmt.Sprintf("只处理 roster 中第 %d 项 `%s` 的资料片段，写入独立片段文件，先不要汇总最终单文档。", index+1, entity)
+			doneCriteria = []string{
+				"当前对象片段已写入",
+				"未改动最终汇总文件",
+				"verify evidence 已记录",
+			}
+		}
+		if outputTarget != "" {
+			summary = fmt.Sprintf("%s | output=%s", summary, outputTarget)
+		}
+		specs = append(specs, executionTaskSpec{
+			Title:                fmt.Sprintf("处理对象 %02d", index+1),
+			Summary:              summary,
+			TaskGroupID:          task.TaskID + ".group",
+			BatchLabel:           fmt.Sprintf("object-%02d", index+1),
+			EntityBatch:          []string{entity},
+			SharedContextSummary: sharedSummary,
+			OutputTargets:        uniqueNonEmpty(outputTarget),
+			DoneCriteria:         doneCriteria,
+		})
+	}
+	closeoutSummary := "完成整体校验、verify 与 handoff 收口。"
+	closeoutTargets := uniqueNonEmpty(info.OutputDir)
+	doneCriteria := []string{"verify evidence 完整", "closeout artifacts 完整"}
+	if info.SingleDocument {
+		outputTarget := coalesce(info.OutputFile, filepath.Join(info.OutputDir, "deliverable"+coalesce(info.FileExtension, ".md")))
+		closeoutSummary = fmt.Sprintf("把逐对象片段汇总为最终单文档，并完成整体校验、verify 与 handoff 收口。 | output=%s", outputTarget)
+		closeoutTargets = uniqueNonEmpty(outputTarget)
+		doneCriteria = append([]string{"最终单文档已汇总完成"}, doneCriteria...)
+	} else if info.RequiresIndex || info.IndexFile != "" {
+		closeoutSummary = fmt.Sprintf("生成总索引文件并完成整体校验、verify 与 handoff 收口。 | index=%s", coalesce(info.IndexFile, "总索引"))
+		closeoutTargets = uniqueNonEmpty(filepath.Join(info.OutputDir, coalesce(info.IndexFile, "00-总索引.md")))
+		doneCriteria = append([]string{"总索引写入完成"}, doneCriteria...)
+	}
+	specs = append(specs, executionTaskSpec{
+		Title:                "完成校验与收口",
+		Summary:              closeoutSummary,
+		TaskGroupID:          task.TaskID + ".group",
+		SharedContextSummary: sharedSummary,
+		OutputTargets:        closeoutTargets,
+		DoneCriteria:         doneCriteria,
+	})
+	return specs
+}
+
 func inferCorpusPlanning(task adapter.Task) corpusPlanningInfo {
 	text := strings.Join(uniqueNonEmpty(task.Title, task.Summary, task.Description), "\n")
 	info := corpusPlanningInfo{
@@ -1017,10 +1100,12 @@ func inferCorpusPlanning(task adapter.Task) corpusPlanningInfo {
 			info.OutputDir = strings.TrimSpace(matches[1])
 		}
 	}
-	if matches := regexp.MustCompile(`(\d+)\s*位([^\s。；，、]+)`).FindStringSubmatch(text); len(matches) == 3 {
+	if matches := regexp.MustCompile(`(\d+)\s*(位|个|名|张|篇|份)\s*([^\s。；，、]+)`).FindStringSubmatch(text); len(matches) == 4 {
 		fmt.Sscanf(matches[1], "%d", &info.SubjectCount)
-		info.SubjectLabel = strings.TrimSpace(matches[2])
+		info.SubjectUnit = strings.TrimSpace(matches[2])
+		info.SubjectLabel = strings.TrimSpace(matches[3])
 	}
+	info.EntityRoster = detectExplicitEntityRoster(text, info.SubjectCount)
 	if matches := regexp.MustCompile(`不少于\s*(\d+)\s*字`).FindStringSubmatch(text); len(matches) == 2 {
 		fmt.Sscanf(matches[1], "%d", &info.MinChars)
 	}
@@ -1059,7 +1144,7 @@ func inferCorpusPlanning(task adapter.Task) corpusPlanningInfo {
 
 func summarizeCorpusSubject(info corpusPlanningInfo) string {
 	if info.SubjectCount > 0 && info.SubjectLabel != "" {
-		return fmt.Sprintf("%d 位%s", info.SubjectCount, info.SubjectLabel)
+		return fmt.Sprintf("%d %s%s", info.SubjectCount, coalesce(info.SubjectUnit, "位"), info.SubjectLabel)
 	}
 	if info.SubjectLabel != "" {
 		return info.SubjectLabel
@@ -1081,6 +1166,9 @@ func buildSharedPromptLine(task adapter.Task, info corpusPlanningInfo) string {
 	if info.MinChars > 0 {
 		parts = append(parts, minCharsPromptText(info.SingleDocument, info.MinChars))
 	}
+	if info.SubjectCount > 1 {
+		parts = append(parts, fmt.Sprintf("默认拆成 %d 个逐对象 worker slice，加 1 个冻结名单 slice，再加 1 个收口 slice。", info.SubjectCount))
+	}
 	if strings.TrimSpace(task.Description) != "" {
 		parts = append(parts, strings.TrimSpace(task.Description))
 	}
@@ -1088,6 +1176,12 @@ func buildSharedPromptLine(task adapter.Task, info corpusPlanningInfo) string {
 }
 
 func corpusResearchGoal(info corpusPlanningInfo) string {
+	if info.SubjectCount > 1 {
+		if info.SingleDocument {
+			return "先冻结名单、结构和资料策略，再按一对象一 worker slice 产出片段，最后汇总成单文档"
+		}
+		return "先冻结名单、格式和资料策略，再按一对象一 worker slice 逐个产出"
+	}
 	if info.SingleDocument {
 		return "先冻结名单、结构和资料策略，再进入单文档写作与收口"
 	}
@@ -1112,7 +1206,7 @@ func singleDocumentOutputConstraint(info corpusPlanningInfo) string {
 }
 
 func detectExplicitOutputFile(text string) string {
-	matches := regexp.MustCompile("(?:写入|写到|输出到|输出至|保存到|保存至|生成到|生成至|落到)\\s*[`\"'“”‘’]?([^\\s`\"'“”‘’，。；;：:]+?\\.[A-Za-z0-9]+)[`\"'“”‘’]?").FindStringSubmatch(text)
+	matches := regexp.MustCompile("(?:写入|写到|输出到|输出至|保存到|保存至|生成到|生成至|落到|汇总到|汇总至)\\s*[`\"'“”‘’]?([^\\s`\"'“”‘’，。；;：:]+?\\.[A-Za-z0-9]+)[`\"'“”‘’]?").FindStringSubmatch(text)
 	if len(matches) != 2 {
 		return ""
 	}
@@ -1126,8 +1220,117 @@ func buildSearchHint(task adapter.Task, info corpusPlanningInfo) string {
 	return fmt.Sprintf("围绕任务 `%s` 收集权威来源并在规划阶段冻结资料策略。", coalesce(task.Title, task.TaskID))
 }
 
+func corpusRosterPath(info corpusPlanningInfo) string {
+	if strings.TrimSpace(info.OutputFile) != "" {
+		ext := coalesce(info.FileExtension, filepath.Ext(info.OutputFile), ".md")
+		return strings.TrimSuffix(info.OutputFile, ext) + ".roster.md"
+	}
+	if strings.TrimSpace(info.OutputDir) != "" {
+		return filepath.Join(info.OutputDir, "00-roster.md")
+	}
+	return ""
+}
+
+func corpusEntityLabels(info corpusPlanningInfo) []string {
+	if len(info.EntityRoster) > 0 {
+		return unique(info.EntityRoster)
+	}
+	if info.SubjectCount <= 0 {
+		return []string{"slot-01"}
+	}
+	labels := make([]string, 0, info.SubjectCount)
+	for index := 0; index < info.SubjectCount; index++ {
+		labels = append(labels, fmt.Sprintf("slot-%02d", index+1))
+	}
+	return labels
+}
+
+func corpusEntityOutputTarget(info corpusPlanningInfo, index int) string {
+	ext := coalesce(info.FileExtension, ".md")
+	if info.SingleDocument && strings.TrimSpace(info.OutputFile) != "" {
+		base := strings.TrimSuffix(info.OutputFile, ext)
+		return fmt.Sprintf("%s.parts/%02d-entry%s", base, index+1, ext)
+	}
+	if strings.TrimSpace(info.OutputDir) != "" {
+		return filepath.Join(info.OutputDir, fmt.Sprintf("%02d-entry%s", index+1, ext))
+	}
+	return ""
+}
+
+func detectExplicitEntityRoster(text string, expectedCount int) []string {
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		candidate := ""
+		switch {
+		case strings.Contains(line, "分别是"):
+			parts := strings.SplitN(line, "分别是", 2)
+			candidate = parts[1]
+		case strings.Contains(line, "包括"):
+			parts := strings.SplitN(line, "包括", 2)
+			candidate = parts[1]
+		case strings.Contains(line, "名单："):
+			parts := strings.SplitN(line, "名单：", 2)
+			candidate = parts[1]
+		case strings.Contains(line, "名单:"):
+			parts := strings.SplitN(line, "名单:", 2)
+			candidate = parts[1]
+		case strings.Contains(line, "："):
+			parts := strings.SplitN(line, "：", 2)
+			if containsEntityRosterMarker(parts[0]) {
+				candidate = parts[1]
+			}
+		case strings.Contains(line, ":"):
+			parts := strings.SplitN(line, ":", 2)
+			if containsEntityRosterMarker(parts[0]) {
+				candidate = parts[1]
+			}
+		}
+		entities := splitEntityRoster(candidate)
+		if len(entities) < 2 {
+			continue
+		}
+		if expectedCount > 0 && len(entities) > expectedCount {
+			entities = entities[:expectedCount]
+		}
+		return unique(entities)
+	}
+	return nil
+}
+
+func containsEntityRosterMarker(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	for _, marker := range []string{"名单", "角色", "对象", "人物", "学者", "语言学家", "roster", "entity", "entities", "list", "cards", "card"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func splitEntityRoster(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	tokens := strings.FieldsFunc(value, func(r rune) bool {
+		return strings.ContainsRune("、，,；;|/。", r)
+	})
+	entities := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		token = strings.TrimSpace(strings.Trim(token, "`'\"“”‘’()[]"))
+		if token == "" {
+			continue
+		}
+		entities = append(entities, token)
+	}
+	return unique(entities)
+}
+
 func buildTaskContract(root string, task adapter.Task, ticket dispatch.Ticket, packet orchestration.AcceptedPacket, hookPlan verify.HookPlan, acceptedPacketPath string) orchestration.TaskContract {
-	selectedTask := selectExecutionTask(root, task.TaskID, packet.ExecutionTasks, ticket.Attempt)
+	selectedTask := selectExecutionTask(root, task.TaskID, task.PlanEpoch, packet.PacketID, packet.ExecutionTasks, ticket.Attempt)
 	executionSliceID := task.TaskID
 	inScope := unique(task.OwnedPaths)
 	doneCriteria := uniqueNonEmpty(append([]string{"task-local slice implemented", "verification evidence recorded", "closeout artifacts written"}, hookPlan.AcceptanceMarkers...)...)
@@ -1443,11 +1646,11 @@ func firstSentence(text string) string {
 	return ""
 }
 
-func selectExecutionTask(root, taskID string, tasks []orchestration.ExecutionTask, attempt int) *orchestration.ExecutionTask {
+func selectExecutionTask(root, taskID string, planEpoch int, packetID string, tasks []orchestration.ExecutionTask, attempt int) *orchestration.ExecutionTask {
 	if len(tasks) == 0 {
 		return nil
 	}
-	if next := selectFirstIncompleteExecutionTask(root, taskID, tasks); next != nil {
+	if next := selectFirstIncompleteExecutionTask(root, taskID, planEpoch, packetID, tasks); next != nil {
 		return next
 	}
 	if attempt <= 0 {
@@ -1458,10 +1661,16 @@ func selectExecutionTask(root, taskID string, tasks []orchestration.ExecutionTas
 	return &selected
 }
 
-func selectFirstIncompleteExecutionTask(root, taskID string, tasks []orchestration.ExecutionTask) *orchestration.ExecutionTask {
+func selectFirstIncompleteExecutionTask(root, taskID string, planEpoch int, packetID string, tasks []orchestration.ExecutionTask) *orchestration.ExecutionTask {
 	progressPath := orchestration.PacketProgressPath(root, taskID)
 	progress, err := orchestration.LoadPacketProgress(progressPath)
 	if err != nil {
+		return nil
+	}
+	if progress.PlanEpoch != 0 && planEpoch > 0 && progress.PlanEpoch != planEpoch {
+		return nil
+	}
+	if strings.TrimSpace(progress.AcceptedPacketID) != "" && strings.TrimSpace(packetID) != "" && progress.AcceptedPacketID != packetID {
 		return nil
 	}
 	completed := map[string]struct{}{}
@@ -1476,6 +1685,34 @@ func selectFirstIncompleteExecutionTask(root, taskID string, tasks []orchestrati
 		return &selected
 	}
 	return nil
+}
+
+func syncPacketProgress(root string, packet orchestration.AcceptedPacket) error {
+	progressPath := orchestration.PacketProgressPath(root, packet.TaskID)
+	progress, err := orchestration.LoadPacketProgress(progressPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if progress.TaskID == packet.TaskID &&
+		progress.PlanEpoch == packet.PlanEpoch &&
+		progress.AcceptedPacketID == packet.PacketID {
+		return nil
+	}
+	progress = orchestration.PacketProgress{
+		SchemaVersion:    "kh.packet-progress.v1",
+		Revision:         progress.Revision,
+		Generator:        "kh-worker-supervisor",
+		UpdatedAt:        nowUTC(),
+		TaskID:           packet.TaskID,
+		ThreadKey:        packet.ThreadKey,
+		PlanEpoch:        packet.PlanEpoch,
+		AcceptedPacketID: packet.PacketID,
+		LastDispatchID:   progress.LastDispatchID,
+	}
+	return orchestration.WritePacketProgressCAS(progressPath, progress, progress.Revision)
 }
 
 func stableFingerprint(parts ...string) string {

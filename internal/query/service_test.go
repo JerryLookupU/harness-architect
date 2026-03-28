@@ -133,6 +133,62 @@ func TestTaskIncludesPacketProgressAndRemainingSlices(t *testing.T) {
 	}
 }
 
+func TestTaskIgnoresStalePacketProgressAcrossPlanEpoch(t *testing.T) {
+	root := t.TempDir()
+	if err := adapter.UpsertTask(root, adapter.Task{
+		TaskID:     "T-stale",
+		ThreadKey:  "thread-stale",
+		Title:      "Ignore stale progress",
+		Summary:    "Expose remaining slices",
+		PlanEpoch:  2,
+		Status:     "queued",
+		OwnedPaths: []string{"internal/query/**"},
+	}); err != nil {
+		t.Fatalf("upsert task: %v", err)
+	}
+	if err := orchestration.WriteAcceptedPacket(orchestration.AcceptedPacketPath(root, "T-stale"), orchestration.AcceptedPacket{
+		SchemaVersion: "kh.accepted-packet.v1",
+		Generator:     "test",
+		GeneratedAt:   "2026-03-26T10:00:00Z",
+		TaskID:        "T-stale",
+		ThreadKey:     "thread-stale",
+		PlanEpoch:     2,
+		PacketID:      "packet_T-stale_2",
+		Objective:     "Expose remaining slices",
+		SelectedPlan:  "Run slices in order",
+		ExecutionTasks: []orchestration.ExecutionTask{
+			{ID: "T-stale.slice.1", Title: "slice 1", Summary: "one"},
+			{ID: "T-stale.slice.2", Title: "slice 2", Summary: "two"},
+		},
+		VerificationPlan:  map[string]any{},
+		DecisionRationale: "test packet",
+		AcceptedAt:        "2026-03-26T10:00:00Z",
+		AcceptedBy:        "test",
+	}); err != nil {
+		t.Fatalf("write accepted packet: %v", err)
+	}
+	if err := orchestration.WritePacketProgress(orchestration.PacketProgressPath(root, "T-stale"), orchestration.PacketProgress{
+		SchemaVersion:     "kh.packet-progress.v1",
+		Generator:         "test",
+		UpdatedAt:         "2026-03-26T10:00:00Z",
+		TaskID:            "T-stale",
+		ThreadKey:         "thread-stale",
+		PlanEpoch:         1,
+		AcceptedPacketID:  "packet_T-stale_1",
+		CompletedSliceIDs: []string{"T-stale.slice.1"},
+	}); err != nil {
+		t.Fatalf("write stale packet progress: %v", err)
+	}
+
+	view, err := Task(root, "T-stale")
+	if err != nil {
+		t.Fatalf("load task view: %v", err)
+	}
+	if len(view.RemainingSlices) != 2 || view.RemainingSlices[0] != "T-stale.slice.1" {
+		t.Fatalf("expected stale progress to be ignored, got %+v", view.RemainingSlices)
+	}
+}
+
 func TestTaskIncludesIntakeThreadChangeAndTodoSummaries(t *testing.T) {
 	root := t.TempDir()
 	submitResult, err := runtime.Submit(runtime.SubmitRequest{
