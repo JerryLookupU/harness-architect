@@ -150,7 +150,7 @@ func buildCompletionGate(
 			verifyEvidence.Meaningful,
 		),
 	}
-	packetCheck, acceptedPacketPath, _, err := acceptedPacketCheck(paths.Root, request.TaskID, request.PlanEpoch)
+	packetCheck, acceptedPacketPath, packet, err := acceptedPacketCheck(paths.Root, request.TaskID, request.PlanEpoch)
 	if err != nil {
 		return CompletionGate{}, err
 	}
@@ -213,6 +213,7 @@ func buildCompletionGate(
 		"verificationEvidence":   verificationEvidence,
 		"requiredArtifacts":      requiredArtifacts,
 		"acceptedPacket":         packetCheck,
+		"orchestrationExpansion": orchestrationExpansionCheck(packetCheck.OK, packet),
 		"taskContract":           contractCheck,
 		"taskContractDefinition": contractDefinition,
 		"verificationScorecard":  scorecardCheck,
@@ -723,6 +724,28 @@ func taskContractDefinitionCheck(contractFound bool, contract orchestration.Task
 	}
 }
 
+func orchestrationExpansionCheck(packetFound bool, packet orchestration.AcceptedPacket) GateCheck {
+	if !packetFound {
+		return GateCheck{
+			Name:   "orchestrationExpansion",
+			OK:     true,
+			Detail: "accepted packet unavailable; orchestration expansion check skipped",
+		}
+	}
+	if !packet.OrchestrationExpansionPending {
+		return GateCheck{
+			Name:   "orchestrationExpansion",
+			OK:     true,
+			Detail: "orchestration task graph is fully materialized",
+		}
+	}
+	return GateCheck{
+		Name:   "orchestrationExpansion",
+		OK:     false,
+		Detail: fmt.Sprintf("pending=%t reason=%s source=%s", packet.OrchestrationExpansionPending, packet.OrchestrationExpansionReason, packet.OrchestrationExpansionSource),
+	}
+}
+
 func assessmentEvidenceLedgerCheck(path string, assessment Assessment) GateCheck {
 	return GateCheck{
 		Name:   "evidenceLedger",
@@ -1106,6 +1129,9 @@ func deriveCompletionStatus(requestStatus, assessmentAction string, checks map[s
 	}
 	if failedGateCheck(checks, "reviewEvidence") || assessmentAction == "review" {
 		return "needs_review", "review"
+	}
+	if failedGateCheck(checks, "orchestrationExpansion") {
+		return "needs_replan", "replan"
 	}
 	if failedGateCheck(checks, "executionTasks") {
 		return "needs_replan", "replan"

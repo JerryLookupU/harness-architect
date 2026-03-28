@@ -274,6 +274,51 @@ func TestIngestPassedWithRemainingExecutionSlicesEmitsReplan(t *testing.T) {
 	}
 }
 
+func TestIngestPassedWithPendingOrchestrationExpansionEmitsReplan(t *testing.T) {
+	root := t.TempDir()
+	ticket := issueTestDispatch(t, root)
+	relVerifyPath := writeVerificationArtifacts(t, root, ticket.DispatchID, false)
+	writeSharedConstraintSnapshot(t, root, "T-1", ticket.DispatchID, 1)
+	writeAcceptedPacketOnly(t, root, ticket)
+	writeTaskContractForSlice(t, root, ticket, "T-1.slice.1")
+
+	packet, err := orchestration.LoadAcceptedPacket(orchestration.AcceptedPacketPath(root, "T-1"))
+	if err != nil {
+		t.Fatalf("load accepted packet: %v", err)
+	}
+	packet.OrchestrationExpansionPending = true
+	packet.OrchestrationExpansionReason = "roster_freeze_required_before_atomic_fanout"
+	packet.OrchestrationExpansionSource = "output/linguists.roster.md"
+	if err := orchestration.WriteAcceptedPacket(orchestration.AcceptedPacketPath(root, "T-1"), packet); err != nil {
+		t.Fatalf("rewrite accepted packet: %v", err)
+	}
+
+	result, err := Ingest(Request{
+		Root:                   root,
+		TaskID:                 "T-1",
+		DispatchID:             ticket.DispatchID,
+		PlanEpoch:              1,
+		Attempt:                1,
+		CausationID:            "outcome-1",
+		Status:                 "passed",
+		Summary:                "roster freeze verified",
+		VerificationResultPath: relVerifyPath,
+	})
+	if err != nil {
+		t.Fatalf("expected orchestration expansion to emit replan instead of error, got %v", err)
+	}
+	if result.FollowUpEvent != "replan.emitted" {
+		t.Fatalf("expected orchestration expansion replan follow-up, got %+v", result)
+	}
+	gate := loadCompletionGate(t, root)
+	if gate.Status != "needs_replan" || gate.RecommendedNextAction != "replan" {
+		t.Fatalf("expected needs_replan gate, got %+v", gate)
+	}
+	if check := gate.Checks["orchestrationExpansion"]; check.OK {
+		t.Fatalf("expected orchestration expansion check to remain open: %+v", gate.Checks)
+	}
+}
+
 func TestIngestPassedWithBlockingFindingsDoesNotComplete(t *testing.T) {
 	root := t.TempDir()
 	ticket := issueTestDispatch(t, root)

@@ -185,7 +185,7 @@ func Prepare(root string, ticket dispatch.Ticket, leaseID string) (DispatchBundl
 			"handoff_before_exit_when_blocked",
 		},
 	}
-	acceptedPacket := buildAcceptedPacket(task, ticket, judgeDecision, hookPlan, verifyCommands)
+	acceptedPacket := buildAcceptedPacket(paths.Root, task, ticket, judgeDecision, hookPlan, verifyCommands)
 	if acceptedPacket.SharedContext != nil {
 		if err := writeJSON(sharedContextPath, acceptedPacket.SharedContext); err != nil {
 			return DispatchBundle{}, err
@@ -596,13 +596,14 @@ func buildPrompt(ticketPath, workerSpecPath, sharedContextPath, acceptedPacketPa
 	return strings.Join(lines, "\n") + "\n"
 }
 
-func buildAcceptedPacket(task adapter.Task, ticket dispatch.Ticket, judgeDecision orchestration.JudgeDecision, hookPlan verify.HookPlan, verifyCommands []map[string]any) orchestration.AcceptedPacket {
+func buildAcceptedPacket(root string, task adapter.Task, ticket dispatch.Ticket, judgeDecision orchestration.JudgeDecision, hookPlan verify.HookPlan, verifyCommands []map[string]any) orchestration.AcceptedPacket {
 	flowSelection := strings.TrimSpace(judgeDecision.SelectedFlow)
 	if flowSelection == "" {
 		flowSelection = "standard bounded delivery"
 	}
-	executionTasks := deriveExecutionTasks(task, verifyCommands)
-	sharedContext := buildSharedTaskGroupContext(task, executionTasks)
+	executionTasks := deriveExecutionTasksWithRoot(root, task, verifyCommands)
+	sharedContext := buildSharedTaskGroupContextWithRoot(root, task, executionTasks)
+	expansionPending, expansionReason, expansionSource := pendingOrchestrationExpansion(root, task)
 	return orchestration.AcceptedPacket{
 		SchemaVersion:     "kh.accepted-packet.v1",
 		Generator:         "kh-worker-supervisor",
@@ -633,7 +634,10 @@ func buildAcceptedPacket(task adapter.Task, ticket dispatch.Ticket, judgeDecisio
 			"dispatchId": ticket.DispatchID,
 			"taskBudget": ticket.Budget,
 		},
-		AcceptanceMarkers: unique(hookPlan.AcceptanceMarkers),
+		AcceptanceMarkers:             unique(hookPlan.AcceptanceMarkers),
+		OrchestrationExpansionPending: expansionPending,
+		OrchestrationExpansionReason:  expansionReason,
+		OrchestrationExpansionSource:  expansionSource,
 		ReplanTriggers: []string{
 			"verification_failed",
 			"acceptance_markers_missing",
@@ -843,7 +847,11 @@ func summarizeEntitySelection(selection orchestration.EntitySelection) string {
 }
 
 func buildSharedTaskGroupContext(task adapter.Task, executionTasks []orchestration.ExecutionTask) *orchestration.SharedTaskGroupContext {
-	info := inferCorpusPlanning(task)
+	return buildSharedTaskGroupContextWithRoot("", task, executionTasks)
+}
+
+func buildSharedTaskGroupContextWithRoot(root string, task adapter.Task, executionTasks []orchestration.ExecutionTask) *orchestration.SharedTaskGroupContext {
+	info := inferCorpusPlanningAtRoot(root, task)
 	operatorTaskList := make([]string, 0, len(executionTasks))
 	for _, item := range executionTasks {
 		if strings.TrimSpace(item.Title) != "" {
@@ -943,12 +951,38 @@ func decisionRationaleText(task adapter.Task, sharedContext *orchestration.Share
 }
 
 func deriveCorpusExecutionTaskSpecs(task adapter.Task) []executionTaskSpec {
-	info := inferCorpusPlanning(task)
+	return deriveCorpusExecutionTaskSpecsWithRoot("", task)
+}
+
+func deriveCorpusExecutionTaskSpecsWithRoot(root string, task adapter.Task) []executionTaskSpec {
+	info := inferCorpusPlanningAtRoot(root, task)
 	if info.OutputDir == "" && info.OutputFile == "" && info.SubjectLabel == "" && info.SubjectCount == 0 {
 		return nil
 	}
 	sharedSummary := buildSharedPromptLine(task, info)
 	if info.SubjectCount > 1 {
+		if len(info.EntityRoster) == 0 {
+			rosterPath := corpusRosterPath(info)
+			summary := fmt.Sprintf("先在编排层冻结 %s 的名单、顺序、字段模板和资料策略。完成后由 runtime 基于名单重建实名 task graph。", summarizeCorpusSubject(info))
+			if rosterPath != "" {
+				summary = fmt.Sprintf("%s | roster=%s", summary, rosterPath)
+			}
+			return []executionTaskSpec{
+				{
+					Title:                "冻结名单与分片规格",
+					Summary:              summary,
+					TaskGroupID:          task.TaskID + ".group",
+					BatchLabel:           "roster-freeze",
+					SharedContextSummary: sharedSummary,
+					OutputTargets:        uniqueNonEmpty(rosterPath),
+					DoneCriteria: []string{
+						"名单或对象槽位已冻结",
+						"共享字段模板和资料策略已冻结",
+						"runtime 可基于名单重建后续实名 worker tasks",
+					},
+				},
+			}
+		}
 		return buildAtomicCorpusExecutionTaskSpecs(task, info, sharedSummary)
 	}
 	if info.SingleDocument {
@@ -1081,6 +1115,10 @@ func buildAtomicCorpusExecutionTaskSpecs(task adapter.Task, info corpusPlanningI
 }
 
 func inferCorpusPlanning(task adapter.Task) corpusPlanningInfo {
+	return inferCorpusPlanningAtRoot("", task)
+}
+
+func inferCorpusPlanningAtRoot(root string, task adapter.Task) corpusPlanningInfo {
 	text := strings.Join(uniqueNonEmpty(task.Title, task.Summary, task.Description), "\n")
 	info := corpusPlanningInfo{
 		FileExtension: ".md",
@@ -1100,8 +1138,8 @@ func inferCorpusPlanning(task adapter.Task) corpusPlanningInfo {
 			info.OutputDir = strings.TrimSpace(matches[1])
 		}
 	}
-	if matches := regexp.MustCompile(`(\d+)\s*(位|个|名|张|篇|份)\s*([^\s。；，、]+)`).FindStringSubmatch(text); len(matches) == 4 {
-		fmt.Sscanf(matches[1], "%d", &info.SubjectCount)
+	if matches := regexp.MustCompile(`([0-9]+|[零一二两三四五六七八九十百]+)\s*(位|个|名|张|篇|份)\s*([^\s。；，、]+)`).FindStringSubmatch(text); len(matches) == 4 {
+		info.SubjectCount = parseCountToken(matches[1])
 		info.SubjectUnit = strings.TrimSpace(matches[2])
 		info.SubjectLabel = strings.TrimSpace(matches[3])
 	}
@@ -1138,6 +1176,9 @@ func inferCorpusPlanning(task adapter.Task) corpusPlanningInfo {
 	info.RequiredSections = unique(info.RequiredSections)
 	if !info.SingleDocument && (info.OutputDir != "" || info.SubjectLabel != "" || info.SubjectCount > 0) {
 		info.IndexFile = "00-总索引.md"
+	}
+	if len(info.EntityRoster) == 0 && strings.TrimSpace(root) != "" {
+		info.EntityRoster = detectFrozenEntityRoster(root, info)
 	}
 	return info
 }
@@ -1329,6 +1370,101 @@ func splitEntityRoster(value string) []string {
 	return unique(entities)
 }
 
+func parseCountToken(value string) int {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	if matched, _ := regexp.MatchString(`^\d+$`, value); matched {
+		count := 0
+		fmt.Sscanf(value, "%d", &count)
+		return count
+	}
+	digits := map[rune]int{
+		'零': 0,
+		'一': 1,
+		'二': 2,
+		'两': 2,
+		'三': 3,
+		'四': 4,
+		'五': 5,
+		'六': 6,
+		'七': 7,
+		'八': 8,
+		'九': 9,
+	}
+	if value == "十" {
+		return 10
+	}
+	if strings.ContainsRune(value, '百') {
+		parts := strings.SplitN(value, "百", 2)
+		hundreds := digits[[]rune(parts[0])[0]]
+		remainder := parseCountToken(parts[1])
+		return hundreds*100 + remainder
+	}
+	if strings.ContainsRune(value, '十') {
+		parts := strings.SplitN(value, "十", 2)
+		tens := 1
+		if strings.TrimSpace(parts[0]) != "" {
+			tens = digits[[]rune(parts[0])[0]]
+		}
+		ones := 0
+		if strings.TrimSpace(parts[1]) != "" {
+			ones = digits[[]rune(parts[1])[0]]
+		}
+		return tens*10 + ones
+	}
+	runes := []rune(value)
+	if len(runes) == 1 {
+		return digits[runes[0]]
+	}
+	return 0
+}
+
+func detectFrozenEntityRoster(root string, info corpusPlanningInfo) []string {
+	rosterPath := corpusRosterPath(info)
+	if strings.TrimSpace(rosterPath) == "" {
+		return nil
+	}
+	payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rosterPath)))
+	if err != nil {
+		return nil
+	}
+	lines := strings.Split(strings.ReplaceAll(string(payload), "\r\n", "\n"), "\n")
+	entities := make([]string, 0, len(lines))
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		line = regexp.MustCompile(`^(?:[-*•]+|\d+[\.\)、])\s*`).ReplaceAllString(line, "")
+		line = strings.TrimSpace(strings.Trim(line, "`'\"“”‘’"))
+		if line == "" {
+			continue
+		}
+		if strings.Contains(line, "roster=") || strings.Contains(line, "名单") || strings.HasPrefix(line, "#") {
+			continue
+		}
+		entities = append(entities, line)
+	}
+	if info.SubjectCount > 0 && len(entities) > info.SubjectCount {
+		entities = entities[:info.SubjectCount]
+	}
+	return unique(entities)
+}
+
+func pendingOrchestrationExpansion(root string, task adapter.Task) (bool, string, string) {
+	info := inferCorpusPlanningAtRoot(root, task)
+	if info.SubjectCount <= 1 || len(info.EntityRoster) > 0 {
+		return false, "", ""
+	}
+	rosterPath := corpusRosterPath(info)
+	if rosterPath == "" {
+		return false, "", ""
+	}
+	return true, "roster_freeze_required_before_atomic_fanout", rosterPath
+}
+
 func buildTaskContract(root string, task adapter.Task, ticket dispatch.Ticket, packet orchestration.AcceptedPacket, hookPlan verify.HookPlan, acceptedPacketPath string) orchestration.TaskContract {
 	selectedTask := selectExecutionTask(root, task.TaskID, task.PlanEpoch, packet.PacketID, packet.ExecutionTasks, ticket.Attempt)
 	executionSliceID := task.TaskID
@@ -1410,10 +1546,14 @@ func verificationStepTitles(commands []map[string]any) []string {
 }
 
 func deriveExecutionTasks(task adapter.Task, verifyCommands []map[string]any) []orchestration.ExecutionTask {
+	return deriveExecutionTasksWithRoot("", task, verifyCommands)
+}
+
+func deriveExecutionTasksWithRoot(root string, task adapter.Task, verifyCommands []map[string]any) []orchestration.ExecutionTask {
 	verificationSteps := verificationStepTitles(verifyCommands)
 	baseEvidence := []string{"verify.json", "worker-result.json", "handoff.md"}
 	baseSummary := coalesce(task.Description, task.Summary, task.Title)
-	specs := deriveExecutionTaskSpecs(task, baseSummary)
+	specs := deriveExecutionTaskSpecsWithRoot(root, task, baseSummary)
 	tasks := make([]orchestration.ExecutionTask, 0, len(specs))
 	for index, spec := range specs {
 		title := strings.TrimSpace(spec.Title)
@@ -1443,7 +1583,11 @@ func deriveExecutionTasks(task adapter.Task, verifyCommands []map[string]any) []
 }
 
 func deriveExecutionTaskSpecs(task adapter.Task, baseSummary string) []executionTaskSpec {
-	if specs := deriveCorpusExecutionTaskSpecs(task); len(specs) > 0 {
+	return deriveExecutionTaskSpecsWithRoot("", task, baseSummary)
+}
+
+func deriveExecutionTaskSpecsWithRoot(root string, task adapter.Task, baseSummary string) []executionTaskSpec {
+	if specs := deriveCorpusExecutionTaskSpecsWithRoot(root, task); len(specs) > 0 {
 		return specs
 	}
 	requirements := explicitRequirementLines(task)

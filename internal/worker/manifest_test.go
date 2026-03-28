@@ -962,6 +962,19 @@ func TestInferCorpusPlanningRecognizesRepeatedObjectCountsBeyondWei(t *testing.T
 	}
 }
 
+func TestInferCorpusPlanningRecognizesChineseCountWords(t *testing.T) {
+	task := adapter.Task{
+		TaskID:  "T-cn-count",
+		Title:   "语言学家资料",
+		Summary: "需要二十名语言学家资料，最终汇总到 output/linguists.md。",
+	}
+
+	info := inferCorpusPlanning(task)
+	if info.SubjectCount != 20 || info.SubjectUnit != "名" || info.SubjectLabel != "语言学家资料" {
+		t.Fatalf("expected Chinese count words to be parsed, got %+v", info)
+	}
+}
+
 func TestInferCorpusPlanningRecognizesHuiZongOutputFile(t *testing.T) {
 	task := adapter.Task{
 		TaskID:  "T-huizong",
@@ -984,17 +997,14 @@ func TestSingleDocumentCorpusContextAvoidsMultiFileDefaults(t *testing.T) {
 	}
 
 	executionTasks := deriveExecutionTasks(task, nil)
-	if len(executionTasks) != 22 {
-		t.Fatalf("expected single-document corpus flow to derive roster + 20 object slices + closeout, got %+v", executionTasks)
+	if len(executionTasks) != 1 {
+		t.Fatalf("expected roster-freeze-only planning before orchestration expansion, got %+v", executionTasks)
 	}
 	if executionTasks[0].Title != "冻结名单与分片规格" {
 		t.Fatalf("expected roster-freeze slice first, got %+v", executionTasks)
 	}
-	if len(executionTasks[1].OutputTargets) != 1 || executionTasks[1].OutputTargets[0] != "output/linguists.parts/01-entry.md" {
-		t.Fatalf("expected first object slice to target a fragment file, got %+v", executionTasks[1])
-	}
-	if executionTasks[len(executionTasks)-1].Title != "完成校验与收口" || executionTasks[len(executionTasks)-1].OutputTargets[0] != "output/linguists.md" {
-		t.Fatalf("expected final closeout slice to target the final single document, got %+v", executionTasks[len(executionTasks)-1])
+	if len(executionTasks[0].OutputTargets) != 1 || executionTasks[0].OutputTargets[0] != "output/linguists.roster.md" {
+		t.Fatalf("expected roster-freeze slice to target the roster artifact, got %+v", executionTasks[0])
 	}
 
 	sharedContext := buildSharedTaskGroupContext(task, executionTasks)
@@ -1028,5 +1038,35 @@ func TestSingleDocumentCorpusContextAvoidsMultiFileDefaults(t *testing.T) {
 	}
 	if !containsSubstring(sharedContext.SharedPrompt, "默认拆成 20 个逐对象 worker slice") {
 		t.Fatalf("expected shared prompt to describe atomic split rule, got %+v", sharedContext.SharedPrompt)
+	}
+}
+
+func TestSingleDocumentCorpusExpandsAfterFrozenRosterExists(t *testing.T) {
+	root := t.TempDir()
+	task := adapter.Task{
+		TaskID:      "T-linguists",
+		Title:       "语言学家资料单文档交付",
+		Summary:     "根据 docs/prd.md 产出 20 位世界顶级语言学家资料，写入 output/linguists.md，总正文不少于 2000 字。",
+		Description: "每位学者包含 基本信息、代表成果、核心贡献、历史影响。",
+	}
+	if err := os.MkdirAll(filepath.Join(root, "output"), 0o755); err != nil {
+		t.Fatalf("mkdir output: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "output", "linguists.roster.md"), []byte("- Ferdinand de Saussure\n- Noam Chomsky\n"), 0o644); err != nil {
+		t.Fatalf("write roster: %v", err)
+	}
+
+	executionTasks := deriveExecutionTasksWithRoot(root, task, nil)
+	if len(executionTasks) != 4 {
+		t.Fatalf("expected roster-driven fanout after orchestration expansion, got %+v", executionTasks)
+	}
+	if executionTasks[1].EntityBatch[0] != "Ferdinand de Saussure" {
+		t.Fatalf("expected first entity to come from frozen roster, got %+v", executionTasks[1])
+	}
+	if executionTasks[2].EntityBatch[0] != "Noam Chomsky" {
+		t.Fatalf("expected second entity to come from frozen roster, got %+v", executionTasks[2])
+	}
+	if executionTasks[3].OutputTargets[0] != "output/linguists.md" {
+		t.Fatalf("expected final closeout to target the final document, got %+v", executionTasks[3])
 	}
 }

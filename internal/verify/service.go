@@ -104,6 +104,36 @@ func Ingest(request Request) (Result, error) {
 			}
 		}
 		if !gate.Satisfied {
+			if orchestrationExpansionOnly(gate) {
+				payload, err := a2a.NewPayload(map[string]any{
+					"sourceTaskId": request.TaskID,
+					"followUpKind": "replan",
+					"summary":      "current slice verified; runtime must expand the task graph from the frozen roster before continuing",
+				})
+				if err != nil {
+					return Result{}, err
+				}
+				if _, err := a2a.AppendEvent(paths.EventLogPath, a2a.Envelope{
+					Kind:           "replan.emitted",
+					IdempotencyKey: fmt.Sprintf("replan:%s:%d", request.TaskID, request.Attempt),
+					ProjectID:      task.ProjectID,
+					ProjectSpaceID: task.ProjectSpaceID,
+					TraceID:        request.RequestID,
+					CausationID:    verificationResult.Event.MessageID,
+					From:           "orchestrator-node",
+					To:             "worker-supervisor-node",
+					RequestID:      request.RequestID,
+					TaskID:         request.TaskID,
+					PlanEpoch:      request.PlanEpoch,
+					Attempt:        request.Attempt,
+					ReasonCodes:    request.ReasonCodes,
+					Payload:        payload,
+				}); err != nil {
+					return Result{}, err
+				}
+				result.FollowUpEvent = "replan.emitted"
+				return result, nil
+			}
 			if executionTasksRemainingOnly(gate) {
 				payload, err := a2a.NewPayload(map[string]any{
 					"sourceTaskId": request.TaskID,
@@ -267,6 +297,22 @@ func executionTasksRemainingOnly(gate CompletionGate) bool {
 		if !check.OK {
 			failed++
 			if name != "executionTasks" {
+				return false
+			}
+		}
+	}
+	return failed == 1
+}
+
+func orchestrationExpansionOnly(gate CompletionGate) bool {
+	if gate.Satisfied {
+		return false
+	}
+	failed := 0
+	for name, check := range gate.Checks {
+		if !check.OK {
+			failed++
+			if name != "orchestrationExpansion" {
 				return false
 			}
 		}
