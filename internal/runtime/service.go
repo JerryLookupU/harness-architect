@@ -382,7 +382,7 @@ func RunOnce(root string, options RunOptions) (RunResult, error) {
 		},
 	})
 	if err != nil {
-		return RunResult{}, err
+		return handleBurstStartupFailure(paths, task, ticket, leaseRecord, decision, fmt.Errorf("worker startup blocked: %w", err))
 	}
 
 	closeoutResult, err := verify.EnsureCloseoutArtifacts(paths.Root, task, ticket, bundle.ArtifactDir, burst.LogPath, burst.DiffStats, burst.Status, burst.Summary)
@@ -592,6 +592,85 @@ func RunOnce(root string, options RunOptions) (RunResult, error) {
 		BurstStatus:   burst.Status,
 		VerifyStatus:  verifyStatus,
 		FollowUpEvent: runtimeFollowUp,
+	}, nil
+}
+
+func handleBurstStartupFailure(paths adapter.Paths, task adapter.Task, ticket dispatch.Ticket, leaseRecord lease.Record, decision route.Decision, burstErr error) (RunResult, error) {
+	now := state.NowUTC()
+	summary := strings.TrimSpace(errorString(burstErr))
+	if summary == "" {
+		summary = "worker startup blocked"
+	}
+	sessionName := ""
+	logPath := ""
+	if _, err := dispatch.UpdateStatus(paths.Root, ticket.DispatchID, "blocked", "harness-runtime"); err != nil {
+		return RunResult{}, err
+	}
+	if _, err := lease.Release(paths.Root, leaseRecord.LeaseID, ticket.CausationID, []string{"daemon_startup_blocked"}); err != nil {
+		return RunResult{}, err
+	}
+	if session, ok, err := tmux.FindTaskSession(paths.Root, task.TaskID, ""); err != nil {
+		return RunResult{}, err
+	} else if ok {
+		sessionName = session.SessionName
+		logPath = session.LogPath
+		session.Status = "blocked"
+		session.FinishedAt = now
+		if err := tmux.UpsertSessionState(paths.Root, session); err != nil {
+			return RunResult{}, err
+		}
+	}
+	if err := updateTask(paths.Root, task.TaskID, func(current *adapter.Task) {
+		current.Status = "blocked"
+		current.StatusReason = summary
+		current.LastDispatchID = ticket.DispatchID
+		current.LastLeaseID = ""
+		current.VerificationStatus = "blocked"
+		current.VerificationSummary = summary
+		current.VerificationResultPath = ""
+		current.TmuxSession = coalesce(sessionName, current.TmuxSession)
+		current.TmuxLogPath = coalesce(logPath, current.TmuxLogPath)
+		current.UpdatedAt = now
+	}); err != nil {
+		return RunResult{}, err
+	}
+	if err := updateVerification(paths.VerificationSummaryPath, VerificationEntry{
+		TaskID:     task.TaskID,
+		DispatchID: ticket.DispatchID,
+		Status:     "blocked",
+		Summary:    summary,
+		ResultPath: "",
+		UpdatedAt:  now,
+		Completed:  false,
+		FollowUp:   "task.blocked",
+	}); err != nil {
+		return RunResult{}, err
+	}
+	if err := updateRuntime(paths.RuntimePath, func(current RuntimeState) RuntimeState {
+		current.Status = "blocked"
+		current.ActiveTaskID = task.TaskID
+		current.LastRunAt = now
+		current.LastError = summary
+		return current
+	}); err != nil {
+		return RunResult{}, err
+	}
+	finalTask, err := adapter.LoadTask(paths.Root, task.TaskID)
+	if err != nil {
+		return RunResult{}, err
+	}
+	if err := refreshExecutionIndexes(paths, finalTask, "", ""); err != nil {
+		return RunResult{}, err
+	}
+	return RunResult{
+		RuntimeStatus: "blocked",
+		Task:          finalTask,
+		Route:         decision,
+		Dispatch:      ticket,
+		LeaseID:       leaseRecord.LeaseID,
+		BurstStatus:   "blocked",
+		VerifyStatus:  "blocked",
+		FollowUpEvent: "task.blocked",
 	}, nil
 }
 

@@ -80,6 +80,51 @@ func TestIntegrationBurstFailureEmitsReplan(t *testing.T) {
 	}
 }
 
+func TestIntegrationTmuxStartupFailureBlocksTaskInsteadOfLeavingRunningState(t *testing.T) {
+	env := newHarnessEnv(t)
+	t.Setenv("FAKE_TMUX_MODE", "new-session-fail")
+
+	runHarness(t, env, "submit", env.root, "--goal", "Fix tmux startup handling")
+	result := runHarnessDaemon(t, env)
+	if result.RuntimeStatus != "blocked" || result.BurstStatus != "blocked" || result.VerifyStatus != "blocked" || result.FollowUpEvent != "task.blocked" {
+		t.Fatalf("expected blocked startup result, got %#v", result)
+	}
+	task, err := adapter.LoadTask(env.root, "T-001")
+	if err != nil {
+		t.Fatalf("load task: %v", err)
+	}
+	if task.Status != "blocked" || task.LastLeaseID != "" {
+		t.Fatalf("expected blocked task with released lease, got %#v", task)
+	}
+	if !strings.Contains(task.StatusReason, "worker startup blocked: tmux: create window failed: fork failed: Device not configured") {
+		t.Fatalf("expected startup failure reason on task, got %#v", task)
+	}
+	if task.TmuxSession == "" || task.TmuxLogPath == "" {
+		t.Fatalf("expected tmux metadata to remain visible, got %#v", task)
+	}
+	var verification struct {
+		Tasks map[string]struct {
+			Status   string `json:"status"`
+			Summary  string `json:"summary"`
+			FollowUp string `json:"followUp"`
+		} `json:"tasks"`
+	}
+	if err := state.LoadJSON(filepath.Join(env.root, ".harness", "state", "verification-summary.json"), &verification); err != nil {
+		t.Fatalf("load verification summary: %v", err)
+	}
+	if verification.Tasks["T-001"].Status != "blocked" || verification.Tasks["T-001"].FollowUp != "task.blocked" {
+		t.Fatalf("expected blocked verification summary, got %#v", verification.Tasks["T-001"])
+	}
+	summary, err := tmux.LoadSummary(env.root)
+	if err != nil {
+		t.Fatalf("load tmux summary: %v", err)
+	}
+	session := summary.Sessions[task.TmuxSession]
+	if session.Status != "blocked" {
+		t.Fatalf("expected tmux session to be marked blocked, got %#v", session)
+	}
+}
+
 func TestIntegrationQueuedDuplicateSubmitReusesTask(t *testing.T) {
 	env := newHarnessEnv(t)
 
@@ -600,6 +645,10 @@ session_dir() {
 }
 case "$cmd" in
   new-session)
+    if [[ "${FAKE_TMUX_MODE:-}" == "new-session-fail" ]]; then
+      echo "create window failed: fork failed: Device not configured" >&2
+      exit 1
+    fi
     session=""
     cwd=""
     while [[ $# -gt 0 ]]; do

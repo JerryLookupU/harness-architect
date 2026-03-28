@@ -67,3 +67,7 @@ func FindTaskSession(root, taskID, preferredSession string) (SessionState, bool,
 	}
 	return SessionState{}, false, nil
 }
+
+func UpsertSessionState(root string, session SessionState) error {
+	return writeTmuxSummary(root, session)
+}
