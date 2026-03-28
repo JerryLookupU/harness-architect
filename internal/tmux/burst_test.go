@@ -75,6 +75,59 @@ func TestRunBoundedBurstWritesOutcome(t *testing.T) {
 	}
 }
 
+func TestRunBoundedBurstFallsBackToDirectExecutionWhenTmuxCannotOpenPTY(t *testing.T) {
+	fakeBin := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatalf("mkdir fake bin: %v", err)
+	}
+	tmuxRoot := filepath.Join(t.TempDir(), "tmux")
+	if err := os.MkdirAll(tmuxRoot, 0o755); err != nil {
+		t.Fatalf("mkdir fake tmux root: %v", err)
+	}
+	writeExecutable(t, filepath.Join(fakeBin, "tmux"), fakeTmuxForBurstTest)
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FAKE_TMUX_ROOT", tmuxRoot)
+	t.Setenv("FAKE_TMUX_MODE", "new-session-fail")
+
+	root := t.TempDir()
+	checkpointPath := filepath.Join(root, "checkpoints", "task.json")
+	outcomePath := filepath.Join(root, "checkpoints", "outcome.json")
+	promptPath := filepath.Join(root, "runner-prompt.md")
+	if err := os.WriteFile(promptPath, []byte("fallback-stdin\n"), 0o644); err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+	result, err := RunBoundedBurst(BurstRequest{
+		Root:           root,
+		TaskID:         "T-2",
+		DispatchID:     "dispatch-2",
+		WorkerID:       "worker-2",
+		Cwd:            root,
+		Command:        "cat > fallback.txt",
+		PromptPath:     promptPath,
+		CheckpointPath: checkpointPath,
+		OutcomePath:    outcomePath,
+		Budget: dispatch.Budget{
+			MaxMinutes: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("run bounded burst fallback: %v", err)
+	}
+	if result.Status != "succeeded" || result.SessionName != "" {
+		t.Fatalf("expected direct fallback success without tmux session, got %#v", result)
+	}
+	payload, err := os.ReadFile(filepath.Join(root, "fallback.txt"))
+	if err != nil {
+		t.Fatalf("read fallback output: %v", err)
+	}
+	if string(payload) != "fallback-stdin\n" {
+		t.Fatalf("unexpected fallback stdin payload: %q", string(payload))
+	}
+	if !strings.Contains(result.Summary, "direct fallback") {
+		t.Fatalf("expected direct fallback summary, got %#v", result)
+	}
+}
+
 func TestDefaultSessionNameIncludesScopeToken(t *testing.T) {
 	nameA := defaultSessionName("/tmp/repo-a", "", "T-1", "dispatch-1")
 	nameB := defaultSessionName("/tmp/repo-b", "", "T-1", "dispatch-1")
@@ -113,6 +166,10 @@ session_dir() {
 }
 case "$cmd" in
   new-session)
+    if [[ "${FAKE_TMUX_MODE:-}" == "new-session-fail" ]]; then
+      echo "create window failed: fork failed: Device not configured" >&2
+      exit 1
+    fi
     session=""
     cwd=""
     while [[ $# -gt 0 ]]; do

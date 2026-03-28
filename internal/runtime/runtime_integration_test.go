@@ -80,27 +80,24 @@ func TestIntegrationBurstFailureEmitsReplan(t *testing.T) {
 	}
 }
 
-func TestIntegrationTmuxStartupFailureBlocksTaskInsteadOfLeavingRunningState(t *testing.T) {
+func TestIntegrationTmuxStartupFailureFallsBackToDirectExecution(t *testing.T) {
 	env := newHarnessEnv(t)
 	t.Setenv("FAKE_TMUX_MODE", "new-session-fail")
 
 	runHarness(t, env, "submit", env.root, "--goal", "Fix tmux startup handling")
 	result := runHarnessDaemon(t, env)
-	if result.RuntimeStatus != "blocked" || result.BurstStatus != "blocked" || result.VerifyStatus != "blocked" || result.FollowUpEvent != "task.blocked" {
-		t.Fatalf("expected blocked startup result, got %#v", result)
+	if result.RuntimeStatus != "completed" || result.BurstStatus != "succeeded" || result.VerifyStatus != "passed" || result.FollowUpEvent != "task.completed" {
+		t.Fatalf("expected direct fallback completion result, got %#v", result)
 	}
 	task, err := adapter.LoadTask(env.root, "T-001")
 	if err != nil {
 		t.Fatalf("load task: %v", err)
 	}
-	if task.Status != "blocked" || task.LastLeaseID != "" {
-		t.Fatalf("expected blocked task with released lease, got %#v", task)
+	if task.Status != "completed" || task.LastLeaseID != "" {
+		t.Fatalf("expected completed task with released lease, got %#v", task)
 	}
-	if !strings.Contains(task.StatusReason, "worker startup blocked: tmux: create window failed: fork failed: Device not configured") {
-		t.Fatalf("expected startup failure reason on task, got %#v", task)
-	}
-	if task.TmuxSession == "" || task.TmuxLogPath == "" {
-		t.Fatalf("expected tmux metadata to remain visible, got %#v", task)
+	if task.TmuxSession != "" || task.TmuxLogPath == "" {
+		t.Fatalf("expected direct fallback without tmux session but with log path, got %#v", task)
 	}
 	var verification struct {
 		Tasks map[string]struct {
@@ -112,16 +109,15 @@ func TestIntegrationTmuxStartupFailureBlocksTaskInsteadOfLeavingRunningState(t *
 	if err := state.LoadJSON(filepath.Join(env.root, ".harness", "state", "verification-summary.json"), &verification); err != nil {
 		t.Fatalf("load verification summary: %v", err)
 	}
-	if verification.Tasks["T-001"].Status != "blocked" || verification.Tasks["T-001"].FollowUp != "task.blocked" {
-		t.Fatalf("expected blocked verification summary, got %#v", verification.Tasks["T-001"])
+	if verification.Tasks["T-001"].Status != "passed" || verification.Tasks["T-001"].FollowUp != "task.completed" {
+		t.Fatalf("expected passed verification summary, got %#v", verification.Tasks["T-001"])
 	}
 	summary, err := tmux.LoadSummary(env.root)
 	if err != nil {
 		t.Fatalf("load tmux summary: %v", err)
 	}
-	session := summary.Sessions[task.TmuxSession]
-	if session.Status != "blocked" {
-		t.Fatalf("expected tmux session to be marked blocked, got %#v", session)
+	if len(summary.Sessions) != 0 {
+		t.Fatalf("expected no tmux session records after direct fallback, got %#v", summary)
 	}
 }
 

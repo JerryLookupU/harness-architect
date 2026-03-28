@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -85,21 +86,6 @@ func RunBoundedBurst(request BurstRequest) (Result, error) {
 	result.SessionName = request.SessionName
 	result.LogPath = request.LogPath
 	result.CommandBanner = strings.TrimSpace(request.CommandBanner)
-	if err := writeTmuxSummary(request.Root, SessionState{
-		SessionName:   request.SessionName,
-		TaskID:        request.TaskID,
-		DispatchID:    request.DispatchID,
-		WorkerID:      request.WorkerID,
-		Cwd:           request.Cwd,
-		LogPath:       request.LogPath,
-		CheckpointRef: request.CheckpointPath,
-		OutcomeRef:    request.OutcomePath,
-		Status:        "starting",
-		StartedAt:     result.StartedAt,
-		AttachCommand: AttachCommand(request.SessionName),
-	}); err != nil {
-		return result, err
-	}
 	if err := writeJSON(request.CheckpointPath, map[string]any{
 		"schemaVersion": "1.0",
 		"generator":     "kh-worker-supervisor",
@@ -127,6 +113,25 @@ func RunBoundedBurst(request BurstRequest) (Result, error) {
 		return result, err
 	}
 	if err := CreateDetachedSession(request.SessionName, request.Cwd); err != nil {
+		if shouldFallbackWithoutTmux(err) {
+			result.SessionName = ""
+			return runDirectBurstFallback(request, result, runnerPath)
+		}
+		return result, err
+	}
+	if err := writeTmuxSummary(request.Root, SessionState{
+		SessionName:   request.SessionName,
+		TaskID:        request.TaskID,
+		DispatchID:    request.DispatchID,
+		WorkerID:      request.WorkerID,
+		Cwd:           request.Cwd,
+		LogPath:       request.LogPath,
+		CheckpointRef: request.CheckpointPath,
+		OutcomeRef:    request.OutcomePath,
+		Status:        "starting",
+		StartedAt:     result.StartedAt,
+		AttachCommand: AttachCommand(request.SessionName),
+	}); err != nil {
 		return result, err
 	}
 	if err := SetRemainOnExit(request.SessionName); err != nil {
@@ -208,6 +213,60 @@ func RunBoundedBurst(request BurstRequest) (Result, error) {
 	return result, nil
 }
 
+func runDirectBurstFallback(request BurstRequest, result Result, runnerPath string) (Result, error) {
+	maxMinutes := request.Budget.MaxMinutes
+	if maxMinutes <= 0 {
+		maxMinutes = 20
+	}
+	if err := os.MkdirAll(filepath.Dir(request.LogPath), 0o755); err != nil {
+		return result, err
+	}
+	logFile, err := os.OpenFile(request.LogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return result, err
+	}
+	defer logFile.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(maxMinutes)*time.Minute)
+	defer cancel()
+
+	command := exec.CommandContext(ctx, "/bin/sh", runnerPath)
+	command.Dir = request.Cwd
+	command.Stdout = logFile
+	command.Stderr = logFile
+	runErr := command.Run()
+	timedOut := errorsIsContextDeadline(runErr) || ctx.Err() == context.DeadlineExceeded
+
+	finished := time.Now().UTC()
+	result.FinishedAt = finished.Format(time.RFC3339)
+	result.DurationSec = int64(finished.Sub(parseRFC3339OrNow(result.StartedAt)).Seconds())
+	result.Stdout = readLogTail(request.LogPath)
+	if timedOut {
+		result.ExitCode = 124
+		result.Status = "timed_out"
+		result.Summary = "bounded burst exceeded maxMinutes (direct fallback)"
+	} else if runErr != nil {
+		if exitErr, ok := runErr.(*exec.ExitError); ok {
+			result.ExitCode = exitErr.ExitCode()
+		} else {
+			result.ExitCode = 1
+		}
+		result.Status = "failed"
+		result.Summary = "bounded burst failed (direct fallback)"
+	} else {
+		result.ExitCode = 0
+		result.Status = "succeeded"
+		result.Summary = "bounded burst completed (direct fallback)"
+	}
+	result.DiffStats = collectDiffStats(request.Cwd)
+	result.Artifacts = append(result.Artifacts, request.Artifacts...)
+	result.Artifacts = append(result.Artifacts, request.CheckpointPath, request.OutcomePath, request.LogPath, runnerPath)
+	if err := writeJSON(request.OutcomePath, result); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
 func collectDiffStats(cwd string) map[string]int {
 	stats := map[string]int{"filesChanged": 0, "insertions": 0, "deletions": 0}
 	command := exec.Command("/bin/sh", "-lc", "git diff --numstat")
@@ -241,6 +300,27 @@ func writeJSON(path string, value any) error {
 		return err
 	}
 	return os.WriteFile(path, append(payload, '\n'), 0o644)
+}
+
+func shouldFallbackWithoutTmux(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "device not configured") ||
+		strings.Contains(text, "openpty") ||
+		strings.Contains(text, "fork failed")
+}
+
+func errorsIsContextDeadline(err error) bool {
+	return err != nil && (err == context.DeadlineExceeded || strings.Contains(strings.ToLower(err.Error()), "context deadline exceeded"))
+}
+
+func parseRFC3339OrNow(value string) time.Time {
+	if when, err := time.Parse(time.RFC3339, strings.TrimSpace(value)); err == nil {
+		return when
+	}
+	return time.Now().UTC()
 }
 
 func shellQuote(value string) string {
