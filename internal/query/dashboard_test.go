@@ -217,6 +217,9 @@ func TestProjectDashboardSurfacesThreadLandingsPlanningAndTokenUsage(t *testing.
 	if flow.Runtime.DispatchID != "dispatch-dash" || flow.Runtime.CurrentSliceID != first.Task.TaskID+".slice.1" {
 		t.Fatalf("expected runtime view to surface dispatch and slice, got %+v", flow.Runtime)
 	}
+	if flow.ExecutionMode != "tmux" || flow.Runtime.ExecutionMode != "tmux" {
+		t.Fatalf("expected tmux execution mode in flow/runtime, got flow=%q runtime=%q", flow.ExecutionMode, flow.Runtime.ExecutionMode)
+	}
 	if flow.Operator.Headline == "" || len(flow.Operator.HumanTaskList) == 0 {
 		t.Fatalf("expected operator view to surface human progress, got %+v", flow.Operator)
 	}
@@ -249,6 +252,49 @@ func TestProjectDashboardSurfacesThreadLandingsPlanningAndTokenUsage(t *testing.
 	}
 	if !workers["worker-a"] || !workers["worker-b"] {
 		t.Fatalf("expected tmux worker ids to be tracked, got %+v", tmuxEvents)
+	}
+}
+
+func TestProjectDashboardSurfacesDirectFallbackExecutionMode(t *testing.T) {
+	root := t.TempDir()
+	if _, err := bootstrap.Init(root); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if err := adapter.UpsertTask(root, adapter.Task{
+		TaskID:         "T-direct",
+		ThreadKey:      "thread-direct",
+		Title:          "Direct fallback task",
+		Summary:        "Run without tmux session",
+		Status:         "completed",
+		PlanEpoch:      1,
+		LastDispatchID: "dispatch-direct",
+		ExecutionMode:  "direct_fallback",
+		TmuxLogPath:    filepath.Join(root, ".harness", "logs", "tmux", "T-direct", "dispatch-direct.log"),
+		UpdatedAt:      "2026-03-28T10:00:00Z",
+	}); err != nil {
+		t.Fatalf("upsert task: %v", err)
+	}
+
+	dashboard, err := ProjectDashboard(root)
+	if err != nil {
+		t.Fatalf("project dashboard: %v", err)
+	}
+	if len(dashboard.TaskFlows) != 1 {
+		t.Fatalf("expected one task flow, got %+v", dashboard.TaskFlows)
+	}
+	flow := dashboard.TaskFlows[0]
+	if flow.ExecutionMode != "direct_fallback" || flow.Runtime.ExecutionMode != "direct_fallback" {
+		t.Fatalf("expected direct fallback execution mode, got flow=%q runtime=%q", flow.ExecutionMode, flow.Runtime.ExecutionMode)
+	}
+	found := false
+	for _, event := range flow.ExecutionChain {
+		if event.Kind == "worker.direct_fallback" && event.Path == filepath.Join(root, ".harness", "logs", "tmux", "T-direct", "dispatch-direct.log") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected synthetic direct fallback worker event, got %+v", flow.ExecutionChain)
 	}
 }
 

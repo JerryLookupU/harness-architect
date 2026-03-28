@@ -106,6 +106,7 @@ export type DashboardRuntimeView = {
   releaseStatus?: string;
   dispatchId?: string;
   leaseId?: string;
+  executionMode?: string;
   sessionName?: string;
   currentSliceId?: string;
   promptStages?: string[];
@@ -176,6 +177,7 @@ export type DashboardTaskFlow = {
   planEpoch?: number;
   currentSliceId?: string;
   lastDispatchId?: string;
+  executionMode?: string;
   tmuxSession?: string;
   release: ReleaseReadiness;
   planning: DashboardPlanning;

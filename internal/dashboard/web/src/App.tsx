@@ -760,6 +760,8 @@ function RuntimeCard(props: { flow: DashboardTaskFlow }) {
         <br />
         lease={runtime.leaseId || "-"}
         <br />
+        mode={runtime.executionMode || props.flow.executionMode || "-"}
+        <br />
         session={runtime.sessionName || "-"}
         <br />
         slice={runtime.currentSliceId || "-"}
@@ -900,6 +902,18 @@ function buildWorkerNodes(flow: DashboardTaskFlow | null): WorkerNode[] {
       sessionName: flow.tmuxSession,
       at: flow.updatedAt,
       kind: "tmux.current",
+    });
+  }
+
+  if (!flow.tmuxSession && flow.runtime?.executionMode === "direct_fallback") {
+    pushNode({
+      id: `direct-${flow.taskId}-${flow.lastDispatchId || flow.updatedAt || "worker"}`,
+      title: "Direct Fallback Worker",
+      status: flow.status === "running" ? "running" : flow.status || "active",
+      summary: flow.runtime.attachCommand || flow.lastDispatchId || "worker executed without tmux session",
+      dispatchId: flow.lastDispatchId,
+      at: flow.updatedAt,
+      kind: "worker.direct_fallback",
     });
   }
 

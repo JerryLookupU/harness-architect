@@ -350,6 +350,7 @@ func RunOnce(root string, options RunOptions) (RunResult, error) {
 		current.Status = "running"
 		current.LastDispatchID = ticket.DispatchID
 		current.LastLeaseID = leaseRecord.LeaseID
+		current.ExecutionMode = ""
 		current.VerificationStatus = ""
 		current.VerificationSummary = ""
 		current.VerificationResultPath = ""
@@ -529,6 +530,7 @@ func RunOnce(root string, options RunOptions) (RunResult, error) {
 		current.StatusReason = coalesce(runtimeFollowUp, burst.Summary)
 		current.LastDispatchID = ticket.DispatchID
 		current.LastLeaseID = ""
+		current.ExecutionMode = coalesce(burst.ExecutionMode, current.ExecutionMode)
 		current.VerificationStatus = verifyStatus
 		current.VerificationSummary = verifySummary
 		current.VerificationResultPath = verifyPath
@@ -625,6 +627,7 @@ func handleBurstStartupFailure(paths adapter.Paths, task adapter.Task, ticket di
 		current.StatusReason = summary
 		current.LastDispatchID = ticket.DispatchID
 		current.LastLeaseID = ""
+		current.ExecutionMode = "tmux"
 		current.VerificationStatus = "blocked"
 		current.VerificationSummary = summary
 		current.VerificationResultPath = ""

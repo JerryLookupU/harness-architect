@@ -80,6 +80,7 @@ type Task struct {
 	VerificationResultPath    string          `json:"verificationResultPath,omitempty"`
 	LastDispatchID            string          `json:"lastDispatchId,omitempty"`
 	LastLeaseID               string          `json:"lastLeaseId,omitempty"`
+	ExecutionMode             string          `json:"executionMode,omitempty"`
 	TmuxSession               string          `json:"tmuxSession,omitempty"`
 	TmuxLogPath               string          `json:"tmuxLogPath,omitempty"`
 	StatusReason              string          `json:"statusReason,omitempty"`

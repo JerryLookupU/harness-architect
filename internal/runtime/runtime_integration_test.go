@@ -96,6 +96,9 @@ func TestIntegrationTmuxStartupFailureFallsBackToDirectExecution(t *testing.T) {
 	if task.Status != "completed" || task.LastLeaseID != "" {
 		t.Fatalf("expected completed task with released lease, got %#v", task)
 	}
+	if task.ExecutionMode != "direct_fallback" {
+		t.Fatalf("expected direct fallback execution mode, got %#v", task)
+	}
 	if task.TmuxSession != "" || task.TmuxLogPath == "" {
 		t.Fatalf("expected direct fallback without tmux session but with log path, got %#v", task)
 	}
@@ -118,6 +121,10 @@ func TestIntegrationTmuxStartupFailureFallsBackToDirectExecution(t *testing.T) {
 	}
 	if len(summary.Sessions) != 0 {
 		t.Fatalf("expected no tmux session records after direct fallback, got %#v", summary)
+	}
+	status := runTaskView(t, env, "control", env.root, "task", "T-001", "status")
+	if status.Task.ExecutionMode != "direct_fallback" {
+		t.Fatalf("expected task status to surface direct fallback execution mode, got %#v", status.Task)
 	}
 }
 

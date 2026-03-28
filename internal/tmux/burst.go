@@ -39,6 +39,7 @@ type Result struct {
 	SchemaVersion string         `json:"schemaVersion"`
 	Generator     string         `json:"generator"`
 	GeneratedAt   string         `json:"generatedAt"`
+	ExecutionMode string         `json:"executionMode,omitempty"`
 	Status        string         `json:"status"`
 	Summary       string         `json:"summary"`
 	ExitCode      int            `json:"exitCode"`
@@ -119,11 +120,13 @@ func RunBoundedBurst(request BurstRequest) (Result, error) {
 		}
 		return result, err
 	}
+	result.ExecutionMode = "tmux"
 	if err := writeTmuxSummary(request.Root, SessionState{
 		SessionName:   request.SessionName,
 		TaskID:        request.TaskID,
 		DispatchID:    request.DispatchID,
 		WorkerID:      request.WorkerID,
+		ExecutionMode: result.ExecutionMode,
 		Cwd:           request.Cwd,
 		LogPath:       request.LogPath,
 		CheckpointRef: request.CheckpointPath,
@@ -148,6 +151,7 @@ func RunBoundedBurst(request BurstRequest) (Result, error) {
 		TaskID:        request.TaskID,
 		DispatchID:    request.DispatchID,
 		WorkerID:      request.WorkerID,
+		ExecutionMode: result.ExecutionMode,
 		Cwd:           request.Cwd,
 		LogPath:       request.LogPath,
 		CheckpointRef: request.CheckpointPath,
@@ -198,6 +202,7 @@ func RunBoundedBurst(request BurstRequest) (Result, error) {
 		TaskID:        request.TaskID,
 		DispatchID:    request.DispatchID,
 		WorkerID:      request.WorkerID,
+		ExecutionMode: result.ExecutionMode,
 		Cwd:           request.Cwd,
 		LogPath:       request.LogPath,
 		CheckpointRef: request.CheckpointPath,
@@ -218,6 +223,7 @@ func runDirectBurstFallback(request BurstRequest, result Result, runnerPath stri
 	if maxMinutes <= 0 {
 		maxMinutes = 20
 	}
+	result.ExecutionMode = "direct_fallback"
 	if err := os.MkdirAll(filepath.Dir(request.LogPath), 0o755); err != nil {
 		return result, err
 	}

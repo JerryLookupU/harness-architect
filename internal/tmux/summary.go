@@ -10,6 +10,7 @@ type SessionState struct {
 	TaskID        string `json:"taskId,omitempty"`
 	DispatchID    string `json:"dispatchId,omitempty"`
 	WorkerID      string `json:"workerId,omitempty"`
+	ExecutionMode string `json:"executionMode,omitempty"`
 	Cwd           string `json:"cwd,omitempty"`
 	LogPath       string `json:"logPath,omitempty"`
 	CheckpointRef string `json:"checkpointRef,omitempty"`

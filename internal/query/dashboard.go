@@ -91,6 +91,7 @@ type DashboardTaskFlow struct {
 	PlanEpoch       int                   `json:"planEpoch,omitempty"`
 	CurrentSliceID  string                `json:"currentSliceId,omitempty"`
 	LastDispatchID  string                `json:"lastDispatchId,omitempty"`
+	ExecutionMode   string                `json:"executionMode,omitempty"`
 	TmuxSession     string                `json:"tmuxSession,omitempty"`
 	Release         ReleaseReadiness      `json:"release"`
 	Planning        DashboardPlanning     `json:"planning"`
@@ -119,6 +120,7 @@ type DashboardRuntimeView struct {
 	ReleaseStatus  string   `json:"releaseStatus,omitempty"`
 	DispatchID     string   `json:"dispatchId,omitempty"`
 	LeaseID        string   `json:"leaseId,omitempty"`
+	ExecutionMode  string   `json:"executionMode,omitempty"`
 	SessionName    string   `json:"sessionName,omitempty"`
 	CurrentSliceID string   `json:"currentSliceId,omitempty"`
 	PromptStages   []string `json:"promptStages,omitempty"`
@@ -416,15 +418,22 @@ func buildDashboardTaskFlow(
 		UpdatedAt:      task.UpdatedAt,
 		PlanEpoch:      task.PlanEpoch,
 		LastDispatchID: task.LastDispatchID,
+		ExecutionMode:  task.ExecutionMode,
 		TmuxSession:    task.TmuxSession,
 	}
 	warnings := []string{}
 	if view != nil {
+		if flow.TmuxSession == "" && view.Tmux != nil {
+			flow.TmuxSession = view.Tmux.SessionName
+		}
 		flow.Release = view.Release
 		flow.AttachCommand = view.AttachCommand
 		flow.LogPreview = append([]string(nil), view.LogPreview...)
 	} else {
 		flow.Release = ReleaseReadiness{Status: task.Status}
+	}
+	if flow.TmuxSession == "" {
+		flow.TmuxSession = latestTaskTmuxSession(tmuxSummary, task.TaskID)
 	}
 	requestIDs := append([]string{}, requestState.Map.TaskToRequests[task.TaskID]...)
 	if len(requestIDs) == 0 {
@@ -459,6 +468,7 @@ func buildDashboardTaskFlow(
 	flow.TokenUsage = tokenUsage
 	flow.Model = buildModelView(task, view, flow.TaskList, flow.Checklist)
 	flow.Runtime = buildRuntimeView(task, view, flow)
+	flow.ExecutionMode = firstNonEmpty(flow.ExecutionMode, flow.Runtime.ExecutionMode)
 	flow.Operator = buildOperatorView(task, view, flow, warnings)
 	flow.DataWarnings = uniqueNonEmpty(warnings)
 	return flow, tokenUsage, warnings, executionChain
@@ -731,6 +741,7 @@ func buildRuntimeView(task adapter.Task, view *TaskView, flow DashboardTaskFlow)
 		ReleaseStatus:  flow.Release.Status,
 		DispatchID:     task.LastDispatchID,
 		LeaseID:        task.LastLeaseID,
+		ExecutionMode:  effectiveExecutionMode(task, flow),
 		SessionName:    firstNonEmpty(task.TmuxSession, flow.TmuxSession),
 		CurrentSliceID: flow.CurrentSliceID,
 		AttachCommand:  flow.AttachCommand,
@@ -740,6 +751,19 @@ func buildRuntimeView(task adapter.Task, view *TaskView, flow DashboardTaskFlow)
 		runtimeView.PromptStages = append([]string(nil), view.Planning.PromptStages...)
 	}
 	return runtimeView
+}
+
+func effectiveExecutionMode(task adapter.Task, flow DashboardTaskFlow) string {
+	if strings.TrimSpace(task.ExecutionMode) != "" {
+		return task.ExecutionMode
+	}
+	if strings.TrimSpace(flow.TmuxSession) != "" {
+		return "tmux"
+	}
+	if strings.TrimSpace(task.TmuxLogPath) != "" {
+		return "direct_fallback"
+	}
+	return ""
 }
 
 func buildOperatorView(task adapter.Task, view *TaskView, flow DashboardTaskFlow, warnings []string) DashboardOperatorView {
@@ -1042,6 +1066,19 @@ func buildExecutionChain(
 			Path:        session.LogPath,
 		})
 	}
+	if strings.TrimSpace(task.TmuxSession) == "" && strings.TrimSpace(task.TmuxLogPath) != "" {
+		out = append(out, ExecutionEvent{
+			At:         task.UpdatedAt,
+			Kind:       "worker.direct_fallback",
+			Title:      "direct fallback worker",
+			Status:     firstNonEmpty(task.Status, "running"),
+			Summary:    firstNonEmpty(task.TmuxLogPath, "direct fallback execution"),
+			Source:     "task-state",
+			TaskID:     task.TaskID,
+			DispatchID: task.LastDispatchID,
+			Path:       task.TmuxLogPath,
+		})
+	}
 	if checkpointState, ok := checkpointSummary.Tasks[task.TaskID]; ok {
 		if checkpointState.LatestCheckpoint.TaskID != "" {
 			out = append(out, ExecutionEvent{
@@ -1128,6 +1165,17 @@ func taskTmuxSessions(summary tmux.Summary, taskID string) []tmux.SessionState {
 		return left < right
 	})
 	return sessions
+}
+
+func latestTaskTmuxSession(summary tmux.Summary, taskID string) string {
+	if sessionName := strings.TrimSpace(summary.LatestByTask[taskID]); sessionName != "" {
+		return sessionName
+	}
+	sessions := taskTmuxSessions(summary, taskID)
+	if len(sessions) == 0 {
+		return ""
+	}
+	return sessions[len(sessions)-1].SessionName
 }
 
 func collectTokenUsage(paths adapter.Paths, task adapter.Task, view *TaskView, warnings *[]string) TokenUsage {
