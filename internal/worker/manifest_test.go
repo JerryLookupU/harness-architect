@@ -107,6 +107,9 @@ func TestPrepareWritesDispatchTicketWorkerSpecAndPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare bundle: %v", err)
 	}
+	if bundle.HandoffPath != filepath.Join(bundle.ArtifactDir, "handoff.md") {
+		t.Fatalf("expected bundle handoff path to point at handoff.md, got %+v", bundle)
+	}
 
 	var ticket struct {
 		SchemaVersion           string   `json:"schemaVersion"`

@@ -116,6 +116,12 @@ runtime 内部现在明确区分：
 
 这样 operator 不必反向猜测“当前 runtime 正卡在哪个 slice、哪一套 takeover 合同、哪一轮 verify”。
 
+其中 handoff 语义现在明确拆成两类：
+
+- `handoff-contract.json` 是程序生成的 handoff 文件合同
+- `handoff.md` 是 worker 实际填写的 handoff 结果
+- `runtime.json.currentHandoffPath` 跟踪的是 `handoff.md`
+
 ## SOP Registry
 
 第一版 registry 在 `internal/orchestration` 中显式落下，当前至少注册：

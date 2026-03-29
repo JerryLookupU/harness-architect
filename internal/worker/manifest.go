@@ -692,7 +692,7 @@ func Prepare(root string, ticket dispatch.Ticket, leaseID string) (DispatchBundl
 		ContextLayersPath:  contextLayersPath,
 		VerifySkeletonPath: verifySkeletonPath,
 		CloseoutPath:       closeoutSkeletonPath,
-		HandoffPath:        handoffContractPath,
+		HandoffPath:        filepath.Join(artifactDir, "handoff.md"),
 		TakeoverPath:       takeoverPath,
 		ExecutionSliceID:   taskContract.ExecutionSliceID,
 		ArtifactDir:        artifactDir,
