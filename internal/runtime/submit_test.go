@@ -121,6 +121,39 @@ func TestSubmitAssignsRepeatedEntityCorpusFamilyAndSOP(t *testing.T) {
 	}
 }
 
+func TestSubmitAssignsSingleArtifactFamilyToDevelopmentSOP(t *testing.T) {
+	root := t.TempDir()
+	if _, err := bootstrap.Init(root); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	result, err := Submit(SubmitRequest{
+		Root: root,
+		Goal: "生成单文档架构总结报告",
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if result.Task.TaskFamily != "single_artifact_generation" || result.Task.SOPID != "sop.development_task.v1" {
+		t.Fatalf("expected single artifact family on development SOP, got %+v", result.Task)
+	}
+	if result.Request.TaskFamily != "single_artifact_generation" || result.Request.SOPID != "sop.development_task.v1" {
+		t.Fatalf("expected request to persist single artifact family + development SOP, got %+v", result.Request)
+	}
+
+	routeInput, err := BuildRouteInput(root, result.Task, result.Task.PlanEpoch, false, false, "state.v10")
+	if err != nil {
+		t.Fatalf("build route input: %v", err)
+	}
+	if routeInput.TaskFamily != "single_artifact_generation" || routeInput.SOPID != "sop.development_task.v1" {
+		t.Fatalf("expected route input to preserve single artifact classification, got %+v", routeInput)
+	}
+	decision := route.Evaluate(routeInput)
+	if !containsString(decision.ReasonCodes, "policy_compiled_contract_first") {
+		t.Fatalf("expected single artifact to use compiled contract policy, got %+v", decision.ReasonCodes)
+	}
+}
+
 func TestSubmitReusesQueuedTaskForSameCanonicalGoal(t *testing.T) {
 	root := t.TempDir()
 	if _, err := bootstrap.Init(root); err != nil {

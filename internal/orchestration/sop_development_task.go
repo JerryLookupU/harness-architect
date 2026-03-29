@@ -74,7 +74,7 @@ func CompileDevelopmentTask(task adapter.Task) CompiledFlow {
 func developmentFlowFamily(task adapter.Task) TaskFamily {
 	family := TaskFamily(task.TaskFamily)
 	switch family {
-	case TaskFamilyBugfixSmall, TaskFamilyFeatureModule, TaskFamilyFeatureSystem, TaskFamilyDevelopmentTask, TaskFamilyIntegrationExternal, TaskFamilyRepairOrResume:
+	case TaskFamilySingleArtifact, TaskFamilyBugfixSmall, TaskFamilyFeatureModule, TaskFamilyFeatureSystem, TaskFamilyDevelopmentTask, TaskFamilyIntegrationExternal, TaskFamilyReviewOrAudit, TaskFamilyRepairOrResume:
 		return family
 	default:
 		return TaskFamilyDevelopmentTask

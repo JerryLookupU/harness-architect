@@ -100,6 +100,48 @@ func TestEvaluateRepeatedEntityCorpusAddsProgrammaticPolicies(t *testing.T) {
 	}
 }
 
+func TestEvaluateSingleArtifactAndReviewUseCompiledContractPolicies(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		taskFamily string
+		title      string
+		summary    string
+	}{
+		{
+			name:       "single artifact",
+			taskFamily: "single_artifact_generation",
+			title:      "Generate one architecture memo",
+			summary:    "Create a single runtime artifact with verify evidence",
+		},
+		{
+			name:       "review audit",
+			taskFamily: "review_or_audit",
+			title:      "Audit route and verify contracts",
+			summary:    "Review the runtime contract chain and produce bounded findings",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decision := Evaluate(Input{
+				TaskID:                 "T-compiled",
+				RoleHint:               "worker",
+				Kind:                   "feature",
+				TaskFamily:             tc.taskFamily,
+				SOPID:                  "sop.development_task.v1",
+				Title:                  tc.title,
+				Summary:                tc.summary,
+				PlanEpoch:              1,
+				LatestPlanEpoch:        1,
+				WorktreePath:           ".worktrees/T-compiled",
+				OwnedPaths:             []string{"docs/**"},
+				RequiredSummaryVersion: "state.v1",
+			})
+			if !containsReason(decision.ReasonCodes, "policy_compiled_contract_first") {
+				t.Fatalf("expected compiled contract policy, got %+v", decision.ReasonCodes)
+			}
+		})
+	}
+}
+
 func TestEvaluateRecommendationAddsOptionsPolicy(t *testing.T) {
 	decision := Evaluate(Input{
 		TaskID:                 "T-design",

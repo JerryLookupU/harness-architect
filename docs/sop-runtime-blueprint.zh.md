@@ -42,6 +42,13 @@
 - `review_or_audit`
 - `repair_or_resume`
 
+其中当前没有专用 SOP 的 family 会先挂到 `sop.development_task.v1` 这条程序编译主链：
+
+- `single_artifact_generation`
+- `review_or_audit`
+
+这样它们也能拿到 requirement / architecture / interface / task-graph / verify / closeout / continuation 合同，而不是掉回 legacy prompt-first 路径。
+
 第一版已接入 runtime submit 分类，并把 `taskFamily` / `sopId` 写入 request record、task、request summary、intake summary、change summary。
 同时 route gate 已显式读到 `taskFamily` / `sopId`：
 

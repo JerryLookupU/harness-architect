@@ -28,13 +28,13 @@ func TestClassifyTaskFamily(t *testing.T) {
 		sopID  string
 	}{
 		{name: "repeated entity corpus", goal: "生成 10 个世界上最伟大的程序员 markdown 文档，每个人不少于 2000 字", family: TaskFamilyRepeatedEntityCorpus, sopID: SOPRepeatedEntityCorpusV1},
-		{name: "single artifact", goal: "生成单文档架构总结报告", family: TaskFamilySingleArtifact},
+		{name: "single artifact", goal: "生成单文档架构总结报告", family: TaskFamilySingleArtifact, sopID: SOPDevelopmentTaskV1},
 		{name: "bugfix small", kind: "bug", goal: "修复 runtime verify 报错", family: TaskFamilyBugfixSmall, sopID: SOPDevelopmentTaskV1},
 		{name: "feature module", kind: "feature", goal: "扩展 dashboard 模块页面", family: TaskFamilyFeatureModule, sopID: SOPDevelopmentTaskV1},
 		{name: "feature system", kind: "feature", goal: "重构 harness runtime orchestration pipeline", family: TaskFamilyFeatureSystem, sopID: SOPDevelopmentTaskV1},
 		{name: "development task", kind: "feature", goal: "实现需求分析、接口设计、模块开发和联调测试", family: TaskFamilyDevelopmentTask, sopID: SOPDevelopmentTaskV1},
 		{name: "integration external", goal: "接入 OAuth 第三方登录", family: TaskFamilyIntegrationExternal, sopID: SOPDevelopmentTaskV1},
-		{name: "review audit", goal: "审计当前 runtime route 与 verify 合同", family: TaskFamilyReviewOrAudit},
+		{name: "review audit", goal: "审计当前 runtime route 与 verify 合同", family: TaskFamilyReviewOrAudit, sopID: SOPDevelopmentTaskV1},
 		{name: "repair resume", goal: "恢复上次中断的 session 并继续执行", family: TaskFamilyRepairOrResume},
 	}
 	for _, tc := range cases {
@@ -79,5 +79,54 @@ func TestMaterializeTaskClassificationPreservesDevelopmentSubFamily(t *testing.T
 	}
 	if task.SOPID != SOPDevelopmentTaskV1 {
 		t.Fatalf("expected development task sop for repair/resume family, got %+v", task)
+	}
+}
+
+func TestCompileFlowForTaskMapsSingleArtifactAndReviewFamiliesToDevelopmentSOP(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		task   adapter.Task
+		family TaskFamily
+	}{
+		{
+			name: "single artifact",
+			task: adapter.Task{
+				TaskID:      "T-single",
+				Kind:        "generate",
+				TaskFamily:  string(TaskFamilySingleArtifact),
+				Title:       "生成单文档架构总结报告",
+				Summary:     "生成单文档架构总结报告",
+				OwnedPaths:  []string{"docs/runtime-report.md"},
+				Description: "只输出一个文件并记录验证证据",
+			},
+			family: TaskFamilySingleArtifact,
+		},
+		{
+			name: "review audit",
+			task: adapter.Task{
+				TaskID:      "T-review",
+				Kind:        "review",
+				TaskFamily:  string(TaskFamilyReviewOrAudit),
+				Title:       "审计 runtime route 与 verify 合同",
+				Summary:     "审计 runtime route 与 verify 合同",
+				OwnedPaths:  []string{"internal/route/**", "internal/verify/**"},
+				Description: "输出审查结论并保留 handoff/verify 收口",
+			},
+			family: TaskFamilyReviewOrAudit,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := MaterializeTaskClassification(tc.task)
+			if task.SOPID != SOPDevelopmentTaskV1 {
+				t.Fatalf("expected family to materialize onto development SOP, got %+v", task)
+			}
+			flow := CompileFlowForTask("/repo", task)
+			if flow.SOPID != SOPDevelopmentTaskV1 || flow.Family != tc.family {
+				t.Fatalf("expected compiled flow to preserve family on development SOP, got %+v", flow)
+			}
+			if len(flow.SharedFlowContext.CompiledPhases) == 0 {
+				t.Fatalf("expected compiled phases for %s, got %+v", tc.name, flow.SharedFlowContext)
+			}
+		})
 	}
 }

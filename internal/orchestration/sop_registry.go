@@ -34,7 +34,7 @@ func (r SOPRegistry) LookupByFamily(family TaskFamily) []SOPDefinition {
 
 func canonicalSOPFamily(family TaskFamily) TaskFamily {
 	switch family {
-	case TaskFamilyBugfixSmall, TaskFamilyFeatureModule, TaskFamilyFeatureSystem, TaskFamilyDevelopmentTask, TaskFamilyIntegrationExternal, TaskFamilyRepairOrResume:
+	case TaskFamilySingleArtifact, TaskFamilyBugfixSmall, TaskFamilyFeatureModule, TaskFamilyFeatureSystem, TaskFamilyDevelopmentTask, TaskFamilyIntegrationExternal, TaskFamilyReviewOrAudit, TaskFamilyRepairOrResume:
 		return TaskFamilyDevelopmentTask
 	default:
 		return family
@@ -104,13 +104,13 @@ func ClassifyTaskFamily(kind, goal string, contexts []string) (TaskFamily, strin
 	lower := strings.ToLower(strings.Join(append([]string{kind, goal}, contexts...), "\n"))
 	switch {
 	case hasAny(lower, "review", "audit", "审查", "审计", "代码评审"):
-		return TaskFamilyReviewOrAudit, ""
+		return TaskFamilyReviewOrAudit, SOPDevelopmentTaskV1
 	case hasAny(lower, "resume", "repair", "恢复", "重试", "断点", "继续执行"):
 		return TaskFamilyRepairOrResume, ""
 	case looksLikeRepeatedEntityCorpus(lower):
 		return TaskFamilyRepeatedEntityCorpus, SOPRepeatedEntityCorpusV1
 	case looksLikeSingleArtifactGeneration(lower):
-		return TaskFamilySingleArtifact, ""
+		return TaskFamilySingleArtifact, SOPDevelopmentTaskV1
 	case hasAny(lower, "integration", "third-party", "第三方", "支付", "oauth", "sso", "接入"):
 		return TaskFamilyIntegrationExternal, SOPDevelopmentTaskV1
 	case hasAny(lower, "bug", "fix", "regression", "error", "failure", "报错", "修复"):

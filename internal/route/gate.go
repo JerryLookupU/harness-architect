@@ -200,7 +200,7 @@ func policyReasonCodes(input Input) []string {
 			"policy_shared_spec_frozen",
 			"policy_programmatic_verify_first",
 		)
-	case "development_task", "bugfix_small", "feature_module", "feature_system", "integration_external", "repair_or_resume":
+	case "single_artifact_generation", "development_task", "bugfix_small", "feature_module", "feature_system", "integration_external", "review_or_audit", "repair_or_resume":
 		tags = append(tags, "policy_compiled_contract_first")
 	}
 	return uniqueReasonCodes(tags)
