@@ -63,3 +63,30 @@ project: openclaw-brain-plugin
 **验证方式**: `tsc --noEmit` 零错误。
 
 <!-- @harness-lint: kind=standard id=STD-005 status=active reviewCadence=fibonacci-hours reviewInterval=34h lastReview=2026-03-19T14:30:00+08:00 nextReview=2026-03-21T00:30:00+08:00 -->
+
+---
+
+## STD-006: Harness Footprint Budget
+
+`.harness` 控制面必须持续输出 footprint 指标，并将体积增长控制在可解释预算内；本体仓库也必须跟踪文件数、LOC 和脚本入口增长速度。
+
+**理由**: phase-1 的目标是补足可复用控制面能力，而不是让 `.harness` 或本体仓库无限膨胀并拖慢并行协作。
+
+**验证方式**:
+- `refresh-state` 必须写出 `.harness/state/footprint.json`。
+- `harness-status` 必须展示 footprint 关键信号。
+- 每轮运行记录一次 `scripts/harness-footprint.sh --json` 或 `scripts/harness-size-tracker.sh --warn-only` 输出。
+
+<!-- @harness-lint: kind=standard id=STD-006 status=active reviewCadence=fibonacci-hours reviewInterval=8h lastReview=2026-03-24T10:30:00+08:00 nextReview=2026-03-24T18:30:00+08:00 -->
+
+---
+
+## STD-007: Multi-Thread Push Conflict Discipline
+
+当 task 允许提交或推送且存在并发 worker 时，必须先 fetch，再做一次有界 rebase 或 merge 重试；若仍冲突，升级为 merge 或 replan 请求，禁止强推覆盖。
+
+**理由**: 多线程并发下 push 冲突是常态，不可把“强推成功”当成收敛策略。
+
+**验证方式**: lineage 或 merge queue 中能看到冲突重试或升级记录；出现 push 失败时不得直接进入 completed。
+
+<!-- @harness-lint: kind=standard id=STD-007 status=active reviewCadence=fibonacci-hours reviewInterval=13h lastReview=2026-03-24T10:30:00+08:00 nextReview=2026-03-24T23:30:00+08:00 -->

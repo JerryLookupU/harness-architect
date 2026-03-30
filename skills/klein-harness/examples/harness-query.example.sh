@@ -2,13 +2,25 @@
 set -euo pipefail
 
 if [ "$#" -lt 2 ]; then
-  echo "usage: $0 <overview|progress|current|blueprint|task|feedback|requests|workers|daemon|worktrees|merge-queue|integration|conflicts|blockers|logs|log> <ROOT> [args...] [--text]" >&2
+  echo "usage: $0 <overview|progress|current|blueprint|task|feedback|requests|workers|daemon|worktrees|merge-queue|integration|conflicts|blockers|logs|log> <ROOT|--root ROOT> [args...] [--text]" >&2
   exit 1
 fi
 
 VIEW="$1"
-ROOT="$2"
-shift 2
+shift
+
+ROOT=""
+if [ "$#" -ge 2 ] && [ "$1" = "--root" ]; then
+  ROOT="$2"
+  shift 2
+elif [ "$#" -ge 1 ] && [[ "$1" != --* ]]; then
+  ROOT="$1"
+  shift
+else
+  echo "usage: $0 <overview|progress|current|blueprint|task|feedback|requests|workers|daemon|worktrees|merge-queue|integration|conflicts|blockers|logs|log> <ROOT|--root ROOT> [args...] [--text]" >&2
+  exit 1
+fi
+
 ARGS=("$@")
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PYTHON_QUERY=""

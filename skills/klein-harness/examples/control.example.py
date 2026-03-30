@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -10,6 +11,7 @@ from pathlib import Path
 from runtime_common import (
     REQUEST_TERMINAL_STATUSES,
     TASK_ACTIVE_STATUSES,
+    collect_dirty_state,
     ensure_runtime_scaffold,
     emit_follow_up_request,
     find_request,
@@ -17,6 +19,7 @@ from runtime_common import (
     lineage_event,
     load_json,
     load_optional_json,
+    load_policy_summary,
     now_iso,
     request_bindings_for_task,
     sync_request_from_bindings,
@@ -183,6 +186,7 @@ def list_runtime_cleanup_candidates(root: Path) -> list[Path]:
     candidates = []
     for pattern in ("runner-exec-*.sh", "runner-prompt-*.md"):
         candidates.extend(sorted(state_dir.glob(pattern)))
+    candidates.extend(sorted(root.glob(".harness.bak-*")))
     daemon_state_path = state_dir / "runner-daemon.json"
     daemon_script_path = state_dir / "runner-daemon.sh"
     daemon_session_path = state_dir / "runner-daemon-tmux-session.txt"
@@ -340,6 +344,7 @@ def cmd_project_tidy_worktrees(root: Path, files: dict, *, fmt: str, dry_run: bo
                 path.unlink(missing_ok=True)
                 removed.append(str(path.relative_to(root)))
             elif path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
                 removed.append(str(path.relative_to(root)))
         if stale_heartbeat_task_ids:
             cleaned_entries = {
@@ -381,6 +386,129 @@ def cmd_project_tidy_worktrees(root: Path, files: dict, *, fmt: str, dry_run: bo
     }
     emit(fmt, payload)
     return 0 if git_prune.returncode == 0 else 1
+
+
+def cmd_project_dirty_report(root: Path, files: dict, *, fmt: str) -> int:
+    policy_summary = load_policy_summary(files["policy_summary_path"], default_generator="harness-control")
+    task_pool = load_json(files["harness"] / "task-pool.json")
+    dirty_state = collect_dirty_state(root, task_pool, policy_summary)
+    payload = {
+        "ok": True,
+        "action": "dirty-report",
+        "status": "observed",
+        "detail": (
+            f"unknownDirty={len(dirty_state.get('unknownDirty', []))} "
+            f"managedDirty={len(dirty_state.get('systemOwnedDirty', []))}"
+        ),
+        "repoReady": dirty_state.get("repoReady"),
+        "safeToExecute": len(dirty_state.get("unknownDirty", [])) == 0,
+        "unknownDirtyCount": len(dirty_state.get("unknownDirty", [])),
+        "managedDirtyCount": len(dirty_state.get("systemOwnedDirty", [])),
+        "unknownDirtyWorktrees": dirty_state.get("unknownDirty", []),
+        "managedDirtyWorktrees": dirty_state.get("systemOwnedDirty", []),
+        "pendingCheckpointTaskIds": dirty_state.get("pendingCheckpointTaskIds", []),
+    }
+    emit(fmt, payload)
+    return 0
+
+
+def cmd_project_stash_unknown_dirty(root: Path, files: dict, *, fmt: str, dry_run: bool, message: str | None) -> int:
+    policy_summary = load_policy_summary(files["policy_summary_path"], default_generator="harness-control")
+    task_pool = load_json(files["harness"] / "task-pool.json")
+    dirty_state = collect_dirty_state(root, task_pool, policy_summary)
+    unknown = dirty_state.get("unknownDirty", [])
+    if not unknown:
+        emit(
+            fmt,
+            {
+                "ok": True,
+                "action": "stash-unknown-dirty",
+                "status": "noop",
+                "detail": "no unknown dirty worktree",
+                "stashedWorktrees": [],
+            },
+        )
+        return 0
+
+    grouped_paths: dict[str, list[str]] = {}
+    truncated_worktrees: list[str] = []
+    for entry in unknown:
+        rel = entry.get("worktreePath") or "."
+        paths = [str(path) for path in entry.get("paths", []) if path]
+        if entry.get("pathCount", 0) > len(paths):
+            truncated_worktrees.append(rel)
+        if not paths:
+            continue
+        grouped_paths.setdefault(rel, [])
+        for path in paths:
+            if path not in grouped_paths[rel]:
+                grouped_paths[rel].append(path)
+    if not grouped_paths:
+        emit(
+            fmt,
+            {
+                "ok": False,
+                "action": "stash-unknown-dirty",
+                "status": "blocked",
+                "detail": "unknown dirty exists but no stashable path sample",
+                "truncatedWorktrees": truncated_worktrees,
+                "nextStep": "run project dirty-report and resolve paths manually",
+            },
+        )
+        return 1
+
+    if dry_run:
+        emit(
+            fmt,
+            {
+                "ok": True,
+                "action": "stash-unknown-dirty",
+                "status": "dry-run",
+                "detail": f"stashedWorktrees={len(grouped_paths)}",
+                "stashedWorktrees": list(grouped_paths.keys()),
+                "truncatedWorktrees": truncated_worktrees,
+                "results": [
+                    {"worktreePath": rel, "status": "would-stash", "pathCount": len(path_list), "paths": path_list}
+                    for rel, path_list in grouped_paths.items()
+                ],
+            },
+        )
+        return 0
+
+    results = []
+    stash_message = message or "harness-control stash unknown dirty"
+    for rel, path_list in grouped_paths.items():
+        worktree = root if rel == "." else (root / rel).resolve()
+        result = subprocess.run(
+            ["git", "-C", str(worktree), "stash", "push", "-u", "-m", stash_message, "--", *path_list],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        results.append(
+            {
+                "worktreePath": rel,
+                "pathCount": len(path_list),
+                "exitCode": result.returncode,
+                "stdout": (result.stdout or "").strip(),
+                "stderr": (result.stderr or "").strip(),
+            }
+        )
+    refresh_runtime_state(root)
+    ok = all(item.get("exitCode", 0) == 0 for item in results)
+    emit(
+        fmt,
+        {
+            "ok": ok,
+            "action": "stash-unknown-dirty",
+            "status": "applied" if ok else "partial",
+            "detail": f"stashedWorktrees={len(grouped_paths)}",
+            "stashedWorktrees": list(grouped_paths.keys()),
+            "truncatedWorktrees": truncated_worktrees,
+            "results": results,
+        },
+    )
+    return 0 if ok else 1
 
 
 def cmd_task(args) -> int:
@@ -531,6 +659,10 @@ def cmd_project(args) -> int:
 
     if args.action == "tidy-worktrees":
         return cmd_project_tidy_worktrees(root, files, fmt=args.format, dry_run=args.dry_run)
+    if args.action == "dirty-report":
+        return cmd_project_dirty_report(root, files, fmt=args.format)
+    if args.action == "stash-unknown-dirty":
+        return cmd_project_stash_unknown_dirty(root, files, fmt=args.format, dry_run=args.dry_run, message=args.message)
 
     raise ValueError(f"unsupported project action: {args.action}")
 
@@ -554,8 +686,9 @@ def main() -> int:
     p_request.add_argument("--reason")
 
     p_project = sub.add_parser("project")
-    p_project.add_argument("action", choices=["archive", "tidy-worktrees"])
+    p_project.add_argument("action", choices=["archive", "tidy-worktrees", "dirty-report", "stash-unknown-dirty"])
     p_project.add_argument("--reason")
+    p_project.add_argument("--message")
     p_project.add_argument("--dry-run", action="store_true")
 
     args = parser.parse_args()

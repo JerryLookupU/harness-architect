@@ -152,6 +152,7 @@ def route_task(task, tasks, session_registry, feedback_summary, request_summary,
         reasons.append(f"dependencies not completed: {unmet_deps}")
 
     if claim.get("agentId") and status in TASK_ACTIVE_STATUSES:
+        claimable = False
         reasons.append(f"task already claimed by {claim.get('agentId')}")
 
     conflicting_tasks = [

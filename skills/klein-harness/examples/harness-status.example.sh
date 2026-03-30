@@ -1,7 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="${1:-$(pwd)}"
+ROOT="$(pwd)"
+if [ "$#" -ge 1 ]; then
+  if [ "$1" = "--root" ]; then
+    if [ "$#" -lt 2 ]; then
+      echo "usage: $0 [ROOT|--root ROOT]" >&2
+      exit 1
+    fi
+    ROOT="$2"
+  elif [[ "$1" == --* ]]; then
+    echo "usage: $0 [ROOT|--root ROOT]" >&2
+    exit 1
+  else
+    ROOT="$1"
+  fi
+fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PYTHON_STATUS=""
 

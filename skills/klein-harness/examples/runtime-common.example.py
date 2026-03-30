@@ -717,7 +717,8 @@ def ensure_runtime_scaffold(root: Path, generator: str = "harness-runtime"):
     lineage_path = harness / "lineage.jsonl"
     root_cause_log_path = harness / "root-cause-log.jsonl"
     for log_path in (queue_path, feedback_log_path, lineage_path, root_cause_log_path):
-        log_path.touch(exist_ok=True)
+        if not log_path.exists():
+            log_path.touch(exist_ok=True)
 
     timestamp = now_iso()
     request_index_path = state_dir / "request-index.json"
@@ -2349,6 +2350,7 @@ def build_guard_state(
         "projectLifecycle": (project_meta or {}).get("lifecycle"),
         "status": status,
         "safeToExecute": not blockers and not completion_gate.get("retired"),
+        "isSafeToRun": not blockers and not completion_gate.get("retired"),
         "repoReady": repo_ready,
         "lockHealthy": daemon_summary.get("status") != "running" or daemon_summary.get("runtimeHealth") == "healthy",
         "completionGateStatus": completion_gate.get("status"),
@@ -2356,12 +2358,15 @@ def build_guard_state(
         "retireEligible": completion_gate.get("retireEligible", False),
         "actionableTodoCount": todo_summary.get("actionableTodoCount", 0),
         "systemOwnedDirtyCount": len(system_owned_dirty),
+        "managedDirtyCount": len(system_owned_dirty),
         "unknownDirtyCount": len(unknown_dirty),
         "pendingCheckpointCount": len(dirty_state.get("pendingCheckpointTaskIds", [])),
         "blockers": bounded(blockers, policy_summary["guard"]["maxRecentGuardBlockers"]),
         "warnings": bounded(warnings, policy_summary["guard"]["maxRecentGuardBlockers"]),
         "systemOwnedDirty": bounded(system_owned_dirty, policy_summary["guard"]["maxDirtyEntries"]),
+        "managedDirtyWorktrees": bounded(system_owned_dirty, policy_summary["guard"]["maxDirtyEntries"]),
         "unknownDirty": bounded(unknown_dirty, policy_summary["guard"]["maxDirtyEntries"]),
+        "unknownDirtyWorktrees": bounded(unknown_dirty, policy_summary["guard"]["maxDirtyEntries"]),
         "autoCheckpointEligibleTaskIds": bounded(
             dirty_state.get("autoCheckpointEligibleTaskIds", []),
             policy_summary["guard"]["maxRecentTodoItems"],

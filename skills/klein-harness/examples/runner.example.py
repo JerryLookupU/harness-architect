@@ -500,6 +500,7 @@ def prompt_lines(task: dict, route_decision: dict, project_root: str, execution_
             "- 什么算待做：只处理当前线程、当前 plan epoch、未 terminal、未 supersede、未被 completion gate 关闭的 actionable todo。",
             "- 什么情况下允许自动改代码：只有 control-plane 明确放行且 guard-state safeToExecute=true 时，才允许后续 worker 自动改业务代码。",
             "- 自动改完后谁来提交/推送：worker 负责本地修改与验证；是否提交/推送遵循 task 和 harness policy，默认不要替 operator 偷推远端。",
+            "- 如果任务允许提交/推送且遇到远端冲突：先 `git fetch` 再基于 integration branch 做一次有界 rebase/merge 重试；仍冲突则写 merge/replan follow-up 请求并停止，不要在多线程下强推。",
             "- 出错、超时、脏工作区怎么处理：先区分 prompt 问题还是 harness 系统问题；保留证据链；不要绕过 spec 偷跑；unknown dirty 默认阻断自动化。",
             "- 怎么知道真的完成：不能只看 exit code，必须同时看 verification、lineage/evidence、completion-gate、todo-summary 与 request/task 状态是否闭环。",
             "- topic drift：如果发现范围漂移、蓝图失效、或当前方案需要重新拆解，先收集证据，再决定发起 audit / replan / blueprint / stop follow-up，不要把新主题直接混进当前 task。",

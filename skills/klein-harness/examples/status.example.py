@@ -24,10 +24,14 @@ def count_tasks(tasks, statuses):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root", required=True, help="project root containing .harness/")
+    parser.add_argument("root_positional", nargs="?", help="project root containing .harness/")
+    parser.add_argument("--root", dest="root_flag", help="project root containing .harness/")
     args = parser.parse_args()
 
-    root = Path(args.root).resolve()
+    root_value = args.root_flag or args.root_positional
+    if not root_value:
+        parser.error("root is required (use positional ROOT or --root ROOT)")
+    root = Path(root_value).resolve()
     files = ensure_runtime_scaffold(root, generator="harness-status")
     harness = files["harness"]
     state_dir = files["state_dir"]
@@ -45,6 +49,7 @@ def main():
     daemon_summary = load_optional_json(files["daemon_summary_path"], {})
     worktree_registry = load_optional_json(files["worktree_registry_path"], {})
     merge_summary = load_optional_json(files["merge_summary_path"], {})
+    footprint = load_optional_json(state_dir / "footprint.json", {})
 
     progress = current_state or read_progress_state(files, generator="harness-status")
     task_pool = load_json(harness / "task-pool.json")
@@ -110,6 +115,7 @@ def main():
     print(f"completion gate: {completion_gate.get('status', '-')}")
     print(f"guard status: {guard_state.get('status', '-')}")
     print(f"unknown dirty: {guard_state.get('unknownDirtyCount', 0)}")
+    print(f"managed dirty: {guard_state.get('managedDirtyCount', guard_state.get('systemOwnedDirtyCount', 0))}")
     print(f"pending checkpoints: {guard_state.get('pendingCheckpointCount', 0)}")
     print(f"active workers: {active_workers}")
     print(f"active audit workers: {active_audit_workers}")
@@ -130,6 +136,12 @@ def main():
     print(f"dispatch backend: {daemon_summary.get('dispatchBackendDefault', '-')}")
     print(f"backend counts: {worker_summary.get('dispatchBackendCounts', {})}")
     print(f"active worktrees: {len(worktree_registry.get('worktrees', []))}")
+    if footprint:
+        print(
+            "harness footprint: "
+            f"{footprint.get('fileCount', footprint.get('harnessFileCount', 0))} files, "
+            f"{footprint.get('totalBytes', footprint.get('harnessTotalBytes', 0))} bytes"
+        )
     print(f"merge queue depth: {merge_summary.get('queueDepth', 0)}")
     print(f"ready to merge: {merge_summary.get('readyToMergeCount', 0)}")
     print(f"merge conflicts: {merge_summary.get('conflictCount', 0)}")
@@ -139,6 +151,18 @@ def main():
     print(f"pending blockers: {len(blockers)}")
     if guard_state.get("blockers"):
         print(f"guard blockers: {len(guard_state.get('blockers', []))}")
+    unknown_dirty = guard_state.get("unknownDirtyWorktrees") or guard_state.get("unknownDirty", [])
+    if unknown_dirty:
+        sample = unknown_dirty[0]
+        print(
+            "unknown dirty sample: "
+            f"scope={sample.get('scope', '-')} "
+            f"worktree={sample.get('worktreePath', '-')} "
+            f"paths={sample.get('pathCount', 0)}"
+        )
+        print("unknown dirty controls:")
+        print(f"- harness-control {root} project dirty-report")
+        print(f"- harness-control {root} project stash-unknown-dirty --message \"harness-control stash unknown dirty\"")
     if (runtime_state or {}).get('lastTickAt'):
         print(f"last runner tick: {(runtime_state or {}).get('lastTickAt')}")
     recent_failures = (feedback_summary or {}).get("recentFailures", [])

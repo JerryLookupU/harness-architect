@@ -11,6 +11,8 @@ Examples:
   harness-control /repo task T-003 restart-from-stage queued --reason "retry from clean stage"
   harness-control /repo task T-003 stop --reason "operator stop"
   harness-control /repo project archive --reason "loop retired"
+  harness-control /repo project dirty-report
+  harness-control /repo project stash-unknown-dirty --message "phase1 clean"
 EOF
   exit 1
 fi

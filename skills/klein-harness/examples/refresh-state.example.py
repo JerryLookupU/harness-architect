@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 import json
+import shlex
 import sys
 from collections import Counter
 from pathlib import Path
@@ -55,6 +56,57 @@ from runtime_common import (
 
 def active_tasks(tasks):
     return [task for task in tasks if task.get("status") in TASK_ACTIVE_STATUSES]
+
+
+def compute_harness_footprint(root: Path, previous: dict | None = None) -> dict:
+    harness_root = root / ".harness"
+    included_dirs = ("bin", "scripts", "templates", "verification-rules")
+    file_count = 0
+    total_bytes = 0
+    for rel in included_dirs:
+        base = harness_root / rel
+        if not base.exists():
+            continue
+        for path in base.rglob("*"):
+            if path.is_file():
+                file_count += 1
+                total_bytes += path.stat().st_size
+    for path in (
+        harness_root / "spec.json",
+        harness_root / "features.json",
+        harness_root / "work-items.json",
+        harness_root / "task-pool.json",
+        harness_root / "context-map.json",
+        harness_root / "standards.md",
+        harness_root / "session-registry.json",
+        harness_root / "session-init.sh",
+    ):
+        if path.exists() and path.is_file():
+            file_count += 1
+            total_bytes += path.stat().st_size
+
+    previous = previous if isinstance(previous, dict) else {}
+    prev_file_count = int(previous.get("fileCount", 0) or 0)
+    prev_total_bytes = int(previous.get("totalBytes", 0) or 0)
+    delta_files = file_count - prev_file_count
+    delta_bytes = total_bytes - prev_total_bytes
+    growth_ratio = (delta_bytes / prev_total_bytes) if prev_total_bytes > 0 else 0.0
+    soft_bytes = 6 * 1024 * 1024
+    hard_bytes = 8 * 1024 * 1024
+    return {
+        "schemaVersion": "1.0",
+        "generatedAt": now_iso(),
+        "scope": ".harness durable control plane",
+        "fileCount": file_count,
+        "totalBytes": total_bytes,
+        "deltaFileCount": delta_files,
+        "deltaBytes": delta_bytes,
+        "growthRatio": round(growth_ratio, 4),
+        "softLimitBytes": soft_bytes,
+        "hardLimitBytes": hard_bytes,
+        "softLimitExceeded": total_bytes > soft_bytes,
+        "hardLimitExceeded": total_bytes > hard_bytes,
+    }
 
 
 RUN_RECORD_COLUMNS = [
@@ -184,6 +236,8 @@ def main():
         generator="klein-harness",
         policy_summary=policy_summary,
     )
+    previous_footprint = load_optional_json(files["state_dir"] / "footprint.json", {})
+    footprint = compute_harness_footprint(root, previous=previous_footprint)
     progress = build_progress_summary(
         progress,
         request_summary,
@@ -215,12 +269,18 @@ def main():
     next_actions = []
     if guard_state.get("unknownDirtyCount", 0):
         next_actions.append("keep safeToExecute=false until unknown dirty is classified and resolved")
+        root_literal = shlex.quote(str(root))
+        next_actions.append(f"run harness-control {root_literal} project dirty-report")
+        next_actions.append(
+            f"run harness-control {root_literal} project stash-unknown-dirty --message 'harness-control stash unknown dirty'"
+        )
     if next_task_id:
         action = f"run {next_task_id}"
         if guard_state.get("safeToExecute") is False and (next_todo or {}).get("roleHint") == "orchestrator":
             action += " as control-plane planning only; do not mutate business code"
         next_actions.append(action)
     progress["nextActions"] = next_actions
+    progress["harnessFootprint"] = footprint
 
     current_state = {
         "schemaVersion": "1.0",
@@ -299,6 +359,7 @@ def main():
         "todoActionableCount": todo_summary.get("actionableTodoCount", 0),
         "pendingCheckpointCount": guard_state.get("pendingCheckpointCount", 0),
         "unknownDirtyCount": guard_state.get("unknownDirtyCount", 0),
+        "harnessFootprint": footprint,
     }
 
     rot_entries = []
@@ -482,6 +543,7 @@ def main():
         "todoSummary": todo_summary,
         "completionGate": completion_gate,
         "guardState": guard_state,
+        "harnessFootprint": footprint,
         "contextRotWarnings": [item for item in rot_entries if item.get("contextRotStatus") in {"warning", "downgraded"}][:10],
         "contextRotWarningColumns": ROT_RECORD_COLUMNS,
         "contextRotWarningRecords": [item for item in rot_record_rows if item.get("contextRotStatus") in {"warning", "downgraded"}][:10],
@@ -559,6 +621,7 @@ def main():
     write_json(files["research_summary_path"], research_summary)
     write_json(files["request_summary_path"], request_summary)
     write_json(files["lineage_index_path"], lineage_index)
+    write_json(files["state_dir"] / "footprint.json", footprint)
 
     print(json.dumps({"ok": True, "stateDir": str(files["state_dir"])}, ensure_ascii=False, indent=2))
 

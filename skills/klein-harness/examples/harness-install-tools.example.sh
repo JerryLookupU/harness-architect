@@ -29,16 +29,18 @@ install_file() {
 }
 
 install_file "harness-query.example.sh" "$BIN_DIR/harness-query"
+install_file "harness-status.example.sh" "$BIN_DIR/harness-status"
 install_file "harness-tasks.example.sh" "$BIN_DIR/harness-tasks"
 install_file "harness-task.example.sh" "$BIN_DIR/harness-task"
 install_file "harness-control.example.sh" "$BIN_DIR/harness-control"
 install_file "harness-dashboard.example.sh" "$BIN_DIR/harness-dashboard"
 install_file "query-harness.example.py" "$SCRIPTS_DIR/query.py"
+install_file "status.example.py" "$SCRIPTS_DIR/status.py"
 install_file "control.example.py" "$SCRIPTS_DIR/control.py"
 install_file "refresh-state.example.py" "$SCRIPTS_DIR/refresh-state.py"
 install_file "runtime-common.example.py" "$SCRIPTS_DIR/runtime_common.py"
 
-chmod +x "$BIN_DIR/harness-query" "$BIN_DIR/harness-tasks" "$BIN_DIR/harness-task" "$BIN_DIR/harness-control" "$BIN_DIR/harness-dashboard"
+chmod +x "$BIN_DIR/harness-query" "$BIN_DIR/harness-status" "$BIN_DIR/harness-tasks" "$BIN_DIR/harness-task" "$BIN_DIR/harness-control" "$BIN_DIR/harness-dashboard"
 
 # The minimal toolset still depends on runtime_common-backed state refresh.
 python3 "$SCRIPTS_DIR/refresh-state.py" "$ROOT" >/dev/null
@@ -54,6 +56,11 @@ cat > "$MANIFEST" <<'JSON'
       "name": "harness-query",
       "target": ".harness/bin/harness-query",
       "source": "examples/harness-query.example.sh"
+    },
+    {
+      "name": "harness-status",
+      "target": ".harness/bin/harness-status",
+      "source": "examples/harness-status.example.sh"
     },
     {
       "name": "harness-tasks",
@@ -79,6 +86,11 @@ cat > "$MANIFEST" <<'JSON'
       "name": "query.py",
       "target": ".harness/scripts/query.py",
       "source": "examples/query-harness.example.py"
+    },
+    {
+      "name": "status.py",
+      "target": ".harness/scripts/status.py",
+      "source": "examples/status.example.py"
     },
     {
       "name": "control.py",
@@ -118,3 +130,4 @@ echo "  .harness/bin/harness-submit"
 echo "  .harness/bin/harness-tasks"
 echo "  .harness/bin/harness-task"
 echo "  .harness/bin/harness-control"
+echo "  .harness/bin/harness-status"

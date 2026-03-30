@@ -49,3 +49,11 @@ A phase-1 round is converged when all of the following are true:
 - no operator hand-edit of target business code was needed
 - remaining blockers, if any, are either genuine target-repo work or an explicit next harness gap
 - re-running the same requirement does not recreate the same control-plane bug
+
+## Governance Link
+
+To avoid uncontrolled body-repo inflation during repeated phase-1 loops, apply:
+
+- [harness footprint governance](harness-footprint-governance.md)
+- [harness body growth governance](harness-body-growth-governance.md)
+- [codebase growth guardrails](codebase-growth-guardrails.md)

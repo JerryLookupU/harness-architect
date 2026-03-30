@@ -48,7 +48,7 @@ Install effects:
 
 - Installs skills into `$CODEX_HOME/skills`.
 - Installs the canonical `harness` CLI into `$CODEX_HOME/bin` when Go is available.
-- Installs compatibility wrappers such as `harness-submit` and `harness-control`.
+- Installs compatibility wrappers such as `harness-submit`, `harness-control`, and `harness-status`.
 - Updates managed block in `$CODEX_HOME/AGENTS.md` without changing non-managed user content.
 - Updates managed profiles in `$CODEX_HOME/config.toml` without overriding custom user profiles.
 
@@ -83,6 +83,7 @@ harness-submit /path/to/repo --goal "Fix failing verify regression"
 harness-tasks /path/to/repo
 harness-task /path/to/repo T-001
 harness-control /path/to/repo task T-001 status
+harness-status /path/to/repo
 ```
 
 ## Runtime model
