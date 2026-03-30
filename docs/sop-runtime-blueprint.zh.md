@@ -112,6 +112,7 @@ runtime 内部现在明确区分：
 - runtime control context 主要给程序，不要求 worker 大量读取
 - 四层会同时落成 `request-context.json`、`shared-flow-context.json`、`slice-context.json`、`runtime-control-context.json`
 - `runtime-control-context.json` 会显式带上 `executionCwd`、`worktreePath`、`ownedPaths`，避免续跑或 verify 时误回到 git 根目录
+- `runtime-control-context.json` 现在还会显式带上 `sharedFlowContextPath`、`sliceContextPath`、`handoffPath`
 - runtime 另外会聚合生成 `context-layers.json`，让下一 session 按固定入口接棒
 - control/query 面会显式暴露这些 compiled context refs，便于 operator 追踪当前 slice 绑定的是哪一套合同
 - shared flow context 现在会额外带上 `phaseArtifacts[]`，显式记录“哪个 phase 由程序写出了哪个 artifact”
@@ -124,9 +125,11 @@ runtime 内部现在明确区分：
 - `activeTaskId` / `activeTaskFamily` / `activeSopId`
 - `currentDispatchId` / `currentExecutionSliceId`
 - `currentResumeSessionId`
+- `currentRequestContextPath` / `currentRuntimeContextPath`
+- `currentSharedFlowPath` / `currentSliceContextPath`
 - `currentTakeoverPath` / `currentContextLayersPath`
 - `currentTaskGraphPath` / `currentVerifySkeletonPath` / `currentCloseoutPath`
-- `currentHandoffPath` / `currentArtifactDir`
+- `currentHandoffContractPath` / `currentHandoffPath` / `currentArtifactDir`
 - `lastVerificationStatus` / `lastFollowUp`
 
 这样 operator 不必反向猜测“当前 runtime 正卡在哪个 slice、哪一套 takeover 合同、哪一轮 verify”。
@@ -136,6 +139,15 @@ runtime 内部现在明确区分：
 - `handoff-contract.json` 是程序生成的 handoff 文件合同
 - `handoff.md` 是 worker 实际填写的 handoff 结果
 - `runtime.json.currentHandoffPath` 跟踪的是 `handoff.md`
+
+verify / closeout / handoff 这三类 closeout 合同现在也都会显式带上：
+
+- `requestContextPath`
+- `runtimeContextPath`
+- `sharedFlowContextPath`
+- `sliceContextPath`
+
+这样下一 session、verify pipeline 和 operator 查询面拿到任一合同，都能直接落回四层上下文，而不是反向猜路径。
 
 ## SOP Registry
 

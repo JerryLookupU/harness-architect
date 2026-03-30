@@ -1289,11 +1289,16 @@ func bindRuntimeDispatch(current RuntimeState, task adapter.Task, ticket dispatc
 	current.CurrentDispatchID = ticket.DispatchID
 	current.CurrentExecutionSliceID = bundle.ExecutionSliceID
 	current.CurrentResumeSessionID = firstString(ticket.ResumeSessionID, task.PreferredResumeSessionID)
+	current.CurrentRequestContextPath = bundle.RequestContextPath
+	current.CurrentRuntimeContextPath = bundle.RuntimeContextPath
+	current.CurrentSharedFlowPath = bundle.SharedFlowPath
+	current.CurrentSliceContextPath = bundle.SliceContextPath
 	current.CurrentTakeoverPath = bundle.TakeoverPath
 	current.CurrentContextLayersPath = bundle.ContextLayersPath
 	current.CurrentTaskGraphPath = bundle.TaskGraphPath
 	current.CurrentVerifySkeletonPath = bundle.VerifySkeletonPath
 	current.CurrentCloseoutPath = bundle.CloseoutPath
+	current.CurrentHandoffContractPath = bundle.HandoffContractPath
 	current.CurrentHandoffPath = bundle.HandoffPath
 	current.CurrentArtifactDir = bundle.ArtifactDir
 	return current
@@ -1303,11 +1308,16 @@ func clearRuntimeExecutionRefs(current RuntimeState) RuntimeState {
 	current.CurrentDispatchID = ""
 	current.CurrentExecutionSliceID = ""
 	current.CurrentResumeSessionID = ""
+	current.CurrentRequestContextPath = ""
+	current.CurrentRuntimeContextPath = ""
+	current.CurrentSharedFlowPath = ""
+	current.CurrentSliceContextPath = ""
 	current.CurrentTakeoverPath = ""
 	current.CurrentContextLayersPath = ""
 	current.CurrentTaskGraphPath = ""
 	current.CurrentVerifySkeletonPath = ""
 	current.CurrentCloseoutPath = ""
+	current.CurrentHandoffContractPath = ""
 	current.CurrentHandoffPath = ""
 	current.CurrentArtifactDir = ""
 	return current

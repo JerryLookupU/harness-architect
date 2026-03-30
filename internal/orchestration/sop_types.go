@@ -111,27 +111,30 @@ type SliceLocalContext struct {
 }
 
 type RuntimeControlContext struct {
-	TaskID               string   `json:"taskId,omitempty"`
-	DispatchID           string   `json:"dispatchId,omitempty"`
-	LeaseID              string   `json:"leaseId,omitempty"`
-	ExecutionSliceID     string   `json:"executionSliceId,omitempty"`
-	AcceptedPacketID     string   `json:"acceptedPacketId,omitempty"`
-	ResumeSessionID      string   `json:"resumeSessionId,omitempty"`
-	ExecutionCWD         string   `json:"executionCwd,omitempty"`
-	WorktreePath         string   `json:"worktreePath,omitempty"`
-	AcceptedPacketPath   string   `json:"acceptedPacketPath,omitempty"`
-	TaskContractPath     string   `json:"taskContractPath,omitempty"`
-	TaskGraphPath        string   `json:"taskGraphPath,omitempty"`
-	ContextLayersPath    string   `json:"contextLayersPath,omitempty"`
-	RequestContextPath   string   `json:"requestContextPath,omitempty"`
-	RuntimeContextPath   string   `json:"runtimeContextPath,omitempty"`
-	VerifySkeletonPath   string   `json:"verifySkeletonPath,omitempty"`
-	CloseoutSkeletonPath string   `json:"closeoutSkeletonPath,omitempty"`
-	HandoffContractPath  string   `json:"handoffContractPath,omitempty"`
-	TakeoverPath         string   `json:"takeoverPath,omitempty"`
-	SessionRegistryPath  string   `json:"sessionRegistryPath,omitempty"`
-	ArtifactDir          string   `json:"artifactDir,omitempty"`
-	OwnedPaths           []string `json:"ownedPaths,omitempty"`
+	TaskID                string   `json:"taskId,omitempty"`
+	DispatchID            string   `json:"dispatchId,omitempty"`
+	LeaseID               string   `json:"leaseId,omitempty"`
+	ExecutionSliceID      string   `json:"executionSliceId,omitempty"`
+	AcceptedPacketID      string   `json:"acceptedPacketId,omitempty"`
+	ResumeSessionID       string   `json:"resumeSessionId,omitempty"`
+	ExecutionCWD          string   `json:"executionCwd,omitempty"`
+	WorktreePath          string   `json:"worktreePath,omitempty"`
+	AcceptedPacketPath    string   `json:"acceptedPacketPath,omitempty"`
+	TaskContractPath      string   `json:"taskContractPath,omitempty"`
+	TaskGraphPath         string   `json:"taskGraphPath,omitempty"`
+	ContextLayersPath     string   `json:"contextLayersPath,omitempty"`
+	RequestContextPath    string   `json:"requestContextPath,omitempty"`
+	RuntimeContextPath    string   `json:"runtimeContextPath,omitempty"`
+	SharedFlowContextPath string   `json:"sharedFlowContextPath,omitempty"`
+	SliceContextPath      string   `json:"sliceContextPath,omitempty"`
+	VerifySkeletonPath    string   `json:"verifySkeletonPath,omitempty"`
+	CloseoutSkeletonPath  string   `json:"closeoutSkeletonPath,omitempty"`
+	HandoffContractPath   string   `json:"handoffContractPath,omitempty"`
+	HandoffPath           string   `json:"handoffPath,omitempty"`
+	TakeoverPath          string   `json:"takeoverPath,omitempty"`
+	SessionRegistryPath   string   `json:"sessionRegistryPath,omitempty"`
+	ArtifactDir           string   `json:"artifactDir,omitempty"`
+	OwnedPaths            []string `json:"ownedPaths,omitempty"`
 }
 
 type ContextLayers struct {
@@ -150,26 +153,28 @@ type VerifyCheck struct {
 }
 
 type VerifySkeleton struct {
-	SchemaVersion        string             `json:"schemaVersion"`
-	TaskID               string             `json:"taskId,omitempty"`
-	DispatchID           string             `json:"dispatchId,omitempty"`
-	TaskFamily           TaskFamily         `json:"taskFamily,omitempty"`
-	SOPID                string             `json:"sopId,omitempty"`
-	ExecutionSliceID     string             `json:"executionSliceId,omitempty"`
-	ExecutionCWD         string             `json:"executionCwd,omitempty"`
-	WorktreePath         string             `json:"worktreePath,omitempty"`
-	ContextLayersPath    string             `json:"contextLayersPath,omitempty"`
-	RequestContextPath   string             `json:"requestContextPath,omitempty"`
-	RuntimeContextPath   string             `json:"runtimeContextPath,omitempty"`
-	TaskContractPath     string             `json:"taskContractPath,omitempty"`
-	TaskGraphPath        string             `json:"taskGraphPath,omitempty"`
-	HandoffContract      string             `json:"handoffContractPath,omitempty"`
-	CloseoutSkeletonPath string             `json:"closeoutSkeletonPath,omitempty"`
-	ProgramOwns          []string           `json:"programOwns,omitempty"`
-	RequiredArtifacts    []string           `json:"requiredArtifacts,omitempty"`
-	PhaseArtifacts       []PhaseArtifactRef `json:"phaseArtifacts,omitempty"`
-	Checks               []VerifyCheck      `json:"checks,omitempty"`
-	Notes                []string           `json:"notes,omitempty"`
+	SchemaVersion         string             `json:"schemaVersion"`
+	TaskID                string             `json:"taskId,omitempty"`
+	DispatchID            string             `json:"dispatchId,omitempty"`
+	TaskFamily            TaskFamily         `json:"taskFamily,omitempty"`
+	SOPID                 string             `json:"sopId,omitempty"`
+	ExecutionSliceID      string             `json:"executionSliceId,omitempty"`
+	ExecutionCWD          string             `json:"executionCwd,omitempty"`
+	WorktreePath          string             `json:"worktreePath,omitempty"`
+	ContextLayersPath     string             `json:"contextLayersPath,omitempty"`
+	RequestContextPath    string             `json:"requestContextPath,omitempty"`
+	RuntimeContextPath    string             `json:"runtimeContextPath,omitempty"`
+	SharedFlowContextPath string             `json:"sharedFlowContextPath,omitempty"`
+	SliceContextPath      string             `json:"sliceContextPath,omitempty"`
+	TaskContractPath      string             `json:"taskContractPath,omitempty"`
+	TaskGraphPath         string             `json:"taskGraphPath,omitempty"`
+	HandoffContract       string             `json:"handoffContractPath,omitempty"`
+	CloseoutSkeletonPath  string             `json:"closeoutSkeletonPath,omitempty"`
+	ProgramOwns           []string           `json:"programOwns,omitempty"`
+	RequiredArtifacts     []string           `json:"requiredArtifacts,omitempty"`
+	PhaseArtifacts        []PhaseArtifactRef `json:"phaseArtifacts,omitempty"`
+	Checks                []VerifyCheck      `json:"checks,omitempty"`
+	Notes                 []string           `json:"notes,omitempty"`
 }
 
 type ContinuationProtocol struct {
@@ -228,20 +233,26 @@ type HandoffSection struct {
 }
 
 type HandoffContract struct {
-	SchemaVersion        string           `json:"schemaVersion"`
-	TaskID               string           `json:"taskId,omitempty"`
-	DispatchID           string           `json:"dispatchId,omitempty"`
-	TaskFamily           TaskFamily       `json:"taskFamily,omitempty"`
-	SOPID                string           `json:"sopId,omitempty"`
-	ExecutionSliceID     string           `json:"executionSliceId,omitempty"`
-	ContextLayersPath    string           `json:"contextLayersPath,omitempty"`
-	TaskContractPath     string           `json:"taskContractPath,omitempty"`
-	TaskGraphPath        string           `json:"taskGraphPath,omitempty"`
-	VerifySkeletonPath   string           `json:"verifySkeletonPath,omitempty"`
-	CloseoutSkeletonPath string           `json:"closeoutSkeletonPath,omitempty"`
-	RequiredArtifacts    []string         `json:"requiredArtifacts,omitempty"`
-	Sections             []HandoffSection `json:"sections,omitempty"`
-	ResumeInstructions   []string         `json:"resumeInstructions,omitempty"`
+	SchemaVersion         string           `json:"schemaVersion"`
+	TaskID                string           `json:"taskId,omitempty"`
+	DispatchID            string           `json:"dispatchId,omitempty"`
+	TaskFamily            TaskFamily       `json:"taskFamily,omitempty"`
+	SOPID                 string           `json:"sopId,omitempty"`
+	ExecutionSliceID      string           `json:"executionSliceId,omitempty"`
+	ContextLayersPath     string           `json:"contextLayersPath,omitempty"`
+	RequestContextPath    string           `json:"requestContextPath,omitempty"`
+	RuntimeContextPath    string           `json:"runtimeContextPath,omitempty"`
+	SharedFlowContextPath string           `json:"sharedFlowContextPath,omitempty"`
+	SliceContextPath      string           `json:"sliceContextPath,omitempty"`
+	TaskContractPath      string           `json:"taskContractPath,omitempty"`
+	TaskGraphPath         string           `json:"taskGraphPath,omitempty"`
+	VerifySkeletonPath    string           `json:"verifySkeletonPath,omitempty"`
+	CloseoutSkeletonPath  string           `json:"closeoutSkeletonPath,omitempty"`
+	HandoffPath           string           `json:"handoffPath,omitempty"`
+	TakeoverPath          string           `json:"takeoverPath,omitempty"`
+	RequiredArtifacts     []string         `json:"requiredArtifacts,omitempty"`
+	Sections              []HandoffSection `json:"sections,omitempty"`
+	ResumeInstructions    []string         `json:"resumeInstructions,omitempty"`
 }
 
 type CloseoutSection struct {
@@ -252,23 +263,29 @@ type CloseoutSection struct {
 }
 
 type CloseoutSkeleton struct {
-	SchemaVersion       string             `json:"schemaVersion"`
-	TaskID              string             `json:"taskId,omitempty"`
-	DispatchID          string             `json:"dispatchId,omitempty"`
-	TaskFamily          TaskFamily         `json:"taskFamily,omitempty"`
-	SOPID               string             `json:"sopId,omitempty"`
-	ExecutionSliceID    string             `json:"executionSliceId,omitempty"`
-	ContextLayersPath   string             `json:"contextLayersPath,omitempty"`
-	TaskContractPath    string             `json:"taskContractPath,omitempty"`
-	TaskGraphPath       string             `json:"taskGraphPath,omitempty"`
-	VerifySkeletonPath  string             `json:"verifySkeletonPath,omitempty"`
-	HandoffContractPath string             `json:"handoffContractPath,omitempty"`
-	RequiredArtifacts   []string           `json:"requiredArtifacts,omitempty"`
-	PhaseArtifacts      []PhaseArtifactRef `json:"phaseArtifacts,omitempty"`
-	Sections            []CloseoutSection  `json:"sections,omitempty"`
-	WorkerMustProvide   []string           `json:"workerMustProvide,omitempty"`
-	ProgramWillFinalize []string           `json:"programWillFinalize,omitempty"`
-	ResumeChecklist     []string           `json:"resumeChecklist,omitempty"`
+	SchemaVersion         string             `json:"schemaVersion"`
+	TaskID                string             `json:"taskId,omitempty"`
+	DispatchID            string             `json:"dispatchId,omitempty"`
+	TaskFamily            TaskFamily         `json:"taskFamily,omitempty"`
+	SOPID                 string             `json:"sopId,omitempty"`
+	ExecutionSliceID      string             `json:"executionSliceId,omitempty"`
+	ContextLayersPath     string             `json:"contextLayersPath,omitempty"`
+	RequestContextPath    string             `json:"requestContextPath,omitempty"`
+	RuntimeContextPath    string             `json:"runtimeContextPath,omitempty"`
+	SharedFlowContextPath string             `json:"sharedFlowContextPath,omitempty"`
+	SliceContextPath      string             `json:"sliceContextPath,omitempty"`
+	TaskContractPath      string             `json:"taskContractPath,omitempty"`
+	TaskGraphPath         string             `json:"taskGraphPath,omitempty"`
+	VerifySkeletonPath    string             `json:"verifySkeletonPath,omitempty"`
+	HandoffContractPath   string             `json:"handoffContractPath,omitempty"`
+	HandoffPath           string             `json:"handoffPath,omitempty"`
+	TakeoverPath          string             `json:"takeoverPath,omitempty"`
+	RequiredArtifacts     []string           `json:"requiredArtifacts,omitempty"`
+	PhaseArtifacts        []PhaseArtifactRef `json:"phaseArtifacts,omitempty"`
+	Sections              []CloseoutSection  `json:"sections,omitempty"`
+	WorkerMustProvide     []string           `json:"workerMustProvide,omitempty"`
+	ProgramWillFinalize   []string           `json:"programWillFinalize,omitempty"`
+	ResumeChecklist       []string           `json:"resumeChecklist,omitempty"`
 }
 
 type TaskGraph struct {

@@ -654,14 +654,19 @@ func TestBindRuntimeDispatchTracksCompiledContractRefs(t *testing.T) {
 		ResumeSessionID: "sess-401",
 	}
 	bundle := worker.DispatchBundle{
-		ExecutionSliceID:   "T-401.slice.2",
-		TakeoverPath:       "/repo/.harness/artifacts/T-401/dispatch-401/takeover-context.json",
-		ContextLayersPath:  "/repo/.harness/artifacts/T-401/dispatch-401/context-layers.json",
-		TaskGraphPath:      "/repo/.harness/artifacts/T-401/dispatch-401/task-graph.json",
-		VerifySkeletonPath: "/repo/.harness/artifacts/T-401/dispatch-401/verify-skeleton.json",
-		CloseoutPath:       "/repo/.harness/artifacts/T-401/dispatch-401/closeout-skeleton.json",
-		HandoffPath:        "/repo/.harness/artifacts/T-401/dispatch-401/handoff.md",
-		ArtifactDir:        "/repo/.harness/artifacts/T-401/dispatch-401",
+		RequestContextPath:  "/repo/.harness/artifacts/T-401/dispatch-401/request-context.json",
+		RuntimeContextPath:  "/repo/.harness/artifacts/T-401/dispatch-401/runtime-control-context.json",
+		SharedFlowPath:      "/repo/.harness/artifacts/T-401/dispatch-401/shared-flow-context.json",
+		SliceContextPath:    "/repo/.harness/artifacts/T-401/dispatch-401/slice-context.json",
+		ExecutionSliceID:    "T-401.slice.2",
+		TakeoverPath:        "/repo/.harness/artifacts/T-401/dispatch-401/takeover-context.json",
+		ContextLayersPath:   "/repo/.harness/artifacts/T-401/dispatch-401/context-layers.json",
+		TaskGraphPath:       "/repo/.harness/artifacts/T-401/dispatch-401/task-graph.json",
+		VerifySkeletonPath:  "/repo/.harness/artifacts/T-401/dispatch-401/verify-skeleton.json",
+		CloseoutPath:        "/repo/.harness/artifacts/T-401/dispatch-401/closeout-skeleton.json",
+		HandoffContractPath: "/repo/.harness/artifacts/T-401/dispatch-401/handoff-contract.json",
+		HandoffPath:         "/repo/.harness/artifacts/T-401/dispatch-401/handoff.md",
+		ArtifactDir:         "/repo/.harness/artifacts/T-401/dispatch-401",
 	}
 
 	current := bindRuntimeTask(RuntimeState{}, task, "/repo/.worktrees/T-401")
@@ -673,16 +678,19 @@ func TestBindRuntimeDispatchTracksCompiledContractRefs(t *testing.T) {
 	if current.CurrentDispatchID != ticket.DispatchID || current.CurrentExecutionSliceID != bundle.ExecutionSliceID || current.CurrentResumeSessionID != "sess-401" {
 		t.Fatalf("expected runtime state to retain dispatch binding, got %+v", current)
 	}
+	if current.CurrentRequestContextPath != bundle.RequestContextPath || current.CurrentRuntimeContextPath != bundle.RuntimeContextPath || current.CurrentSharedFlowPath != bundle.SharedFlowPath || current.CurrentSliceContextPath != bundle.SliceContextPath {
+		t.Fatalf("expected runtime state to retain layered context refs, got %+v", current)
+	}
 	if current.CurrentTakeoverPath != bundle.TakeoverPath || current.CurrentContextLayersPath != bundle.ContextLayersPath || current.CurrentTaskGraphPath != bundle.TaskGraphPath {
 		t.Fatalf("expected runtime state to carry continuation contract refs, got %+v", current)
 	}
-	if current.CurrentVerifySkeletonPath != bundle.VerifySkeletonPath || current.CurrentCloseoutPath != bundle.CloseoutPath || current.CurrentHandoffPath != bundle.HandoffPath {
+	if current.CurrentVerifySkeletonPath != bundle.VerifySkeletonPath || current.CurrentCloseoutPath != bundle.CloseoutPath || current.CurrentHandoffContractPath != bundle.HandoffContractPath || current.CurrentHandoffPath != bundle.HandoffPath {
 		t.Fatalf("expected runtime state to carry verify/closeout refs, got %+v", current)
 	}
 	if current.CurrentArtifactDir != bundle.ArtifactDir {
 		t.Fatalf("expected runtime state to carry artifact dir, got %+v", current)
 	}
-	if cleared := clearRuntimeExecutionRefs(current); cleared.CurrentDispatchID != "" || cleared.CurrentTakeoverPath != "" || cleared.CurrentArtifactDir != "" {
+	if cleared := clearRuntimeExecutionRefs(current); cleared.CurrentDispatchID != "" || cleared.CurrentRequestContextPath != "" || cleared.CurrentSharedFlowPath != "" || cleared.CurrentTakeoverPath != "" || cleared.CurrentHandoffContractPath != "" || cleared.CurrentArtifactDir != "" {
 		t.Fatalf("expected runtime execution refs to be clearable, got %+v", cleared)
 	}
 }
